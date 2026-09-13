@@ -13,6 +13,13 @@ In Claude Code:
 /plugin install dev-squad@dev-squad-marketplace
 ```
 
+In GitHub Copilot CLI:
+
+```
+copilot plugin marketplace add pavly-remon/dev-squad
+copilot plugin install dev-squad@dev-squad-marketplace
+```
+
 ## Usage
 
 ```

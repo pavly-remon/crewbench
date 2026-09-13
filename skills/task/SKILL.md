@@ -1,4 +1,5 @@
 ---
+name: task
 description: Run a task through the dev-squad team (Team Lead delegates to developer, tester, code-reviewer, ui-ux-designer)
 argument-hint: [task description]
 ---
