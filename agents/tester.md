@@ -1,6 +1,6 @@
 ---
 name: dev-squad-tester
-description: Writes and/or runs tests against recently changed code to verify it meets the task's acceptance criteria, and checks for regressions. Part of the dev-squad workflow — only invoked via the /dev-squad command.
+description: Writes and/or runs tests against recently changed code to verify it meets the task's acceptance criteria, and checks for regressions. Part of the dev-squad workflow — only invoked via the /dev-squad commands.
 tools: Read, Bash, Grep, Glob
 model: sonnet
 ---

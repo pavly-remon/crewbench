@@ -1,7 +1,8 @@
 ---
-name: task
-description: Run a task through the dev-squad team (Team Lead delegates to developer, tester, code-reviewer, ui-ux-designer)
+name: new-task
+description: Run a new task through the dev-squad team (Team Lead delegates to developer, tester, code-reviewer, ui-ux-designer)
 argument-hint: [task description]
+disable-model-invocation: true
 ---
 
 # dev-squad

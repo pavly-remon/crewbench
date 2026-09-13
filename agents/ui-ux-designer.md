@@ -1,6 +1,6 @@
 ---
 name: dev-squad-ui-ux
-description: Produces a structured UI/UX design spec before implementation. Part of the dev-squad workflow — only invoked when the Team Lead has asked and the user opted in, never automatically.
+description: Produces a structured UI/UX design spec before implementation. Part of the dev-squad workflow — only invoked via /dev-squad:design, or when the /dev-squad:new-task Team Lead has asked and the user opted in — never automatically.
 tools: Read, Write, Edit, Grep, Glob
 model: sonnet
 ---

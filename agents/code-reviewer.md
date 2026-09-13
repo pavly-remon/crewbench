@@ -1,6 +1,6 @@
 ---
 name: dev-squad-code-reviewer
-description: Performs a static code review of recently changed files for correctness, style consistency, security, and maintainability. Part of the dev-squad workflow — only invoked via the /dev-squad command.
+description: Performs a static code review of recently changed files for correctness, style consistency, security, and maintainability. Part of the dev-squad workflow — only invoked via the /dev-squad commands.
 tools: Read, Grep, Glob
 model: sonnet
 ---

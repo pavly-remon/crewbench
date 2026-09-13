@@ -1,6 +1,6 @@
 ---
 name: dev-squad-developer
-description: Implements a scoped coding task against the existing project's conventions. Part of the dev-squad workflow — only invoked via the /dev-squad command, not for standalone requests.
+description: Implements a scoped coding task against the existing project's conventions. Part of the dev-squad workflow — only invoked via the /dev-squad commands, not for standalone requests.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---

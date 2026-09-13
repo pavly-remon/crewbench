@@ -20,11 +20,20 @@ copilot plugin marketplace add pavly-remon/dev-squad
 copilot plugin install dev-squad@dev-squad-marketplace
 ```
 
-## Usage
+## Commands
 
-```
-/dev-squad:task <task description>
-```
+| Command | What it does |
+|---|---|
+| `/dev-squad:new-task <task description>` | Full workflow: scope, (optional) design, implement, test + review, fix loop |
+| `/dev-squad:test <scenario>` | Tester writes and/or runs tests for one scenario and reports pass/fail |
+| `/dev-squad:review <branch> [base]` | Code reviewer reviews a branch's changes against `base` (default branch if omitted) |
+| `/dev-squad:design <description>` | UI/UX designer produces an implementable design spec |
+
+`test`, `review`, and `design` only report — they never change your code. Each
+offers to hand its results to `/dev-squad:new-task` if you want something fixed
+or built.
+
+### new-task workflow
 
 The Team Lead will:
 
