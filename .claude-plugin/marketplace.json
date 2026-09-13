@@ -1,0 +1,7 @@
+{
+  "name": "dev-squad-marketplace",
+  "owner": { "name": "Pavly" },
+  "plugins": [
+    { "name": "dev-squad", "source": "./" }
+  ]
+}

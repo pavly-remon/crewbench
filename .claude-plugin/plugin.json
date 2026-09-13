@@ -1,0 +1,7 @@
+{
+  "name": "dev-squad",
+  "version": "1.0.1",
+  "description": "A five-role dev team (Team Lead, Developer, Tester, Code Reviewer, UI/UX Designer) invoked via /dev-squad:task",
+  "author": { "name": "Pavly" },
+  "license": "MIT"
+}
