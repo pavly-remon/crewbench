@@ -55,6 +55,7 @@ CLAUDE_TOOLS = {
 }
 
 READ_ONLY = {"code-reviewer"}
+AGY_DENIAL_RESUMES = 2
 NO_EFFORT = {"", "none", "n/a"}
 
 
@@ -66,26 +67,55 @@ def strip_frontmatter(text):
     return text
 
 
-def agy_allowed_commands():
-    """Shell commands the user's agy settings pre-approve (headless agy aborts on anything else)."""
+def agy_command_rules():
+    """Return (usable, broken) command rules from the user's agy allow list.
+
+    agy matches command(...) targets as literal word-by-word prefixes; `*` only
+    works alone (command(*)), so a rule like command(ls*) never matches `ls`.
+    """
     settings = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
     try:
         rules = json.loads(settings.read_text()).get("permissions", {}).get("allow", [])
     except (OSError, ValueError):
-        return []
-    return [r[len("command("):-1] for r in rules if r.startswith("command(") and r.endswith(")")]
+        return [], []
+    usable, broken = [], []
+    for rule in rules:
+        if not (isinstance(rule, str) and rule.startswith("command(") and rule.endswith(")")):
+            continue
+        target = rule[len("command("):-1]
+        if target != "*" and "*" in target and not target.startswith("regex:"):
+            broken.append(rule)
+        else:
+            usable.append(target)
+    return usable, broken
+
+
+AGY_FILE_TOOLS = (
+    "Use your built-in file tools — view_file, list_dir, find_by_name, grep_search, "
+    "replace_file_content, write_to_file — to read, search and edit. Never use shell "
+    "commands such as ls, cat, head, tail, find, grep or sed for that."
+)
 
 
 def limits_for(role, cli):
     text = LIMITS[role]
-    if cli == "agy" and role not in READ_ONLY and role != "ui-ux":
-        allowed = agy_allowed_commands()
-        text += (
-            "\n\nShell commands are restricted in this run: running any command not on the "
-            "list below ends your run immediately with no result. Use your file read/edit "
-            "tools instead of shell commands wherever possible. Do not run any other "
-            "command — list it under \"blocked\" instead. Allowed command patterns "
-            "(* is a wildcard): " + (", ".join(f"`{c}`" for c in allowed) if allowed else "none"))
+    if cli == "agy":
+        text += "\n\n" + AGY_FILE_TOOLS
+        if role not in READ_ONLY and role != "ui-ux":
+            usable, _ = agy_command_rules()
+            if "*" in usable:
+                allowed = "any command"
+            elif usable:
+                allowed = ", ".join(
+                    f"`{t[len('regex:'):]}` (regex)" if t.startswith("regex:") else f"`{t}` (and `{t} ...`)"
+                    for t in usable)
+            else:
+                allowed = "none"
+            text += (
+                "\n\nShell commands are restricted in this run. Only these commands are "
+                "allowed: " + allowed + ". Any other command is denied. Don't run it or a "
+                "variant of it — if you truly need it (e.g. to run tests), list it under "
+                "\"blocked\" and carry on.")
     if cli == "copilot" and role in ("developer", "tester"):
         text += "\n\nShell commands are not available in this run; list any you needed under \"blocked\"."
     return text
@@ -107,7 +137,7 @@ def build_prompt(role, cli, handoff, schema):
     ])
 
 
-def build_command(args, prompt, schema_path, tmp):
+def build_command(args, prompt, schema_path, tmp, conversation=None):
     """Return (argv, stdin_text, codex_last_message_file). Claude and agy stream JSON events."""
     role, model, effort = args.role, args.model, args.effort
     has_effort = effort.lower() not in NO_EFFORT
@@ -128,6 +158,8 @@ def build_command(args, prompt, schema_path, tmp):
                "--mode", "plan" if role in READ_ONLY else "accept-edits",
                "--output-format", "stream-json", "--json-schema", str(schema_path),
                "--print-timeout", f"{args.timeout}s"]
+        if conversation:
+            cmd += ["--conversation", conversation]
         if has_effort:
             cmd += ["--effort", effort]
         return cmd + [f"-p={prompt}"], None, None
@@ -203,6 +235,7 @@ class Stream:
         self.cli = cli
         self.session_id = None
         self.final = None  # claude/agy final result event
+        self.denied_commands = []  # agy commands refused by its permission check
 
     def feed(self, line):
         """Return readable log lines for one output line."""
@@ -263,7 +296,11 @@ class Stream:
         info = step.get("tool_info") or {}
         text = f"tool: {step.get('tool_name')} {short(info.get('parameters', {}))}"
         if step.get("state") == "ERROR":
-            text += "  -> " + short((info.get("error") or {}).get("message", "error"))
+            message = (info.get("error") or {}).get("message", "error")
+            text += "  -> " + short(message)
+            command = (info.get("parameters") or {}).get("CommandLine")
+            if command and "permission check failed" in message:
+                self.denied_commands.append(command)
         return [text]
 
 
@@ -355,29 +392,30 @@ def main():
     schema = json.loads(schema_path.read_text())
     prompt = build_prompt(args.role, args.cli, handoff_path.read_text(), schema)
     stream = Stream(args.cli)
-    stdout_lines = []
+    stdout_lines, stderr_parts = [], []
+    warnings = []
+    if args.cli == "agy":
+        _, broken = agy_command_rules()
+        if broken:
+            warnings.append(
+                "agy never matches these allow rules, because agy uses word-by-word prefixes and "
+                "only a bare * wildcard: " + ", ".join(broken) + ". Write them without the * "
+                "(e.g. command(ls) allows `ls` and `ls -la`).")
+    envelope["warnings"] = warnings
+    timed_out = threading.Event()
+    code = None
 
-    with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1) as log:
-        cmd, stdin, last_message = build_command(args, prompt, schema_path, tmp)
-        stderr_path = Path(tmp) / "stderr.txt"
-        log.write(f"[{now()}] {args.role} on {args.cli} ({args.model}, effort {args.effort})\n")
-        start = time.time()
+    def run_attempt(cmd, stdin, log, stderr_path):
         with open(stderr_path, "w") as stderr_file:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
                                     stdout=subprocess.PIPE,
                                     # codex/copilot report progress on stderr: show it live
                                     stderr=stderr_file if args.cli in ("claude", "agy") else subprocess.STDOUT,
                                     text=True, bufsize=1, cwd=os.getcwd())
-            update_status(runs_dir, run, {"role": args.role, "cli": args.cli, "model": args.model,
-                                          "effort": args.effort, "state": "running", "pid": proc.pid,
-                                          "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                                          "log_file": str(log_path), "session_id": None})
-            print(f"crewbench: {run} running on {args.cli} — live log: tail -f {log_path}",
-                  file=sys.stderr, flush=True)
+            update_status(runs_dir, run, {"state": "running", "pid": proc.pid})
             if stdin:
                 proc.stdin.write(stdin)
                 proc.stdin.close()
-            timed_out = threading.Event()
 
             def kill():
                 timed_out.set()
@@ -385,7 +423,7 @@ def main():
 
             timer = threading.Timer(args.timeout + 60, kill)
             timer.start()
-            recorded_session = None
+            recorded_session = stream.session_id
             for line in proc.stdout:
                 stdout_lines.append(line)
                 for entry in stream.feed(line):
@@ -393,9 +431,48 @@ def main():
                 if stream.session_id and stream.session_id != recorded_session:
                     recorded_session = stream.session_id
                     update_status(runs_dir, run, {"session_id": recorded_session})
-            code = proc.wait()
+            result_code = proc.wait()
             timer.cancel()
-        stderr = stderr_path.read_text()
+        stderr_parts.append(Path(stderr_path).read_text())
+        return result_code
+
+    with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1) as log:
+        cmd, stdin, last_message = build_command(args, prompt, schema_path, tmp)
+        stderr_path = Path(tmp) / "stderr.txt"
+        log.write(f"[{now()}] {args.role} on {args.cli} ({args.model}, effort {args.effort})\n")
+        for warning in warnings:
+            log.write(f"[{now()}] warning: {warning}\n")
+        update_status(runs_dir, run, {"role": args.role, "cli": args.cli, "model": args.model,
+                                      "effort": args.effort, "state": "running",
+                                      "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                      "log_file": str(log_path), "session_id": None})
+        print(f"crewbench: {run} running on {args.cli} — live log: tail -f {log_path}",
+              file=sys.stderr, flush=True)
+        start = time.time()
+        code = run_attempt(cmd, stdin, log, stderr_path)
+
+        # Headless agy ends the whole run when a command is denied. Resume the same
+        # conversation, tell it the command stays denied, and let it carry on.
+        denied_seen = []
+        for _ in range(AGY_DENIAL_RESUMES):
+            final = stream.final or {}
+            new_denied = [c for c in stream.denied_commands if c not in denied_seen]
+            if (args.cli != "agy" or timed_out.is_set() or not stream.session_id or not new_denied
+                    or isinstance(final.get("structured_output"), dict)):
+                break
+            denied_seen += new_denied
+            log.write(f"[{now()}] resuming after denied command(s): {', '.join(denied_seen)}\n")
+            stream.final = None
+            follow_up = (
+                "These shell commands were denied by the permission check and will be denied "
+                "again: " + ", ".join(f"`{c}`" for c in denied_seen) + ". Do not run them or "
+                "variants of them. " + AGY_FILE_TOOLS + " If a command is truly required, list "
+                "it under \"blocked\". Continue the task from where you stopped, then give your "
+                "final answer as the JSON object described earlier.")
+            cmd, stdin, _ = build_command(args, follow_up, schema_path, tmp, conversation=stream.session_id)
+            code = run_attempt(cmd, stdin, log, stderr_path)
+
+        stderr = "\n".join(stderr_parts)
         stdout = "".join(stdout_lines)
         if timed_out.is_set():
             code, stderr = None, stderr + f"\ntimed out after {args.timeout}s"
@@ -405,6 +482,8 @@ def main():
         envelope["resume_command"] = resume_command(args.cli, stream.session_id)
         raw_path.write_text(f"$ {cmd[0]} ...\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n")
         result, denials, error = parse_output(args.cli, stream, stdout, last_message)
+        if stream.denied_commands:
+            denials = [{"action": "command", "command": c} for c in dict.fromkeys(stream.denied_commands)]
         log.write(f"[{now()}] exit {code} after {envelope['duration_s']}s\n")
 
     envelope["permission_denials"] = denials
@@ -415,10 +494,10 @@ def main():
     if problem is None and timed_out.is_set():
         problem = f"timed out after {args.timeout}s"
     if problem and args.cli == "agy" and denials:
-        actions = sorted({d.get("action", "?") for d in denials if isinstance(d, dict)})
-        problem += (" | headless agy denied: " + ", ".join(actions) + ". agy only runs "
-                    "actions allowed under permissions.allow in ~/.gemini/antigravity-cli/settings.json"
-                    " (e.g. " + ", ".join(f"{a}(<target>)" for a in actions) + ")")
+        targets = [d.get("command") or d.get("action", "?") for d in denials if isinstance(d, dict)]
+        problem += (" | headless agy denied: " + ", ".join(targets) + ". agy only runs commands "
+                    "matching permissions.allow in ~/.gemini/antigravity-cli/settings.json, e.g. "
+                    "command(npm test)")
     if problem:
         tail = (stderr or stdout or "").strip().splitlines()[-5:]
         envelope["error"] = problem + ("" if not tail else " | " + " / ".join(short(t, 300) for t in tail))

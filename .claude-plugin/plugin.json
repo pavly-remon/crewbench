@@ -1,6 +1,6 @@
 {
   "name": "crewbench",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "A five-role dev team (Team Lead, Developer, Tester, Code Reviewer, UI/UX Designer) with per-role model, effort and CLI routing, invoked via /crewbench:new-task, :test, :review, :design and :team",
   "author": {
     "name": "Pavly"

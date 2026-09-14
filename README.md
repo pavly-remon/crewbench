@@ -140,10 +140,23 @@ with a scoped tool set:
 Anything a role can't do is reported back instead of worked around.
 
 **Using `agy` for a role:** reads and edits inside the project work out of
-the box. Shell commands only run if they match `permissions.allow` in
-`~/.gemini/antigravity-cli/settings.json` (e.g. `command(npm test*)`) —
-headless `agy` ends the run on the first command that would need a prompt.
-When that happens, the result's `error` names what agy refused.
+the box, and `agy` roles are told to use their file tools instead of
+`ls`/`cat`/`grep`. Shell commands only run if they match `permissions.allow`
+in `~/.gemini/antigravity-cli/settings.json`. agy matches those rules as
+word-by-word prefixes, and `*` only works on its own:
+
+| Rule | Allows |
+|---|---|
+| `command(npm test)` | `npm test`, `npm test -- --watch` |
+| `command(ls)` | `ls`, `ls -la` |
+| `command(regex:npm run (build\|lint\|test))` | those three scripts |
+| `command(ls*)` | nothing — agy reads `ls*` literally |
+
+If a role's run is stopped by a denied command anyway, crewbench resumes
+the same `agy` session, tells it the command stays denied, and lets it
+finish (up to 2 times). Denied commands show up in the result's
+`permission_denials`, and allow rules that can never match show up in
+`warnings`.
 
 ### Watching a role work
 

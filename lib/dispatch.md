@@ -143,6 +143,8 @@ python3 <root>/bin/crewbench_dispatch.py --role <role> --cli <cli> \
    whether to retry, switch that role's CLI, or stop. If `blocked` or
    `permission_denials` is non-empty, tell the user what the role couldn't
    do — never retry it with permission checks disabled.
+   If `warnings` is non-empty (e.g. agy allow rules that can never match),
+   pass them on to the user once — don't change their settings yourself.
 
 ### Safety
 
