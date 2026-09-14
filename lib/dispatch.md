@@ -10,19 +10,21 @@ Antigravity CLI (`agy`), or Codex CLI.
 
 ## 1. Build the lineup
 
-A lineup entry has three fields per role:
+A lineup entry has four fields per role:
 
 | Field | Values |
 |---|---|
 | `cli` | `host` (the CLI you, the Team Lead, are running in), `claude`, `codex`, `agy`, `copilot` |
 | `model` | `cheap` or `strong` (a tier, resolved per CLI below), or an exact model name/alias for that CLI |
 | `effort` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `permissions` | `safe` (sandboxed / scoped tools) or `skip` (permission checks skipped — see Safety). Ignored for `code-reviewer`, which is always read-only |
 
 Merge, later wins:
 
 1. `<root>/config/defaults.json` — the shipped defaults: developer and
    ui-ux on the `cheap` tier, tester and code-reviewer on the `strong` tier,
-   everyone at `medium` effort, all on `host`.
+   everyone at `medium` effort, all on `host`; the developer runs with
+   `permissions: skip`, everyone else `safe`.
 2. `.crewbench/team.json` in the project root, if it exists — the project's
    saved lineup. Same shape as the defaults; may contain only some roles or
    fields, and may override `tiers`.
@@ -34,7 +36,7 @@ through `tiers[<cli>]`. An exact model name is passed through unchanged.
 ## 2. Align with the user
 
 Before delegating anything, show the lineup for the roles this skill will
-use as a compact table (role, CLI, model, effort) and ask whether to keep
+use as a compact table (role, CLI, model, effort, permissions) and ask whether to keep
 it or change it. Accept plain-language changes — "reviewer on codex with
 high effort", "everyone on opus", "developer on agy with gemini flash".
 
@@ -53,8 +55,9 @@ and just show the table you'll use.
 
 For each role, after resolving:
 
-**Native subagent** — use when the role's CLI is the host AND the host can
-honor the requested model and effort natively:
+**Native subagent** — use when the role's CLI is the host, the role is
+`permissions: safe`, AND the host can honor the requested model and effort
+natively (a `skip` role always uses the headless route):
 
 - Claude Code: the `crewbench:crewbench-<role>` subagent (`ui-ux` →
   `crewbench:crewbench-ui-ux`). Pass `model` on the Agent call when it
@@ -78,8 +81,11 @@ whichever CLI the role runs on:
 
 ```
 python3 <root>/bin/crewbench_dispatch.py --role <role> --cli <cli> \
-    --model <model> --effort <effort> --handoff <handoff-file>
+    --model <model> --effort <effort> --handoff <handoff-file> [--skip-permissions]
 ```
+
+Add `--skip-permissions` only when the agreed lineup has `permissions: skip`
+for that role.
 
 1. Write the hand-off to `.crewbench/runs/<role>-<n>.md` (add
    `.crewbench/runs/` to `.git/info/exclude` if it isn't ignored). Include
@@ -148,8 +154,8 @@ python3 <root>/bin/crewbench_dispatch.py --role <role> --cli <cli> \
 
 ### Safety
 
-Child agents never run with permission checks turned off. The script starts
-each CLI sandboxed or with a scoped tool set:
+With `permissions: safe`, child agents run sandboxed or with a scoped tool
+set:
 
 | CLI | developer / tester | code-reviewer | ui-ux |
 |---|---|---|---|
@@ -158,9 +164,26 @@ each CLI sandboxed or with a scoped tool set:
 | agy | `--sandbox --add-dir <project> --mode accept-edits`; project reads/edits run, shell commands only if in your agy `permissions.allow` | `--sandbox --mode plan` | `--sandbox --mode accept-edits` |
 | copilot | file edits only; shell and URLs denied | read only | file edits only |
 
-Never add `--dangerously-skip-permissions`, `bypassPermissions`,
-`--allow-all-tools`, `--yolo` or similar flags, and never edit a CLI's
-permission settings to get a role unblocked — report it to the user instead.
+With `permissions: skip` (`--skip-permissions`), the role runs unattended:
+
+| CLI | Flags | Git guard |
+|---|---|---|
+| claude | `--permission-mode bypassPermissions` | deny rules for `git commit/push/reset/rebase/stash/checkout/switch` (still enforced) |
+| agy | `--dangerously-skip-permissions`, still `--sandbox` | detection only |
+| codex | `-s danger-full-access` | detection only |
+| copilot | `--allow-all-tools` | `--deny-tool=shell(git commit)` etc. (still enforced) |
+
+On every CLI the script snapshots HEAD, the branch and remote refs before
+the run. If the role committed, reset, switched branch or pushed, the run
+fails with `ok: false` and says what changed. Don't undo it yourself —
+tell the user and let them decide.
+
+Only use `--skip-permissions` when the lineup says so; never add skip flags
+any other way, and never edit a CLI's permission settings to get a role
+unblocked — report it to the user instead. If your own CLI refuses to
+launch a `skip` run (e.g. Claude Code's auto mode blocks it), tell the user
+it was blocked and ask whether to approve it themselves or switch that role
+to `safe`; don't try to get around the block.
 
 ## 5. Reporting
 

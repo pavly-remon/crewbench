@@ -72,12 +72,12 @@ The Team Lead will:
 Default lineup — cheaper model for building, stronger model for checking,
 all at medium effort, all on the CLI you're running:
 
-| Role | CLI | Model tier | Effort |
-|---|---|---|---|
-| developer | host | cheap | medium |
-| tester | host | strong | medium |
-| code-reviewer | host | strong | medium |
-| ui-ux | host | cheap | medium |
+| Role | CLI | Model tier | Effort | Permissions |
+|---|---|---|---|---|
+| developer | host | cheap | medium | skip |
+| tester | host | strong | medium | safe |
+| code-reviewer | host | strong | medium | safe (always read-only) |
+| ui-ux | host | cheap | medium | safe |
 
 Tiers resolve per CLI:
 
@@ -106,7 +106,8 @@ project:
 ```
 
 `cli` is `host`, `claude`, `codex`, `agy` or `copilot`; `model` is a
-tier or an exact model name; `effort` is `low`–`max`. Defaults live in
+tier or an exact model name; `effort` is `low`–`max`; `permissions` is
+`safe` or `skip`. Defaults live in
 [`config/defaults.json`](config/defaults.json).
 
 ### How roles are run
@@ -126,9 +127,9 @@ so roles on different CLIs share the same structured facts: the developer's
 
 ### Safety
 
-Child agents never run with permission checks disabled — no
-`--dangerously-skip-permissions` or equivalent. Each CLI runs sandboxed or
-with a scoped tool set:
+Each role runs in one of two permission modes, set per role in the lineup.
+
+**`safe`** — sandboxed or with a scoped tool set:
 
 | CLI | developer / tester | code-reviewer |
 |---|---|---|
@@ -137,7 +138,28 @@ with a scoped tool set:
 | agy | `--sandbox`, project reads/edits allowed, shell commands per your agy allowlist | `--sandbox`, plan mode |
 | copilot | file edits only, no shell | read-only |
 
-Anything a role can't do is reported back instead of worked around.
+**`skip`** (the developer's default) — permission checks skipped so the
+role never stops for approval: Claude `bypassPermissions`, agy
+`--dangerously-skip-permissions` (still sandboxed), Codex
+`danger-full-access`, Copilot `--allow-all-tools`. The work still has to get
+past the tester and reviewer, and git is guarded:
+
+- Claude and Copilot runs have deny rules for `git commit`, `push`,
+  `reset`, `rebase`, `stash`, `checkout` and `switch`, which hold even with
+  checks skipped.
+- On every CLI, crewbench compares HEAD, branch and remote refs before and
+  after the run; if the role changed git history the run fails and the Team
+  Lead tells you. Nothing is undone automatically.
+
+A `skip` role can still run any other command on your machine (install
+packages, delete files, reach the network). Set it to `safe` in
+`.crewbench/team.json` or via `/crewbench:team` if that's not what you want.
+
+**Launching `skip` runs from Claude Code:** auto mode blocks starting an
+agent with permission checks skipped. Approve the dispatch when prompted
+(`/permissions` → Recently denied → `r`), or allow it in your own
+`~/.claude/settings.json`, e.g.
+`"permissions": {"allow": ["Bash(python3 */crewbench_dispatch.py *)"]}`.
 
 **Using `agy` for a role:** reads and edits inside the project work out of
 the box, and `agy` roles are told to use their file tools instead of

@@ -40,9 +40,11 @@ ROLES = {
     "ui-ux": "ui-ux-designer.md",
 }
 
+GIT_RULE = "Never run git commit, git push, git reset, git rebase, git stash or anything else that changes git history or branches — the Team Lead handles commits."
+
 LIMITS = {
-    "developer": "You may read and edit files in the project and run shell commands.",
-    "tester": "You may read files, add or edit test files, and run shell commands. Do not change non-test source code.",
+    "developer": "You may read and edit files in the project and run shell commands. " + GIT_RULE,
+    "tester": "You may read files, add or edit test files, and run shell commands. Do not change non-test source code. " + GIT_RULE,
     "code-reviewer": "You are read-only: do not edit files or run commands that change anything.",
     "ui-ux": "You may read files and write design documents. Do not run shell commands or write implementation code.",
 }
@@ -97,11 +99,11 @@ AGY_FILE_TOOLS = (
 )
 
 
-def limits_for(role, cli):
+def limits_for(role, cli, skip=False):
     text = LIMITS[role]
     if cli == "agy":
         text += "\n\n" + AGY_FILE_TOOLS
-        if role not in READ_ONLY and role != "ui-ux":
+        if role not in READ_ONLY and role != "ui-ux" and not skip:
             usable, _ = agy_command_rules()
             if "*" in usable:
                 allowed = "any command"
@@ -116,16 +118,16 @@ def limits_for(role, cli):
                 "allowed: " + allowed + ". Any other command is denied. Don't run it or a "
                 "variant of it — if you truly need it (e.g. to run tests), list it under "
                 "\"blocked\" and carry on.")
-    if cli == "copilot" and role in ("developer", "tester"):
+    if cli == "copilot" and role in ("developer", "tester") and not skip:
         text += "\n\nShell commands are not available in this run; list any you needed under \"blocked\"."
     return text
 
 
-def build_prompt(role, cli, handoff, schema):
+def build_prompt(role, cli, handoff, schema, skip=False):
     brief = strip_frontmatter((ROOT / "agents" / ROLES[role]).read_text())
     return "\n\n".join([
         brief.strip(),
-        "## Limits\n\n" + limits_for(role, cli),
+        "## Limits\n\n" + limits_for(role, cli, skip),
         "## Hand-off from the Team Lead\n\n" + handoff.strip(),
         "## How to report\n\n"
         "You are running non-interactively as part of a crewbench team. Don't ask "
@@ -141,13 +143,18 @@ def build_command(args, prompt, schema_path, tmp, conversation=None):
     """Return (argv, stdin_text, codex_last_message_file). Claude and agy stream JSON events."""
     role, model, effort = args.role, args.model, args.effort
     has_effort = effort.lower() not in NO_EFFORT
+    # --skip-permissions never applies to the read-only reviewer.
+    skip = args.skip_permissions and role not in READ_ONLY
     if args.cli == "claude":
+        # plan keeps the reviewer read-only; auto has a classifier review each
+        # action; bypassPermissions (opt-in) skips checks but still honors deny rules.
+        mode = "plan" if role in READ_ONLY else ("bypassPermissions" if skip else "auto")
         cmd = ["claude", "-p", "--model", model, "--output-format", "stream-json", "--verbose",
                "--json-schema", schema_path.read_text(),
                "--tools", CLAUDE_TOOLS[role], "--strict-mcp-config",
-               # plan keeps the reviewer read-only; auto has a classifier review
-               # every other action instead of skipping approval.
-               "--permission-mode", "plan" if role in READ_ONLY else "auto"]
+               "--permission-mode", mode]
+        if skip:
+            cmd += ["--disallowedTools", *CLAUDE_GIT_DENY]
         if has_effort:
             cmd += ["--effort", effort]
         return cmd, prompt, None
@@ -158,6 +165,8 @@ def build_command(args, prompt, schema_path, tmp, conversation=None):
                "--mode", "plan" if role in READ_ONLY else "accept-edits",
                "--output-format", "stream-json", "--json-schema", str(schema_path),
                "--print-timeout", f"{args.timeout}s"]
+        if skip:
+            cmd += ["--dangerously-skip-permissions"]
         if conversation:
             cmd += ["--conversation", conversation]
         if has_effort:
@@ -166,21 +175,54 @@ def build_command(args, prompt, schema_path, tmp, conversation=None):
     if args.cli == "codex":
         last = Path(tmp) / "last-message.txt"
         cmd = ["codex", "exec", "-m", model,
-               "-s", "read-only" if role in READ_ONLY else "workspace-write",
+               "-s", "read-only" if role in READ_ONLY else ("danger-full-access" if skip else "workspace-write"),
                "--output-schema", str(schema_path), "-o", str(last)]
         if has_effort:
             cmd += ["-c", f"model_reasoning_effort={effort}"]
         return cmd + ["-"], prompt, last
     if args.cli == "copilot":
-        # Copilot has no per-run sandbox flag, so shell stays denied.
-        cmd = ["copilot", "-s", "--no-ask-user", "--model", model,
-               "--deny-tool=shell", "--deny-tool=url"]
-        if role not in READ_ONLY:
-            cmd += ["--allow-tool=write"]
+        cmd = ["copilot", "-s", "--no-ask-user", "--model", model]
+        if skip:
+            # deny rules take precedence over --allow-all-tools
+            cmd += ["--allow-all-tools", *[f"--deny-tool=shell({c})" for c in GIT_DENY]]
+        else:
+            # Copilot has no per-run sandbox flag, so shell stays denied.
+            cmd += ["--deny-tool=shell", "--deny-tool=url"]
+            if role not in READ_ONLY:
+                cmd += ["--allow-tool=write"]
         if has_effort:
             cmd += ["--effort", effort]
         return cmd + ["-p", prompt], None, None
     raise SystemExit(f"unknown cli: {args.cli}")
+
+
+GIT_DENY = ["git commit", "git push", "git reset", "git rebase", "git stash", "git checkout", "git switch"]
+CLAUDE_GIT_DENY = [f"Bash({c}:*)" for c in GIT_DENY]
+
+
+def git_state():
+    """Snapshot HEAD, current branch and remote refs; None outside a git repo."""
+    def git(*a):
+        r = subprocess.run(["git", *a], capture_output=True, text=True, cwd=os.getcwd())
+        return r.stdout.strip() if r.returncode == 0 else None
+    head = git("rev-parse", "HEAD")
+    if head is None:
+        return None
+    return {"head": head, "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+            "remotes": git("for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes")}
+
+
+def git_changes(before, after):
+    if not before or not after:
+        return None
+    changes = []
+    if before["branch"] != after["branch"]:
+        changes.append(f"switched branch {before['branch']} -> {after['branch']}")
+    if before["head"] != after["head"]:
+        changes.append(f"moved HEAD {before['head'][:8]} -> {after['head'][:8]} (commit, reset or rebase)")
+    if before["remotes"] != after["remotes"]:
+        changes.append("remote-tracking refs changed (push or fetch)")
+    return "; ".join(changes) or None
 
 
 def resume_command(cli, session_id):
@@ -361,6 +403,10 @@ def main():
     p.add_argument("--effort", default="medium", help='low|medium|high|xhigh|max, or "none" to omit')
     p.add_argument("--handoff", required=True, help="file with the task hand-off")
     p.add_argument("--timeout", type=int, default=1800, help="seconds (default 1800)")
+    p.add_argument("--skip-permissions", action="store_true",
+                   help="run the child with permission checks skipped (ignored for code-reviewer); "
+                        "git commit/push stay denied where the CLI supports deny rules, and any "
+                        "git history change fails the run")
     args = p.parse_args()
 
     handoff_path = Path(args.handoff)
@@ -370,6 +416,7 @@ def main():
     raw_path = handoff_path.with_suffix(".raw.txt")
     log_path = handoff_path.with_suffix(".log")
     envelope = {"role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort,
+                "skip_permissions": args.skip_permissions and args.role not in READ_ONLY,
                 "ok": False, "exit_code": None, "duration_s": None, "result": None,
                 "permission_denials": [], "error": None, "session_id": None, "resume_command": None,
                 "result_file": str(out_path), "log_file": str(log_path), "raw_output_file": str(raw_path)}
@@ -390,11 +437,12 @@ def main():
 
     schema_path = ROOT / "schemas" / f"{args.role}.json"
     schema = json.loads(schema_path.read_text())
-    prompt = build_prompt(args.role, args.cli, handoff_path.read_text(), schema)
+    prompt = build_prompt(args.role, args.cli, handoff_path.read_text(), schema,
+                          args.skip_permissions and args.role not in READ_ONLY)
     stream = Stream(args.cli)
     stdout_lines, stderr_parts = [], []
     warnings = []
-    if args.cli == "agy":
+    if args.cli == "agy" and not envelope["skip_permissions"]:
         _, broken = agy_command_rules()
         if broken:
             warnings.append(
@@ -449,6 +497,7 @@ def main():
         print(f"crewbench: {run} running on {args.cli} — live log: tail -f {log_path}",
               file=sys.stderr, flush=True)
         start = time.time()
+        git_before = git_state()
         code = run_attempt(cmd, stdin, log, stderr_path)
 
         # Headless agy ends the whole run when a command is denied. Resume the same
@@ -488,7 +537,11 @@ def main():
 
     envelope["permission_denials"] = denials
     envelope["result"] = result
+    git_changed = git_changes(git_before, git_state())
     problem = error or validate(result, schema)
+    if git_changed:
+        # Never undo it automatically — the Team Lead and user decide what to keep.
+        problem = f"{args.role} changed git history, which crewbench roles must not do: {git_changed}"
     if problem is None and code not in (0, None):
         problem = f"{args.cli} exited with code {code}"
     if problem is None and timed_out.is_set():
@@ -498,9 +551,10 @@ def main():
         problem += (" | headless agy denied: " + ", ".join(targets) + ". agy only runs commands "
                     "matching permissions.allow in ~/.gemini/antigravity-cli/settings.json, e.g. "
                     "command(npm test)")
-    if problem:
+    if problem and not git_changed:
         tail = (stderr or stdout or "").strip().splitlines()[-5:]
-        envelope["error"] = problem + ("" if not tail else " | " + " / ".join(short(t, 300) for t in tail))
+        problem += "" if not tail else " | " + " / ".join(short(t, 300) for t in tail)
+    envelope["error"] = problem
     envelope["ok"] = problem is None
     finish()
 

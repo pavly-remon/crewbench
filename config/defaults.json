@@ -1,9 +1,9 @@
 {
   "roles": {
-    "developer":     { "cli": "host", "model": "cheap",  "effort": "medium" },
-    "tester":        { "cli": "host", "model": "strong", "effort": "medium" },
-    "code-reviewer": { "cli": "host", "model": "strong", "effort": "medium" },
-    "ui-ux":         { "cli": "host", "model": "cheap",  "effort": "medium" }
+    "developer":     { "cli": "host", "model": "cheap",  "effort": "medium", "permissions": "skip" },
+    "tester":        { "cli": "host", "model": "strong", "effort": "medium", "permissions": "safe" },
+    "code-reviewer": { "cli": "host", "model": "strong", "effort": "medium", "permissions": "safe" },
+    "ui-ux":         { "cli": "host", "model": "cheap",  "effort": "medium", "permissions": "safe" }
   },
   "tiers": {
     "claude":  { "cheap": "sonnet",          "strong": "opus" },

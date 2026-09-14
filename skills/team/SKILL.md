@@ -24,7 +24,8 @@ Read `<root>/lib/dispatch.md`, sections 1 and 2, for the lineup format.
 
 2. If a change was requested (above, or in reply), apply it and show the
    new table. Validate: `cli` is one of host/claude/codex/agy/copilot,
-   effort is one of low/medium/high/xhigh/max. For any non-host CLI, check
+   effort is one of low/medium/high/xhigh/max, permissions is safe or skip
+   (skip has no effect on code-reviewer). For any non-host CLI, check
    it's installed with `command -v` and warn if it isn't. For agy, check the
    effort exists for that model (`agy models`) and show the closest one.
 
