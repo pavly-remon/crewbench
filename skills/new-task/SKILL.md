@@ -1,7 +1,7 @@
 ---
 name: new-task
 description: Run a new task through the crewbench team (Team Lead delegates to developer, tester, code-reviewer, ui-ux-designer)
-argument-hint: [task description]
+argument-hint: "[task description]"
 disable-model-invocation: true
 ---
 

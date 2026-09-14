@@ -134,17 +134,37 @@ with a scoped tool set:
 |---|---|---|
 | claude | auto mode (each action reviewed), scoped tools | plan mode, read-only tools |
 | codex | `workspace-write` sandbox | `read-only` sandbox |
-| agy | `--sandbox`, edits auto-accepted, other actions per your agy allowlist | `--sandbox`, plan mode |
+| agy | `--sandbox`, project reads/edits allowed, shell commands per your agy allowlist | `--sandbox`, plan mode |
 | copilot | file edits only, no shell | read-only |
 
 Anything a role can't do is reported back instead of worked around.
 
-**Using `agy` for a role:** headless `agy` only runs tools your agy
-settings pre-approve, and ends the run on the first action that would need
-a prompt (even file reads). Add the actions you're comfortable with to
-`permissions.allow` in `~/.gemini/antigravity-cli/settings.json` — for
-example file reads/edits and your test command. When a run is denied, the
-result's `error` names the exact actions agy refused.
+**Using `agy` for a role:** reads and edits inside the project work out of
+the box. Shell commands only run if they match `permissions.allow` in
+`~/.gemini/antigravity-cli/settings.json` (e.g. `command(npm test*)`) —
+headless `agy` ends the run on the first command that would need a prompt.
+When that happens, the result's `error` names what agy refused.
+
+### Watching a role work
+
+Each headless role writes a live log. The Team Lead tells you the command
+when a role starts:
+
+```
+tail -f .crewbench/runs/developer-1.log
+```
+
+```
+[01:22:33] session started (gemini-3.8-flash) id=1c16c942-…
+[01:22:38] tool: view_file {"AbsolutePath": "…/calc.py"}
+[01:22:42] tool: replace_file_content {"TargetFile": "…/calc.py"}
+[01:22:49] finished: SUCCESS
+```
+
+`.crewbench/runs/status.json` lists every run (running / done / failed) with
+its log and session id. When a role finishes, its result includes a
+`resume_command` — `agy --conversation <id>`, `claude --resume <id>`,
+`codex resume <id>` — to open the full session in that CLI.
 
 The full protocol is in [`lib/dispatch.md`](lib/dispatch.md).
 

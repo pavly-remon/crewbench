@@ -1,7 +1,7 @@
 ---
 name: team
 description: Show or change the crewbench team lineup — which CLI, model and effort each role (developer, tester, code-reviewer, ui-ux) uses
-argument-hint: [optional change, e.g. "reviewer on codex, high effort"]
+argument-hint: "[optional change, e.g. 'reviewer on codex, high effort']"
 disable-model-invocation: true
 ---
 

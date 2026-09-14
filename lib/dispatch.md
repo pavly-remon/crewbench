@@ -88,9 +88,18 @@ python3 <root>/bin/crewbench_dispatch.py --role <role> --cli <cli> \
    received. The script adds the role brief from `<root>/agents/`, the
    role's limits, and the JSON result schema from `<root>/schemas/`.
 
-2. Run the script from the project root with a long timeout (up to 30
-   minutes), or in the background and wait for it. Pass `--effort none` when
-   the chosen model takes no effort setting.
+2. Run the script from the project root in the background and wait for
+   it (allow up to 30 minutes). Pass `--effort none` when the chosen model
+   takes no effort setting. As soon as it starts, tell the user how to watch
+   it, e.g.:
+
+   > Developer is working on agy — watch it live with
+   > `tail -f .crewbench/runs/developer-1.log`
+
+   The log shows each tool the role uses (files read and edited, commands
+   run) with timestamps. `.crewbench/runs/status.json` lists every run with
+   its state (running / done / failed), pid, log file and session id — read
+   it when the user asks what the crew is doing.
 
 3. The script prints a JSON envelope and saves it to
    `.crewbench/runs/<role>-<n>.result.json`:
@@ -101,9 +110,15 @@ python3 <root>/bin/crewbench_dispatch.py --role <role> --cli <cli> \
      "ok": true, "exit_code": 0, "duration_s": 41.2,
      "result": { "status": "done", "summary": "...", "files_changed": [], "assumptions": [], "questions": [], "blocked": [] },
      "permission_denials": [], "error": null,
-     "result_file": "...", "raw_output_file": "..."
+     "session_id": "1c16c942-...", "resume_command": "agy --conversation 1c16c942-...",
+     "result_file": "...", "log_file": "...", "raw_output_file": "..."
    }
    ```
+
+   `session_id` and `resume_command` (e.g. `agy --conversation <id>`,
+   `claude --resume <id>`) let the user open the role's full session once
+   it has finished — mention them when reporting a role's result, and never
+   suggest opening a session that is still running.
 
    `result` follows `<root>/schemas/<role>.json`:
    - developer: `status` (done / blocked / needs_clarification), `summary`,
@@ -138,7 +153,7 @@ each CLI sandboxed or with a scoped tool set:
 |---|---|---|---|
 | claude | `--permission-mode auto` (each action reviewed), scoped `--tools` | `--permission-mode plan`, read tools only | `auto`, no shell |
 | codex | `-s workspace-write` sandbox | `-s read-only` | `-s workspace-write` |
-| agy | `--sandbox --mode accept-edits`; only actions allowed in your agy `permissions.allow` settings run | `--sandbox --mode plan` | `--sandbox --mode accept-edits` |
+| agy | `--sandbox --add-dir <project> --mode accept-edits`; project reads/edits run, shell commands only if in your agy `permissions.allow` | `--sandbox --mode plan` | `--sandbox --mode accept-edits` |
 | copilot | file edits only; shell and URLs denied | read only | file edits only |
 
 Never add `--dangerously-skip-permissions`, `bypassPermissions`,

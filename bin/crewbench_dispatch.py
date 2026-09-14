@@ -10,12 +10,16 @@ handoff file only needs the task itself. Child agents never run with
 permission checks disabled: each CLI is started sandboxed or with a scoped
 tool set, and anything the child can't do is reported under "blocked".
 
-Prints the envelope as JSON on stdout and writes it next to the handoff file
-(<handoff>.result.json, raw output in <handoff>.raw.txt). Exit code is 0 when
-the role returned a valid result, 1 otherwise.
+While the role works, a readable live log is written to <handoff>.log
+(watch it with `tail -f`) and .crewbench/runs/status.json tracks every run.
+When done, prints the envelope as JSON on stdout and writes it next to the
+handoff file (<handoff>.result.json, raw output in <handoff>.raw.txt). The
+envelope includes the child's session id and a command to reopen it. Exit
+code is 0 when the role returned a valid result, 1 otherwise.
 """
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -23,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -103,10 +108,11 @@ def build_prompt(role, cli, handoff, schema):
 
 
 def build_command(args, prompt, schema_path, tmp):
+    """Return (argv, stdin_text, codex_last_message_file). Claude and agy stream JSON events."""
     role, model, effort = args.role, args.model, args.effort
     has_effort = effort.lower() not in NO_EFFORT
     if args.cli == "claude":
-        cmd = ["claude", "-p", "--model", model, "--output-format", "json",
+        cmd = ["claude", "-p", "--model", model, "--output-format", "stream-json", "--verbose",
                "--json-schema", schema_path.read_text(),
                "--tools", CLAUDE_TOOLS[role], "--strict-mcp-config",
                # plan keeps the reviewer read-only; auto has a classifier review
@@ -116,9 +122,11 @@ def build_command(args, prompt, schema_path, tmp):
             cmd += ["--effort", effort]
         return cmd, prompt, None
     if args.cli == "agy":
-        cmd = ["agy", "--model", model, "--sandbox",
+        # --add-dir makes the project agy's workspace, so reads and edits there
+        # don't need a prompt; shell commands still follow the user's allowlist.
+        cmd = ["agy", "--model", model, "--sandbox", "--add-dir", os.getcwd(),
                "--mode", "plan" if role in READ_ONLY else "accept-edits",
-               "--output-format", "json", "--json-schema", str(schema_path),
+               "--output-format", "stream-json", "--json-schema", str(schema_path),
                "--print-timeout", f"{args.timeout}s"]
         if has_effort:
             cmd += ["--effort", effort]
@@ -141,6 +149,17 @@ def build_command(args, prompt, schema_path, tmp):
             cmd += ["--effort", effort]
         return cmd + ["-p", prompt], None, None
     raise SystemExit(f"unknown cli: {args.cli}")
+
+
+def resume_command(cli, session_id):
+    if not session_id:
+        return {"copilot": "copilot --continue"}.get(cli)
+    return {
+        "claude": f"claude --resume {session_id}",
+        "agy": f"agy --conversation {session_id}",
+        "codex": f"codex resume {session_id}",
+        "copilot": f"copilot --resume={session_id}",
+    }[cli]
 
 
 def extract_json(text):
@@ -171,18 +190,95 @@ def extract_json(text):
     return found
 
 
-def parse_output(cli, stdout, last_message_file):
+def short(value, limit=160):
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+class Stream:
+    """Turns a CLI's output lines into live log lines and remembers what matters."""
+
+    def __init__(self, cli):
+        self.cli = cli
+        self.session_id = None
+        self.final = None  # claude/agy final result event
+
+    def feed(self, line):
+        """Return readable log lines for one output line."""
+        if self.cli == "claude":
+            return self._claude(line)
+        if self.cli == "agy":
+            return self._agy(line)
+        if self.session_id is None:
+            match = re.search(r"session id:\s*([0-9a-fA-F-]{8,})", line)
+            if match:
+                self.session_id = match.group(1)
+        return [line.rstrip("\n")] if line.strip() else []
+
+    def _event(self, line):
+        try:
+            event = json.loads(line)
+            return event if isinstance(event, dict) else None
+        except ValueError:
+            return None
+
+    def _claude(self, line):
+        event = self._event(line)
+        if event is None:
+            return [line.rstrip("\n")] if line.strip() else []
+        kind = event.get("type")
+        if kind == "system" and event.get("subtype") == "init":
+            self.session_id = event.get("session_id")
+            return [f"session started ({event.get('model', '')}) id={self.session_id}"]
+        if kind == "result":
+            self.final = event
+            return [f"finished: {event.get('subtype', '')}"]
+        out = []
+        for block in (event.get("message") or {}).get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if kind == "assistant" and block.get("type") == "text" and block.get("text", "").strip():
+                out.append("says: " + short(block["text"]))
+            elif kind == "assistant" and block.get("type") == "tool_use":
+                out.append(f"tool: {block.get('name')} {short(block.get('input', {}))}")
+            elif kind == "user" and block.get("type") == "tool_result" and block.get("is_error"):
+                out.append("  error: " + short(block.get("content", "")))
+        return out
+
+    def _agy(self, line):
+        event = self._event(line)
+        if event is None:
+            return [line.rstrip("\n")] if line.strip() else []
+        kind = event.get("event")
+        if kind == "init":
+            self.session_id = event.get("conversation_id")
+            return [f"session started ({(event.get('init') or {}).get('model', '')}) id={self.session_id}"]
+        if kind == "result":
+            self.final = event.get("result") or {}
+            return [f"finished: {self.final.get('status', '')}"]
+        step = event.get("step_update") or {}
+        if step.get("step_type") != "tool" or step.get("state") == "ACTIVE":
+            return []
+        info = step.get("tool_info") or {}
+        text = f"tool: {step.get('tool_name')} {short(info.get('parameters', {}))}"
+        if step.get("state") == "ERROR":
+            text += "  -> " + short((info.get("error") or {}).get("message", "error"))
+        return [text]
+
+
+def parse_output(cli, stream, stdout, last_message_file):
     """Return (result, permission_denials, error)."""
     if cli in ("claude", "agy"):
-        envelope = extract_json(stdout)
-        if envelope is None:
-            return None, [], "no JSON in output"
-        denials = envelope.get("permission_denials") or envelope.get("denied_actions") or []
-        if isinstance(envelope.get("structured_output"), dict):
-            return envelope["structured_output"], denials, None
-        if envelope.get("is_error") or envelope.get("status") not in (None, "SUCCESS"):
-            return None, denials, str(envelope.get("result") or envelope.get("response") or envelope.get("status"))
-        text = envelope.get("result") or envelope.get("response") or ""
+        final = stream.final
+        if final is None:
+            return None, [], "no result event in output"
+        denials = final.get("permission_denials") or final.get("denied_actions") or []
+        if isinstance(final.get("structured_output"), dict):
+            return final["structured_output"], denials, None
+        if final.get("is_error") or final.get("status") not in (None, "SUCCESS"):
+            return None, denials, str(final.get("result") or final.get("error") or final.get("status"))
+        text = final.get("result") or final.get("response") or ""
         return extract_json(text), denials, None
     if cli == "codex" and last_message_file and last_message_file.exists():
         return extract_json(last_message_file.read_text()), [], None
@@ -201,6 +297,25 @@ def validate(result, schema):
     return None
 
 
+def update_status(runs_dir, run, fields):
+    """Merge fields into .crewbench/runs/status.json under this run's name."""
+    path = runs_dir / "status.json"
+    with open(runs_dir / ".status.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            status = json.loads(path.read_text())
+        except (OSError, ValueError):
+            status = {}
+        status.setdefault(run, {}).update(fields)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(status, indent=2) + "\n")
+        tmp.replace(path)
+
+
+def now():
+    return time.strftime("%H:%M:%S")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--role", required=True, choices=ROLES)
@@ -212,15 +327,23 @@ def main():
     args = p.parse_args()
 
     handoff_path = Path(args.handoff)
+    runs_dir = handoff_path.resolve().parent
+    run = handoff_path.stem
     out_path = handoff_path.with_suffix(".result.json")
     raw_path = handoff_path.with_suffix(".raw.txt")
+    log_path = handoff_path.with_suffix(".log")
     envelope = {"role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort,
                 "ok": False, "exit_code": None, "duration_s": None, "result": None,
-                "permission_denials": [], "error": None,
-                "result_file": str(out_path), "raw_output_file": str(raw_path)}
+                "permission_denials": [], "error": None, "session_id": None, "resume_command": None,
+                "result_file": str(out_path), "log_file": str(log_path), "raw_output_file": str(raw_path)}
 
     def finish():
         out_path.write_text(json.dumps(envelope, indent=2) + "\n")
+        update_status(runs_dir, run, {"state": "done" if envelope["ok"] else "failed",
+                                      "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                      "session_id": envelope["session_id"],
+                                      "resume_command": envelope["resume_command"],
+                                      "error": envelope["error"]})
         print(json.dumps(envelope, indent=2))
         sys.exit(0 if envelope["ok"] else 1)
 
@@ -231,27 +354,66 @@ def main():
     schema_path = ROOT / "schemas" / f"{args.role}.json"
     schema = json.loads(schema_path.read_text())
     prompt = build_prompt(args.role, args.cli, handoff_path.read_text(), schema)
+    stream = Stream(args.cli)
+    stdout_lines = []
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1) as log:
         cmd, stdin, last_message = build_command(args, prompt, schema_path, tmp)
+        stderr_path = Path(tmp) / "stderr.txt"
+        log.write(f"[{now()}] {args.role} on {args.cli} ({args.model}, effort {args.effort})\n")
         start = time.time()
-        try:
-            proc = subprocess.run(cmd, input=stdin, capture_output=True, text=True,
-                                  timeout=args.timeout + 60, cwd=os.getcwd())
-            stdout, stderr, code = proc.stdout, proc.stderr, proc.returncode
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr, code = f"timed out after {args.timeout}s", None
+        with open(stderr_path, "w") as stderr_file:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE,
+                                    # codex/copilot report progress on stderr: show it live
+                                    stderr=stderr_file if args.cli in ("claude", "agy") else subprocess.STDOUT,
+                                    text=True, bufsize=1, cwd=os.getcwd())
+            update_status(runs_dir, run, {"role": args.role, "cli": args.cli, "model": args.model,
+                                          "effort": args.effort, "state": "running", "pid": proc.pid,
+                                          "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                          "log_file": str(log_path), "session_id": None})
+            print(f"crewbench: {run} running on {args.cli} — live log: tail -f {log_path}",
+                  file=sys.stderr, flush=True)
+            if stdin:
+                proc.stdin.write(stdin)
+                proc.stdin.close()
+            timed_out = threading.Event()
+
+            def kill():
+                timed_out.set()
+                proc.kill()
+
+            timer = threading.Timer(args.timeout + 60, kill)
+            timer.start()
+            recorded_session = None
+            for line in proc.stdout:
+                stdout_lines.append(line)
+                for entry in stream.feed(line):
+                    log.write(f"[{now()}] {entry}\n")
+                if stream.session_id and stream.session_id != recorded_session:
+                    recorded_session = stream.session_id
+                    update_status(runs_dir, run, {"session_id": recorded_session})
+            code = proc.wait()
+            timer.cancel()
+        stderr = stderr_path.read_text()
+        stdout = "".join(stdout_lines)
+        if timed_out.is_set():
+            code, stderr = None, stderr + f"\ntimed out after {args.timeout}s"
         envelope["duration_s"] = round(time.time() - start, 1)
         envelope["exit_code"] = code
-        raw_path.write_text(f"$ {' '.join(cmd[:1])} ...\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n")
-        result, denials, error = parse_output(args.cli, stdout, last_message)
+        envelope["session_id"] = stream.session_id
+        envelope["resume_command"] = resume_command(args.cli, stream.session_id)
+        raw_path.write_text(f"$ {cmd[0]} ...\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n")
+        result, denials, error = parse_output(args.cli, stream, stdout, last_message)
+        log.write(f"[{now()}] exit {code} after {envelope['duration_s']}s\n")
 
     envelope["permission_denials"] = denials
     envelope["result"] = result
     problem = error or validate(result, schema)
     if problem is None and code not in (0, None):
         problem = f"{args.cli} exited with code {code}"
+    if problem is None and timed_out.is_set():
+        problem = f"timed out after {args.timeout}s"
     if problem and args.cli == "agy" and denials:
         actions = sorted({d.get("action", "?") for d in denials if isinstance(d, dict)})
         problem += (" | headless agy denied: " + ", ".join(actions) + ". agy only runs "
@@ -259,7 +421,7 @@ def main():
                     " (e.g. " + ", ".join(f"{a}(<target>)" for a in actions) + ")")
     if problem:
         tail = (stderr or stdout or "").strip().splitlines()[-5:]
-        envelope["error"] = problem + ("" if not tail else " | " + " / ".join(tail))
+        envelope["error"] = problem + ("" if not tail else " | " + " / ".join(short(t, 300) for t in tail))
     envelope["ok"] = problem is None
     finish()
 

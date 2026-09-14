@@ -1,7 +1,7 @@
 ---
 name: design
 description: Generate a UI/UX design spec from a description with the crewbench UI/UX designer (spec only — no implementation)
-argument-hint: [what to design]
+argument-hint: "[what to design]"
 disable-model-invocation: true
 ---
 

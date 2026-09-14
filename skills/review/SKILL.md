@@ -1,7 +1,7 @@
 ---
 name: review
 description: Review the changes on a git branch with the crewbench code reviewer (read-only — no edits)
-argument-hint: [branch name] [optional base branch]
+argument-hint: "[branch name] [optional base branch]"
 disable-model-invocation: true
 ---
 

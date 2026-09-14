@@ -1,7 +1,7 @@
 ---
 name: test
 description: Test a specific scenario with the crewbench tester (writes and/or runs tests, reports pass/fail — no code fixes)
-argument-hint: [scenario to test]
+argument-hint: "[scenario to test]"
 disable-model-invocation: true
 ---
 
