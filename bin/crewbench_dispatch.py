@@ -40,7 +40,7 @@ ROLES = {
     "ui-ux": "ui-ux-designer.md",
 }
 
-GIT_RULE = "Never run git commit, git push, git reset, git rebase, git stash or anything else that changes git history or branches — the Team Lead handles commits."
+GIT_RULE = "Never commit, push or otherwise change git history or branches — leave changes uncommitted; the Team Lead commits after the user confirms."
 
 LIMITS = {
     "developer": "You may read and edit files in the project and run shell commands. " + GIT_RULE,
@@ -147,14 +147,12 @@ def build_command(args, prompt, schema_path, tmp, conversation=None):
     skip = args.skip_permissions and role not in READ_ONLY
     if args.cli == "claude":
         # plan keeps the reviewer read-only; auto has a classifier review each
-        # action; bypassPermissions (opt-in) skips checks but still honors deny rules.
+        # action; bypassPermissions (opt-in) skips permission checks.
         mode = "plan" if role in READ_ONLY else ("bypassPermissions" if skip else "auto")
         cmd = ["claude", "-p", "--model", model, "--output-format", "stream-json", "--verbose",
                "--json-schema", schema_path.read_text(),
                "--tools", CLAUDE_TOOLS[role], "--strict-mcp-config",
                "--permission-mode", mode]
-        if skip:
-            cmd += ["--disallowedTools", *CLAUDE_GIT_DENY]
         if has_effort:
             cmd += ["--effort", effort]
         return cmd, prompt, None
@@ -183,8 +181,7 @@ def build_command(args, prompt, schema_path, tmp, conversation=None):
     if args.cli == "copilot":
         cmd = ["copilot", "-s", "--no-ask-user", "--model", model]
         if skip:
-            # deny rules take precedence over --allow-all-tools
-            cmd += ["--allow-all-tools", *[f"--deny-tool=shell({c})" for c in GIT_DENY]]
+            cmd += ["--allow-all-tools"]
         else:
             # Copilot has no per-run sandbox flag, so shell stays denied.
             cmd += ["--deny-tool=shell", "--deny-tool=url"]
@@ -194,10 +191,6 @@ def build_command(args, prompt, schema_path, tmp, conversation=None):
             cmd += ["--effort", effort]
         return cmd + ["-p", prompt], None, None
     raise SystemExit(f"unknown cli: {args.cli}")
-
-
-GIT_DENY = ["git commit", "git push", "git reset", "git rebase", "git stash", "git checkout", "git switch"]
-CLAUDE_GIT_DENY = [f"Bash({c}:*)" for c in GIT_DENY]
 
 
 def git_state():
@@ -404,9 +397,7 @@ def main():
     p.add_argument("--handoff", required=True, help="file with the task hand-off")
     p.add_argument("--timeout", type=int, default=1800, help="seconds (default 1800)")
     p.add_argument("--skip-permissions", action="store_true",
-                   help="run the child with permission checks skipped (ignored for code-reviewer); "
-                        "git commit/push stay denied where the CLI supports deny rules, and any "
-                        "git history change fails the run")
+                   help="run the child with permission checks skipped (ignored for code-reviewer)")
     args = p.parse_args()
 
     handoff_path = Path(args.handoff)
@@ -540,8 +531,8 @@ def main():
     git_changed = git_changes(git_before, git_state())
     problem = error or validate(result, schema)
     if git_changed:
-        # Never undo it automatically — the Team Lead and user decide what to keep.
-        problem = f"{args.role} changed git history, which crewbench roles must not do: {git_changed}"
+        # Report only — the Team Lead and user decide what to keep.
+        envelope["warnings"].append(f"{args.role} changed git history against its instructions: {git_changed}")
     if problem is None and code not in (0, None):
         problem = f"{args.cli} exited with code {code}"
     if problem is None and timed_out.is_set():
@@ -551,7 +542,7 @@ def main():
         problem += (" | headless agy denied: " + ", ".join(targets) + ". agy only runs commands "
                     "matching permissions.allow in ~/.gemini/antigravity-cli/settings.json, e.g. "
                     "command(npm test)")
-    if problem and not git_changed:
+    if problem:
         tail = (stderr or stdout or "").strip().splitlines()[-5:]
         problem += "" if not tail else " | " + " / ".join(short(t, 300) for t in tail)
     envelope["error"] = problem

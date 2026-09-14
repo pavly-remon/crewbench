@@ -141,19 +141,17 @@ Each role runs in one of two permission modes, set per role in the lineup.
 **`skip`** (the developer's default) — permission checks skipped so the
 role never stops for approval: Claude `bypassPermissions`, agy
 `--dangerously-skip-permissions` (still sandboxed), Codex
-`danger-full-access`, Copilot `--allow-all-tools`. The work still has to get
-past the tester and reviewer, and git is guarded:
+`danger-full-access`, Copilot `--allow-all-tools`. A `skip` role can run any
+command on your machine; set it to `safe` in `.crewbench/team.json` or via
+`/crewbench:team` if that's not what you want.
 
-- Claude and Copilot runs have deny rules for `git commit`, `push`,
-  `reset`, `rebase`, `stash`, `checkout` and `switch`, which hold even with
-  checks skipped.
-- On every CLI, crewbench compares HEAD, branch and remote refs before and
-  after the run; if the role changed git history the run fails and the Team
-  Lead tells you. Nothing is undone automatically.
+### Commits
 
-A `skip` role can still run any other command on your machine (install
-packages, delete files, reach the network). Set it to `safe` in
-`.crewbench/team.json` or via `/crewbench:team` if that's not what you want.
+Crew roles never commit or push — it's in their instructions, not enforced
+by permission rules. Only the Team Lead commits, after the tester and
+reviewer approve and you confirm; pushing asks you separately. If a role
+changes git history anyway, its result carries a warning and the Team Lead
+tells you before doing anything else.
 
 **Launching `skip` runs from Claude Code:** auto mode blocks starting an
 agent with permission checks skipped. Approve the dispatch when prompted

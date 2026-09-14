@@ -166,17 +166,21 @@ set:
 
 With `permissions: skip` (`--skip-permissions`), the role runs unattended:
 
-| CLI | Flags | Git guard |
-|---|---|---|
-| claude | `--permission-mode bypassPermissions` | deny rules for `git commit/push/reset/rebase/stash/checkout/switch` (still enforced) |
-| agy | `--dangerously-skip-permissions`, still `--sandbox` | detection only |
-| codex | `-s danger-full-access` | detection only |
-| copilot | `--allow-all-tools` | `--deny-tool=shell(git commit)` etc. (still enforced) |
+| CLI | Flags |
+|---|---|
+| claude | `--permission-mode bypassPermissions` |
+| agy | `--dangerously-skip-permissions`, still `--sandbox` |
+| codex | `-s danger-full-access` |
+| copilot | `--allow-all-tools` |
 
-On every CLI the script snapshots HEAD, the branch and remote refs before
-the run. If the role committed, reset, switched branch or pushed, the run
-fails with `ok: false` and says what changed. Don't undo it yourself —
-tell the user and let them decide.
+### Commits
+
+No crew role commits or pushes — their briefs and limits say so. Only the
+Team Lead commits, and only after the user explicitly confirms; pushing
+needs its own confirmation. The script compares HEAD, branch and remote
+refs before and after each run and adds a `warnings` entry if a role
+changed git history anyway. Don't undo it yourself — tell the user and let
+them decide.
 
 Only use `--skip-permissions` when the lineup says so; never add skip flags
 any other way, and never edit a CLI's permission settings to get a role

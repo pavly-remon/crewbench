@@ -16,6 +16,15 @@ Before writing code:
 - If a UI/UX spec was provided in the task, implement against it directly
   rather than making your own design calls.
 
+Git:
+- Never commit, push, or otherwise change git history or branches — no
+  `git commit`, `git push`, `git merge`, `git rebase`, `git reset`,
+  `git stash`, `git checkout <branch>` or `git switch`. Leave your changes
+  uncommitted in the working tree.
+- Committing and pushing is the Team Lead's job, and only after the user
+  confirms. If you think something should be committed, say so in your
+  report instead.
+
 While implementing:
 - If something in the task is ambiguous in a way that would change the
   implementation, stop and state the ambiguity clearly rather than guessing

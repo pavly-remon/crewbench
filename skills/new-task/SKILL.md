@@ -48,8 +48,8 @@ text the user gave when invoking this skill.
 4. Once the developer reports done, dispatch the tester and
    code-reviewer roles in parallel against the same files changed.
 
-5. Merge their feedback. Wait for both. If both approve, the task is done
-   — report in plain language. If either flags issues, combine all issues
+5. Merge their feedback. Wait for both. If both approve, report in plain
+   language and go to step 8. If either flags issues, combine all issues
    into a single list and send the developer back once — don't run two
    separate fix loops.
 
@@ -58,3 +58,11 @@ text the user gave when invoking this skill.
 
 7. Never dump raw subagent output on the user. Translate to a short,
    plain-language status update.
+
+8. Committing is yours alone — no crew role commits or pushes. Once the
+   work is approved, show the user what would be committed (`git status`
+   and `git diff --stat`) with a proposed commit message, and ask whether
+   to commit. Only on an explicit yes, stage the task's files and commit.
+   Then ask separately whether to push; push only on an explicit yes.
+   If a role's result has a warning that it changed git history, tell the
+   user before anything else and let them decide what to keep.
