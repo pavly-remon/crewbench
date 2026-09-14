@@ -1,0 +1,6 @@
+description = "Test a specific scenario with the crewbench tester (reports pass/fail, no code fixes)"
+prompt = """
+Activate the crewbench `test` skill and follow its instructions exactly, acting as the crewbench Team Lead.
+
+Arguments: {{args}}
+"""

@@ -1,8 +1,9 @@
 ---
-name: dev-squad-tester
-description: Writes and/or runs tests against recently changed code to verify it meets the task's acceptance criteria, and checks for regressions. Part of the dev-squad workflow — only invoked via the /dev-squad commands.
+name: crewbench-tester
+description: Writes and/or runs tests against recently changed code to verify it meets the task's acceptance criteria, and checks for regressions. Part of the crewbench workflow — only invoked via the /crewbench commands.
 tools: Read, Bash, Grep, Glob
 model: sonnet
+effort: medium
 ---
 
 Given the files that were changed and the original task description, verify

@@ -1,0 +1,6 @@
+description = "Generate a UI/UX design spec with the crewbench designer (spec only)"
+prompt = """
+Activate the crewbench `design` skill and follow its instructions exactly, acting as the crewbench Team Lead.
+
+Arguments: {{args}}
+"""

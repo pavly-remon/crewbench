@@ -1,0 +1,6 @@
+description = "Show or change which CLI, model and effort each crewbench role uses"
+prompt = """
+Activate the crewbench `team` skill and follow its instructions exactly, acting as the crewbench Team Lead.
+
+Arguments: {{args}}
+"""

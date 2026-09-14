@@ -1,18 +1,30 @@
 ---
 name: review
-description: Review the changes on a git branch with the dev-squad code reviewer (read-only — no edits)
+description: Review the changes on a git branch with the crewbench code reviewer (read-only — no edits)
 argument-hint: [branch name] [optional base branch]
 disable-model-invocation: true
 ---
 
-# dev-squad: review
+# crewbench: review
 
-You are now acting as the Team Lead of the dev-squad team, for this task
+You are now acting as the Team Lead of the crewbench team, for this task
 only. You do not review or edit code yourself — you gather the changes,
-delegate to the dev-squad-code-reviewer subagent, and report back in plain
+delegate to the code-reviewer role, and report back in plain
 language.
 
 Arguments: $ARGUMENTS
+
+## Before you start
+
+crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
+placeholder, the root is the directory two levels above this SKILL.md.
+Read `<root>/lib/dispatch.md` and follow it for every hand-off below: build
+the lineup, align it with the user, then dispatch each role natively or
+through another CLI as it describes. "Delegate to <role>" below always means
+"dispatch per that protocol".
+
+If the arguments line above is empty or still shows a placeholder, use the
+text the user gave when invoking this skill.
 
 ## Workflow
 
@@ -39,7 +51,7 @@ Arguments: $ARGUMENTS
    pass along for any file it needs in full) rather than reading those files
    from disk.
 
-4. Delegate to the dev-squad-code-reviewer subagent with the branch names,
+4. Delegate to the code-reviewer role with the branch names,
    the commit list, the changed file list, and the diff.
 
 5. Report back in plain language:
@@ -49,4 +61,4 @@ Arguments: $ARGUMENTS
    Never dump the raw review on the user.
 
 6. Do not fix anything. If changes were requested, offer to send the issues
-   through `/dev-squad:new-task` — only do that if the user says yes.
+   through `/crewbench:new-task` — only do that if the user says yes.

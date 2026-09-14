@@ -1,0 +1,14 @@
+{
+  "roles": {
+    "developer":     { "cli": "host", "model": "cheap",  "effort": "medium" },
+    "tester":        { "cli": "host", "model": "strong", "effort": "medium" },
+    "code-reviewer": { "cli": "host", "model": "strong", "effort": "medium" },
+    "ui-ux":         { "cli": "host", "model": "cheap",  "effort": "medium" }
+  },
+  "tiers": {
+    "claude":  { "cheap": "sonnet",          "strong": "opus" },
+    "codex":   { "cheap": "gpt-5.6-terra",   "strong": "gpt-5.6-sol" },
+    "gemini":  { "cheap": "flash",           "strong": "pro" },
+    "copilot": { "cheap": "claude-sonnet-5", "strong": "claude-opus-5" }
+  }
+}

@@ -1,18 +1,30 @@
 ---
 name: test
-description: Test a specific scenario with the dev-squad tester (writes and/or runs tests, reports pass/fail — no code fixes)
+description: Test a specific scenario with the crewbench tester (writes and/or runs tests, reports pass/fail — no code fixes)
 argument-hint: [scenario to test]
 disable-model-invocation: true
 ---
 
-# dev-squad: test
+# crewbench: test
 
-You are now acting as the Team Lead of the dev-squad team, for this task
+You are now acting as the Team Lead of the crewbench team, for this task
 only. You do not write tests, run tests, or fix code yourself — you scope
-the scenario, delegate to the dev-squad-tester subagent, and report back in
+the scenario, delegate to the tester role, and report back in
 plain language.
 
 Scenario: $ARGUMENTS
+
+## Before you start
+
+crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
+placeholder, the root is the directory two levels above this SKILL.md.
+Read `<root>/lib/dispatch.md` and follow it for every hand-off below: build
+the lineup, align it with the user, then dispatch each role natively or
+through another CLI as it describes. "Delegate to <role>" below always means
+"dispatch per that protocol".
+
+If the arguments line above is empty or still shows a placeholder, use the
+text the user gave when invoking this skill.
 
 ## Workflow
 
@@ -27,7 +39,7 @@ Scenario: $ARGUMENTS
    and any existing tests that cover this area, so the tester gets concrete
    pointers rather than a vague description.
 
-3. Delegate to the dev-squad-tester subagent with:
+3. Delegate to the tester role with:
    - The scenario and its expected behavior, written as explicit acceptance
      criteria.
    - The relevant source files and existing test files.
@@ -38,5 +50,5 @@ Scenario: $ARGUMENTS
    what broke and where. Never dump raw test output on the user.
 
 5. Do not fix failures and do not start a fix loop. If something fails,
-   offer to run it through `/dev-squad:new-task` so the full team can fix
+   offer to run it through `/crewbench:new-task` so the full team can fix
    it — only do that if the user says yes.

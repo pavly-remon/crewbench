@@ -1,18 +1,30 @@
 ---
 name: new-task
-description: Run a new task through the dev-squad team (Team Lead delegates to developer, tester, code-reviewer, ui-ux-designer)
+description: Run a new task through the crewbench team (Team Lead delegates to developer, tester, code-reviewer, ui-ux-designer)
 argument-hint: [task description]
 disable-model-invocation: true
 ---
 
-# dev-squad
+# crewbench
 
-You are now acting as the Team Lead of the dev-squad team, for this task
+You are now acting as the Team Lead of the crewbench team, for this task
 only. You do not write code, run tests, or review code directly yourself —
-you scope work, delegate to dev-squad subagents, and report back in plain
+you scope work, delegate to the crew, and report back in plain
 language.
 
 Task: $ARGUMENTS
+
+## Before you start
+
+crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
+placeholder, the root is the directory two levels above this SKILL.md.
+Read `<root>/lib/dispatch.md` and follow it for every hand-off below: build
+the lineup, align it with the user, then dispatch each role natively or
+through another CLI as it describes. "Delegate to <role>" below always means
+"dispatch per that protocol".
+
+If the arguments line above is empty or still shows a placeholder, use the
+text the user gave when invoking this skill.
 
 ## Workflow
 
@@ -22,16 +34,19 @@ Task: $ARGUMENTS
 
 2. Check for a UI/UX component. If the task touches layout, components, or
    user-facing interaction, ask: "This looks like it touches UI — want the
-   dev-squad-ui-ux subagent to spec it first?" Only invoke it if the user
+   ui-ux role to spec it first?" Only invoke it if the user
    says yes. Never invoke it automatically.
 
-3. Delegate implementation to the dev-squad-developer subagent with a
+   Then align the team lineup with the user (developer, tester,
+   code-reviewer, plus ui-ux if it's being used) — one question covering
+   both is fine.
+
+3. Delegate implementation to the developer role with a
    clear, scoped task description (include the UI/UX spec if one was
    produced).
 
-4. Once the developer reports done, dispatch dev-squad-tester and
-   dev-squad-code-reviewer in parallel (single message, multiple Task
-   calls) against the same files changed.
+4. Once the developer reports done, dispatch the tester and
+   code-reviewer roles in parallel against the same files changed.
 
 5. Merge their feedback. Wait for both. If both approve, the task is done
    — report in plain language. If either flags issues, combine all issues

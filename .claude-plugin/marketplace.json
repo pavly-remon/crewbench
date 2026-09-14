@@ -1,6 +1,6 @@
 {
   "name": "PiCode-marketplace",
-  "owner": { "name": "Pavly" },
+  "owner": { "name": "Pavly Ayoub", "email": "pavlyremon@gmail.com" },
   "plugins": [
     { "name": "crewbench", "source": "./" }
   ]
