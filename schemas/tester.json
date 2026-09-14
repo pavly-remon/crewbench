@@ -1,0 +1,90 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "error"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "tests_run": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Test commands or test names you ran."
+    },
+    "tests_added": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Test files you created or changed."
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "test": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string"
+          },
+          "actual": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "test",
+          "file",
+          "expected",
+          "actual",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "blocked": {
+      "type": "array",
+      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "verdict",
+    "summary",
+    "tests_run",
+    "tests_added",
+    "failures",
+    "blocked"
+  ],
+  "additionalProperties": false
+}

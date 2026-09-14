@@ -1,0 +1,67 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "blocked",
+        "needs_clarification"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "description": "Short plain-language summary of what you built."
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Paths of files you created, edited or deleted."
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Assumptions you made."
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Ambiguities the Team Lead or user should resolve."
+    },
+    "blocked": {
+      "type": "array",
+      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "files_changed",
+    "assumptions",
+    "questions",
+    "blocked"
+  ],
+  "additionalProperties": false
+}

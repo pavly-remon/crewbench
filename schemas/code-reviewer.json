@@ -1,0 +1,88 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "changes_requested"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "correctness",
+              "security",
+              "consistency",
+              "maintainability"
+            ]
+          },
+          "change": {
+            "type": "string",
+            "description": "The specific, actionable change to make."
+          }
+        },
+        "required": [
+          "file",
+          "line",
+          "severity",
+          "category",
+          "change"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "blocked": {
+      "type": "array",
+      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "verdict",
+    "summary",
+    "issues",
+    "blocked"
+  ],
+  "additionalProperties": false
+}

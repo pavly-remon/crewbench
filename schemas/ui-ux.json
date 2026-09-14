@@ -1,0 +1,62 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "needs_clarification"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "spec_markdown": {
+      "type": "string",
+      "description": "The full design spec: layout and components, states (loading, empty, error, success), interactions."
+    },
+    "reused_components": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Existing project components/patterns the spec reuses."
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Open questions."
+    },
+    "blocked": {
+      "type": "array",
+      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "spec_markdown",
+    "reused_components",
+    "questions",
+    "blocked"
+  ],
+  "additionalProperties": false
+}

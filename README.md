@@ -114,12 +114,37 @@ tier or an exact model name; `effort` is `low`–`max`. Defaults live in
 - **Native subagent** when the role stays on the host CLI and the host can
   apply the model and effort (Claude Code always for model; Copilot when
   using the defaults).
-- **Headless CLI** otherwise: the Team Lead runs `claude -p`, `codex exec`,
-  `agy -p` or `copilot -p` with the role's brief, model, effort and tool
-  limits (e.g. the reviewer runs read-only). The other CLI must be
-  installed and logged in. In `agy`, effort is `low`/`medium`/`high` and
-  depends on the model (`gemini-3.1-pro` has only low/high; its Claude models
-  have none) — the Team Lead shows the closest level before running.
+- **Headless CLI** otherwise, through `bin/crewbench_dispatch.py`. Any CLI
+  can be the Team Lead and hand any role to any other CLI — e.g. `agy` as
+  Team Lead with Claude as developer, or Claude as Team Lead with Codex as
+  reviewer. The other CLI must be installed and logged in.
+
+Every headless role returns a JSON result (schemas in [`schemas/`](schemas/)),
+so roles on different CLIs share the same structured facts: the developer's
+`files_changed`, the tester's `failures`, the reviewer's `issues`, and a
+`blocked` list of anything the role wasn't allowed to do.
+
+### Safety
+
+Child agents never run with permission checks disabled — no
+`--dangerously-skip-permissions` or equivalent. Each CLI runs sandboxed or
+with a scoped tool set:
+
+| CLI | developer / tester | code-reviewer |
+|---|---|---|
+| claude | auto mode (each action reviewed), scoped tools | plan mode, read-only tools |
+| codex | `workspace-write` sandbox | `read-only` sandbox |
+| agy | `--sandbox`, edits auto-accepted, other actions per your agy allowlist | `--sandbox`, plan mode |
+| copilot | file edits only, no shell | read-only |
+
+Anything a role can't do is reported back instead of worked around.
+
+**Using `agy` for a role:** headless `agy` only runs tools your agy
+settings pre-approve, and ends the run on the first action that would need
+a prompt (even file reads). Add the actions you're comfortable with to
+`permissions.allow` in `~/.gemini/antigravity-cli/settings.json` — for
+example file reads/edits and your test command. When a run is denied, the
+result's `error` names the exact actions agy refused.
 
 The full protocol is in [`lib/dispatch.md`](lib/dispatch.md).
 
@@ -141,7 +166,7 @@ Role briefs live in [`agents/`](agents/) and are shared by every CLI.
 | `.claude-plugin/` | Claude Code, Copilot CLI |
 | `plugin.json` | Antigravity CLI (also read by Copilot CLI) |
 | `.codex-plugin/`, `.agents/plugins/` | Codex CLI |
-| `skills/`, `agents/`, `lib/`, `config/` | all |
+| `skills/`, `agents/`, `lib/`, `config/`, `schemas/`, `bin/` | all |
 
 ## License
 

@@ -6,7 +6,7 @@ whether the Team Lead is running in Claude Code, GitHub Copilot CLI,
 Antigravity CLI (`agy`), or Codex CLI.
 
 `<root>` below is the crewbench install directory (the one containing
-`agents/`, `config/` and `lib/`).
+`agents/`, `bin/`, `config/`, `lib/` and `schemas/`).
 
 ## 1. Build the lineup
 
@@ -68,66 +68,82 @@ honor the requested model and effort natively:
   lets crewbench pin a subagent's model and effort, so they can only be
   guaranteed through a separate process).
 
-**Headless CLI** — everything else. You run another CLI non-interactively
-through your shell tool.
+**Headless CLI** — everything else. You run the dispatch script through
+your shell tool (section 4); it starts the other CLI non-interactively.
 
 ## 4. Headless dispatch
 
-1. Check the CLI exists: `command -v <cli>`. If it doesn't, tell the user
-   and ask whether to run that role on the host instead. Never silently
-   swap.
+Every headless hand-off goes through one script, whichever CLI you are and
+whichever CLI the role runs on:
 
-2. Write the hand-off prompt to a temp file (e.g.
-   `.crewbench/runs/<role>-<n>.md`; add `.crewbench/runs/` to
-   `.git/info/exclude` if it isn't ignored). Contents, in order:
-   - The role brief: the body of `<root>/agents/<file>.md` with the YAML
-     frontmatter stripped (`developer.md`, `tester.md`, `code-reviewer.md`,
-     `ui-ux-designer.md`).
-   - The role's tool limits in words (e.g. "You are read-only: do not edit
-     files or run commands that change anything.").
-   - The hand-off itself: task, acceptance criteria, files, diff, spec —
-     everything the native subagent would have received.
-   - "You are running non-interactively. Don't ask questions; if something
-     is ambiguous, state it in your report. End with the report format your
-     brief describes."
+```
+python3 <root>/bin/crewbench_dispatch.py --role <role> --cli <cli> \
+    --model <model> --effort <effort> --handoff <handoff-file>
+```
 
-3. Run it from the project root, capturing output to
-   `.crewbench/runs/<role>-<n>.out`. Use a long timeout (up to 30 minutes)
-   or run in the background and wait for it:
+1. Write the hand-off to `.crewbench/runs/<role>-<n>.md` (add
+   `.crewbench/runs/` to `.git/info/exclude` if it isn't ignored). Include
+   only the hand-off itself — task, acceptance criteria, files, diff, spec,
+   previous role results — everything the native subagent would have
+   received. The script adds the role brief from `<root>/agents/`, the
+   role's limits, and the JSON result schema from `<root>/schemas/`.
 
-   | CLI | Command |
-   |---|---|
-   | claude | `claude -p --model <model> --effort <effort> --allowedTools "<tools>" --permission-mode <mode> < <prompt>` |
-   | codex | `codex exec -m <model> -c model_reasoning_effort=<effort> -s <sandbox> - < <prompt>` |
-   | agy | `agy --model <model> --effort <effort> <flags> --print-timeout 30m -p "$(cat <prompt>)"` |
-   | copilot | `copilot -s --no-ask-user --model <model> --effort <effort> --allow-all-tools <denies> -p "$(cat <prompt>)"` |
+2. Run the script from the project root with a long timeout (up to 30
+   minutes), or in the background and wait for it. Pass `--effort none` when
+   the chosen model takes no effort setting.
 
-   Per-role permissions:
+3. The script prints a JSON envelope and saves it to
+   `.crewbench/runs/<role>-<n>.result.json`:
 
-   | Role | claude `--allowedTools` / `--permission-mode` | codex `-s` | agy `<flags>` | copilot `<denies>` |
-   |---|---|---|---|---|
-   | developer | `Read Write Edit Bash Grep Glob` / `acceptEdits` | `workspace-write` | `--mode accept-edits --dangerously-skip-permissions --sandbox` | — |
-   | tester | `Read Bash Grep Glob` / `acceptEdits` | `workspace-write` | `--mode accept-edits --dangerously-skip-permissions --sandbox` | — |
-   | code-reviewer | `Read Grep Glob` / `default` | `read-only` | `--mode plan` | `--deny-tool=write --deny-tool=shell` |
-   | ui-ux | `Read Write Edit Grep Glob` / `acceptEdits` | `workspace-write` | `--mode accept-edits` | `--deny-tool=shell` |
+   ```json
+   {
+     "role": "developer", "cli": "agy", "model": "gemini-3.8-flash", "effort": "medium",
+     "ok": true, "exit_code": 0, "duration_s": 41.2,
+     "result": { "status": "done", "summary": "...", "files_changed": [], "assumptions": [], "questions": [], "blocked": [] },
+     "permission_denials": [], "error": null,
+     "result_file": "...", "raw_output_file": "..."
+   }
+   ```
 
-   agy notes: effort must be `low`, `medium` or `high`, and not every model
-   has every level (`agy models` lists the variants — e.g. `gemini-3.1-pro`
-   has only low and high; its Claude models take no `--effort` at all).
-   Work this out when you build the lineup in step 2: show the closest
-   supported level (or "n/a") in the table so the user sees it before
-   anything runs. `-p` must be the last flag, with the prompt attached.
+   `result` follows `<root>/schemas/<role>.json`:
+   - developer: `status` (done / blocked / needs_clarification), `summary`,
+     `files_changed`, `assumptions`, `questions`, `blocked`
+   - tester: `verdict` (pass / fail / error), `summary`, `tests_run`,
+     `tests_added`, `failures[]` (test, file, expected, actual, reason),
+     `blocked`
+   - code-reviewer: `verdict` (approve / changes_requested), `summary`,
+     `issues[]` (file, line, severity, category, change), `blocked`
+   - ui-ux: `status`, `summary`, `spec_markdown`, `reused_components`,
+     `questions`, `blocked`
 
-   If a CLI rejects a model name or effort level, report the exact error
-   and ask the user what to use — don't guess a replacement.
+   Use these fields directly: merge tester `failures` and reviewer `issues`
+   into the developer's fix list, and pass earlier results along verbatim
+   in later hand-offs so roles on different CLIs share the same facts.
 
-4. When tester and code-reviewer run in parallel and either is headless,
-   start both before waiting on either (background shell jobs, or a native
-   subagent call alongside a background shell job).
+4. When tester and code-reviewer run in parallel, start both before
+   waiting on either (background shell jobs, or a native subagent call
+   alongside a background job).
 
-5. Read the `.out` file and treat it exactly like a native subagent's
-   report. If the process failed or produced no report, say so plainly and
-   ask whether to retry, switch that role's CLI, or stop.
+5. If `ok` is false, tell the user the `error` in plain words and ask
+   whether to retry, switch that role's CLI, or stop. If `blocked` or
+   `permission_denials` is non-empty, tell the user what the role couldn't
+   do — never retry it with permission checks disabled.
+
+### Safety
+
+Child agents never run with permission checks turned off. The script starts
+each CLI sandboxed or with a scoped tool set:
+
+| CLI | developer / tester | code-reviewer | ui-ux |
+|---|---|---|---|
+| claude | `--permission-mode auto` (each action reviewed), scoped `--tools` | `--permission-mode plan`, read tools only | `auto`, no shell |
+| codex | `-s workspace-write` sandbox | `-s read-only` | `-s workspace-write` |
+| agy | `--sandbox --mode accept-edits`; only actions allowed in your agy `permissions.allow` settings run | `--sandbox --mode plan` | `--sandbox --mode accept-edits` |
+| copilot | file edits only; shell and URLs denied | read only | file edits only |
+
+Never add `--dangerously-skip-permissions`, `bypassPermissions`,
+`--allow-all-tools`, `--yolo` or similar flags, and never edit a CLI's
+permission settings to get a role unblocked — report it to the user instead.
 
 ## 5. Reporting
 
