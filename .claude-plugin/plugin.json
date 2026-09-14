@@ -1,7 +1,7 @@
 {
-  "name": "dev-squad",
+  "name": "crewbench",
   "version": "1.1.0",
-  "description": "A five-role dev team (Team Lead, Developer, Tester, Code Reviewer, UI/UX Designer) invoked via /dev-squad:new-task, :test, :review and :design",
+  "description": "A five-role dev team (Team Lead, Developer, Tester, Code Reviewer, UI/UX Designer) invoked via /crewbench:new-task, :test, :review and :design",
   "author": { "name": "Pavly" },
   "license": "MIT"
 }

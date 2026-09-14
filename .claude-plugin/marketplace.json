@@ -1,7 +1,7 @@
 {
-  "name": "dev-squad-marketplace",
+  "name": "PiCode-marketplace",
   "owner": { "name": "Pavly" },
   "plugins": [
-    { "name": "dev-squad", "source": "./" }
+    { "name": "crewbench", "source": "./" }
   ]
 }
