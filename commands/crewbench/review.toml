@@ -1,6 +1,0 @@
-description = "Review a git branch's changes with the crewbench code reviewer (read-only)"
-prompt = """
-Activate the crewbench `review` skill and follow its instructions exactly, acting as the crewbench Team Lead.
-
-Arguments: {{args}}
-"""

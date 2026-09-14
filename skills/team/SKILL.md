@@ -23,10 +23,10 @@ Read `<root>/lib/dispatch.md`, sections 1 and 2, for the lineup format.
    effort. Say which values come from the project file vs. the defaults.
 
 2. If a change was requested (above, or in reply), apply it and show the
-   new table. Validate: `cli` is one of host/claude/codex/gemini/copilot,
+   new table. Validate: `cli` is one of host/claude/codex/agy/copilot,
    effort is one of low/medium/high/xhigh/max. For any non-host CLI, check
-   it's installed with `command -v` and warn if it isn't. Mention that
-   Gemini CLI ignores effort.
+   it's installed with `command -v` and warn if it isn't. For agy, check the
+   effort exists for that model (`agy models`) and show the closest one.
 
 3. Ask before writing. On yes, save only the fields that differ from
    `<root>/config/defaults.json` into `.crewbench/team.json` (merge with

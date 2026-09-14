@@ -1,6 +1,0 @@
-description = "Run a new task through the crewbench team (Team Lead delegates to developer, tester, code-reviewer, ui-ux)"
-prompt = """
-Activate the crewbench `new-task` skill and follow its instructions exactly, acting as the crewbench Team Lead.
-
-Arguments: {{args}}
-"""

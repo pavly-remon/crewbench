@@ -1,7 +1,7 @@
 # crewbench
 
-A plugin for Claude Code, GitHub Copilot CLI, Gemini CLI and Codex CLI that
-runs a task through a five-role dev team: a Team Lead that scopes and
+A plugin for Claude Code, GitHub Copilot CLI, Antigravity CLI (`agy`) and
+Codex CLI that runs a task through a five-role dev team: a Team Lead that scopes and
 delegates, plus Developer, Tester, Code Reviewer, and (opt-in) UI/UX
 Designer roles. Each role can run on its own CLI, model and reasoning
 effort.
@@ -22,10 +22,11 @@ copilot plugin marketplace add pavly-remon/crewbench
 copilot plugin install crewbench@PiCode-marketplace
 ```
 
-Gemini CLI:
+Antigravity CLI:
 
 ```
-gemini extensions install https://github.com/pavly-remon/crewbench
+git clone https://github.com/pavly-remon/crewbench.git
+agy plugin install ./crewbench
 ```
 
 Codex CLI:
@@ -84,13 +85,13 @@ Tiers resolve per CLI:
 |---|---|---|
 | claude | `sonnet` | `opus` |
 | codex | `gpt-5.6-terra` | `gpt-5.6-sol` |
-| gemini | `flash` | `pro` |
+| agy | `gemini-3.8-flash` | `gemini-3.1-pro` |
 | copilot | `claude-sonnet-5` | `claude-opus-5` |
 
 Before delegating, the Team Lead shows the lineup and asks whether to keep
 it. Tell it what you want in plain language — "reviewer on codex with high
-effort", "developer on gemini flash", "everyone on opus" — and it will use
-that for the task, and optionally save it to `.crewbench/team.json` in your
+effort", "developer on agy with gemini flash", "everyone on opus" — and it
+will use that for the task, and optionally save it to `.crewbench/team.json` in your
 project:
 
 ```json
@@ -104,7 +105,7 @@ project:
 }
 ```
 
-`cli` is `host`, `claude`, `codex`, `gemini` or `copilot`; `model` is a
+`cli` is `host`, `claude`, `codex`, `agy` or `copilot`; `model` is a
 tier or an exact model name; `effort` is `low`–`max`. Defaults live in
 [`config/defaults.json`](config/defaults.json).
 
@@ -114,10 +115,11 @@ tier or an exact model name; `effort` is `low`–`max`. Defaults live in
   apply the model and effort (Claude Code always for model; Copilot when
   using the defaults).
 - **Headless CLI** otherwise: the Team Lead runs `claude -p`, `codex exec`,
-  `gemini -p` or `copilot -p` with the role's brief, model, effort and tool
+  `agy -p` or `copilot -p` with the role's brief, model, effort and tool
   limits (e.g. the reviewer runs read-only). The other CLI must be
-  installed and logged in. Gemini CLI has no effort setting, so effort is
-  ignored there.
+  installed and logged in. In `agy`, effort is `low`/`medium`/`high` and
+  depends on the model (`gemini-3.1-pro` has only low/high; its Claude models
+  have none) — the Team Lead shows the closest level before running.
 
 The full protocol is in [`lib/dispatch.md`](lib/dispatch.md).
 
@@ -130,16 +132,16 @@ The full protocol is in [`lib/dispatch.md`](lib/dispatch.md).
 | `crewbench-code-reviewer` | Read-only static review | Read, Grep, Glob |
 | `crewbench-ui-ux` | Design spec before implementation (opt-in) | Read, Write, Edit, Grep, Glob |
 
-Role briefs live in [`crew/`](crew/) and are shared by every CLI.
+Role briefs live in [`agents/`](agents/) and are shared by every CLI.
 
 ## Layout
 
 | Path | Used by |
 |---|---|
 | `.claude-plugin/` | Claude Code, Copilot CLI |
+| `plugin.json` | Antigravity CLI (also read by Copilot CLI) |
 | `.codex-plugin/`, `.agents/plugins/` | Codex CLI |
-| `gemini-extension.json`, `GEMINI.md`, `commands/` | Gemini CLI |
-| `skills/`, `crew/`, `lib/`, `config/` | all |
+| `skills/`, `agents/`, `lib/`, `config/` | all |
 
 ## License
 

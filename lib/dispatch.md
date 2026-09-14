@@ -2,11 +2,11 @@
 
 Every crewbench skill follows this protocol whenever it hands work to a crew
 role (`developer`, `tester`, `code-reviewer`, `ui-ux`). It works the same
-whether the Team Lead is running in Claude Code, GitHub Copilot CLI, Gemini
-CLI, or Codex CLI.
+whether the Team Lead is running in Claude Code, GitHub Copilot CLI,
+Antigravity CLI (`agy`), or Codex CLI.
 
 `<root>` below is the crewbench install directory (the one containing
-`config/`, `crew/` and `lib/`).
+`agents/`, `config/` and `lib/`).
 
 ## 1. Build the lineup
 
@@ -14,7 +14,7 @@ A lineup entry has three fields per role:
 
 | Field | Values |
 |---|---|
-| `cli` | `host` (the CLI you, the Team Lead, are running in), `claude`, `codex`, `gemini`, `copilot` |
+| `cli` | `host` (the CLI you, the Team Lead, are running in), `claude`, `codex`, `agy`, `copilot` |
 | `model` | `cheap` or `strong` (a tier, resolved per CLI below), or an exact model name/alias for that CLI |
 | `effort` | `low`, `medium`, `high`, `xhigh`, `max` |
 
@@ -36,7 +36,7 @@ through `tiers[<cli>]`. An exact model name is passed through unchanged.
 Before delegating anything, show the lineup for the roles this skill will
 use as a compact table (role, CLI, model, effort) and ask whether to keep
 it or change it. Accept plain-language changes — "reviewer on codex with
-high effort", "everyone on opus", "developer uses gemini flash".
+high effort", "everyone on opus", "developer on agy with gemini flash".
 
 - If they say go / looks good, proceed.
 - If they change something, confirm the new table, then ask once whether
@@ -64,8 +64,8 @@ honor the requested model and effort natively:
 - Copilot CLI: the `crewbench-<role>` custom agent, only when model and
   effort equal the frontmatter defaults; otherwise go headless with
   `copilot`.
-- Gemini CLI and Codex CLI: always use the headless route (crewbench does
-  not install native subagents there, so model and effort can only be
+- Antigravity CLI and Codex CLI: always use the headless route (neither
+  lets crewbench pin a subagent's model and effort, so they can only be
   guaranteed through a separate process).
 
 **Headless CLI** — everything else. You run another CLI non-interactively
@@ -80,7 +80,7 @@ through your shell tool.
 2. Write the hand-off prompt to a temp file (e.g.
    `.crewbench/runs/<role>-<n>.md`; add `.crewbench/runs/` to
    `.git/info/exclude` if it isn't ignored). Contents, in order:
-   - The role brief: the body of `<root>/crew/<file>.md` with the YAML
+   - The role brief: the body of `<root>/agents/<file>.md` with the YAML
      frontmatter stripped (`developer.md`, `tester.md`, `code-reviewer.md`,
      `ui-ux-designer.md`).
    - The role's tool limits in words (e.g. "You are read-only: do not edit
@@ -99,22 +99,27 @@ through your shell tool.
    |---|---|
    | claude | `claude -p --model <model> --effort <effort> --allowedTools "<tools>" --permission-mode <mode> < <prompt>` |
    | codex | `codex exec -m <model> -c model_reasoning_effort=<effort> -s <sandbox> - < <prompt>` |
-   | gemini | `gemini -m <model> --approval-mode <mode> -p "$(cat <prompt>)"` |
+   | agy | `agy --model <model> --effort <effort> <flags> --print-timeout 30m -p "$(cat <prompt>)"` |
    | copilot | `copilot -s --no-ask-user --model <model> --effort <effort> --allow-all-tools <denies> -p "$(cat <prompt>)"` |
 
    Per-role permissions:
 
-   | Role | claude `--allowedTools` / `--permission-mode` | codex `-s` | gemini `--approval-mode` | copilot `<denies>` |
+   | Role | claude `--allowedTools` / `--permission-mode` | codex `-s` | agy `<flags>` | copilot `<denies>` |
    |---|---|---|---|---|
-   | developer | `Read Write Edit Bash Grep Glob` / `acceptEdits` | `workspace-write` | `yolo` | — |
-   | tester | `Read Bash Grep Glob` / `acceptEdits` | `workspace-write` | `yolo` | — |
-   | code-reviewer | `Read Grep Glob` / `default` | `read-only` | `default` | `--deny-tool=write --deny-tool=shell` |
-   | ui-ux | `Read Write Edit Grep Glob` / `acceptEdits` | `workspace-write` | `auto_edit` | `--deny-tool=shell` |
+   | developer | `Read Write Edit Bash Grep Glob` / `acceptEdits` | `workspace-write` | `--mode accept-edits --dangerously-skip-permissions --sandbox` | — |
+   | tester | `Read Bash Grep Glob` / `acceptEdits` | `workspace-write` | `--mode accept-edits --dangerously-skip-permissions --sandbox` | — |
+   | code-reviewer | `Read Grep Glob` / `default` | `read-only` | `--mode plan` | `--deny-tool=write --deny-tool=shell` |
+   | ui-ux | `Read Write Edit Grep Glob` / `acceptEdits` | `workspace-write` | `--mode accept-edits` | `--deny-tool=shell` |
 
-   Gemini CLI has no effort flag: pass the model only and tell the user the
-   effort setting doesn't apply there. If a CLI rejects a model name or
-   effort level, report the exact error and ask the user what to use —
-   don't guess a replacement.
+   agy notes: effort must be `low`, `medium` or `high`, and not every model
+   has every level (`agy models` lists the variants — e.g. `gemini-3.1-pro`
+   has only low and high; its Claude models take no `--effort` at all).
+   Work this out when you build the lineup in step 2: show the closest
+   supported level (or "n/a") in the table so the user sees it before
+   anything runs. `-p` must be the last flag, with the prompt attached.
+
+   If a CLI rejects a model name or effort level, report the exact error
+   and ask the user what to use — don't guess a replacement.
 
 4. When tester and code-reviewer run in parallel and either is headless,
    start both before waiting on either (background shell jobs, or a native

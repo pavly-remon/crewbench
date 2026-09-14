@@ -1,4 +1,5 @@
 {
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "crewbench",
   "version": "2.0.0",
   "description": "A five-role dev team (Team Lead, Developer, Tester, Code Reviewer, UI/UX Designer) with per-role model, effort and CLI routing, invoked via /crewbench:new-task, :test, :review, :design and :team",
