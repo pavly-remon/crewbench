@@ -37,12 +37,13 @@ need it for local test runs; CI installs it).
 | 3 Diff-aware review loop | done | feat: Phase 3 diff-aware review loop |
 | 4 Task identity/state/status/resume | done | feat: Phase 4 task identity, state, status and resume |
 | 5 Git worktree isolation | done | feat: Phase 5 git worktree isolation |
-| 6 Project profile + gate | pending | |
-| 7 Less ceremony | pending | |
-| 8 Usage/timing report | pending | |
-| 9 Maintenance/structure | pending | |
-| 10 Optional integrations | pending | |
-| 11 Docs and release | pending | |
+| 6 Cross-CLI interoperability | done | feat: Phase 6 cross-CLI interoperability |
+| 7 Project profile + gate | pending | |
+| 8 Less ceremony | pending | |
+| 9 Usage/timing report | pending | |
+| 10 Maintenance/structure | pending | |
+| 11 Optional integrations | pending | |
+| 12 Docs and release | pending | |
 
 ## Notes / deviations / VERIFY items (running list)
 
@@ -260,3 +261,143 @@ phases land (running it once per phase burns real API/CLI usage).
   `--cwd` assertion above — the worktree *flow* itself is prose/skill
   logic the Team Lead executes with `git`/shell tools, not new script
   code, so there's no additional unit-testable surface in `bin/`).
+
+### Phase 6
+
+Before writing anything, checked every claimed flag/env-var against the
+real, installed CLIs on this machine (`claude` 2.1.273, `codex-cli` 0.154.0,
+`agy` 1.2.3, GitHub Copilot CLI 1.0.83) rather than guessing — this is the
+first phase where I'm literally running *as* one of the four hosts (Claude
+Code), so several checks below are real, not simulated.
+
+- **New `bin/crewbench_env.py`** (stdlib): `whoami` prints `{host,
+  plugin_root, python, platform, config_dir}`. Host detection: `CLAUDECODE=1`
+  is confirmed live (read directly from this session's own environment)
+  as Claude Code's marker; codex/agy/copilot have no confirmed "I am
+  running inside X" env var (checked `codex --help`, `agy --help`,
+  `copilot help environment` — none found), so they fall back to a
+  parent-process-name walk (POSIX only, via `ps`; **VERIFY**/untested on
+  Windows, same precedent as 1.6's lock helper). `CREWBENCH_HOST_OVERRIDE`
+  wins over both for tests/manual override. Plugin-root resolution:
+  `CREWBENCH_PLUGIN_ROOT` override → `CLAUDE_PLUGIN_ROOT` if it's a real
+  dir → this script's own install location (always correct, since the
+  script only ever runs from inside an installed `<root>/bin/`).
+  `PLUGIN_ROOT_GLOBS` documents each host's real plugin-cache path,
+  confirmed by inspecting this machine's actual installs for
+  claude/codex/agy (`~/.claude/plugins/cache/*/crewbench/*`, `~/.codex/
+  plugins/cache/*/crewbench/*`, `~/.gemini/config/plugins/crewbench`);
+  copilot's is a **VERIFY** guess (`~/.copilot/installed-plugins/...`) since
+  no copilot crewbench install existed on this machine to inspect.
+- **`crewbench_dispatch.py` additions**: `whoami`'s `CONFIG_DIRS` is
+  imported from `crewbench_env.py` (same `sys.path.insert` pattern
+  `crewbench_state.py` already used to import from `crewbench_dispatch.py`).
+  New subcommands, routed by `sys.argv[1]` before the existing arg parser
+  runs (the foreground no-subcommand form is untouched, so every prior test
+  still passes unmodified):
+  - `doctor --cli <cli>` — installed/version, config-dir writable, a real
+    TCP reachability check against each CLI's likely API host (**VERIFY**:
+    `NETWORK_CHECK_HOSTS` guesses are not confirmed from CLI docs;
+    overridable via `CREWBENCH_NETWORK_CHECK_OVERRIDE_<CLI>` for tests), and
+    a login check via each CLI's cheapest non-interactive command — real,
+    confirmed live: `claude auth status --json` (`loggedIn`/`email`) and
+    `codex login status` (exit 0, "Logged in using ChatGPT"; the *failure*
+    exit code is **VERIFY**, only the success case was observed). agy has no
+    dedicated status command, so it falls back to `agy models` (a real,
+    small network+auth call — also confirmed live); copilot has none
+    either, so it falls back to a stored-credential/token-env-var check,
+    weaker evidence than an actual call (**VERIFY**). Ran `doctor` for real
+    against all four installed CLIs from this session — all four came back
+    `ok: true` (see the transcript's tool calls for the raw JSON).
+  - `start` / `wait` / `cancel` — the detached-launch-and-poll protocol from
+    6.2. `start` just re-execs the same script without `start` in a
+    detached process group (`start_new_session=True` POSIX /
+    `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` Windows), so it's the
+    exact same code path as the foreground form — results land in
+    identical files. `wait` polls `status.json` until every named run is
+    `done`/`failed` or `--max-seconds` elapses, returning each run's status
+    plus its full envelope if finished. `cancel` kills a run's whole
+    process group from outside (new standalone `kill_pid_group`, since
+    `cancel` has no live `Popen` handle to `wait()` on the way the
+    foreground path's `kill_process_tree` does) and marks it `failed`.
+    Manually smoke-tested against a fake CLI: start→wait→done envelope,
+    wait-times-out-while-still-running, and cancel actually killing the
+    process (checked with `ps`) — all before writing the equivalent pytest
+    tests, which now cover the same three cases as subprocess tests.
+  - **Recursion guard**: `main()` refuses immediately (before touching any
+    CLI) if `CREWBENCH_ROLE` is already set in its own environment. Every
+    headless child gets `CREWBENCH_ROLE`/`CREWBENCH_TASK` set via the new
+    `child_env()`, which also strips every *other* host's known env-marker
+    prefixes (`HOST_ENV_PREFIXES`) so a nested CLI doesn't inherit a
+    different host's identity markers. Only `CLAUDECODE`/`CLAUDE_CODE_*` is
+    confirmed live; the codex/agy/copilot prefix lists are inferred from
+    their own `--help`/env-docs prefixes (`CODEX_`, `ANTIGRAVITY_`/
+    `GEMINI_CLI`, `COPILOT_`) — **VERIFY**, not confirmed live the way
+    Claude's was, since this session can't actually run as those hosts.
+  - `classify_sandbox_error()` — regex signatures for network/EACCES/
+    not-logged-in text, prefixed onto `envelope["error"]` when they match,
+    per 6.3's "detect typical signatures instead of a generic exit-code
+    error" ask.
+- **`lib/dispatch.md`**: new "Host detection and plugin root" section
+  (before §0); §3 gained a "Per-host dispatch matrix" table (4x4,
+  cross-referencing `docs/compatibility.md` for real-verification status
+  rather than re-asserting it there); §4's step 2 rewritten around
+  `start`+`wait` instead of "background and wait"; two new subsections
+  after Commits — "Sandboxes and doctor" and "Nested-agent hygiene" — for
+  6.3/6.4. Grepped for the old "background and wait" wording afterward;
+  none left outside this checkpoint's own history.
+- **New `skills/doctor/SKILL.md`** (`/crewbench:doctor`, read-only): runs
+  `doctor` for every non-host CLI in the current lineup, shows one table,
+  cross-references `docs/compatibility.md`. `team/SKILL.md` gained a step
+  warning when a lineup's role-CLI is `partial`/`unsupported` for the
+  detected host per that same doc.
+- **New `docs/compatibility.md`**: the 4x4 matrix. Claude-Code-as-host row
+  is `verified (real)` for all four columns, but only for `doctor`'s
+  checks (installed/reachable/logged-in) — a full real role dispatch or
+  `new-task` run was deliberately **not** spent in this pass, same
+  deferral-to-Final-Verification policy the checkpoint has used since
+  Phase 1 ("running it once per phase burns real API/CLI usage"). Every
+  other host row is `partial`: the dispatch script's logic doesn't branch
+  on which CLI hosts it, so the same code path is exercised by the
+  fake-CLI test matrix below, but this session literally cannot switch
+  hosts to prove it, and the doc says so plainly rather than claiming more
+  than was actually checked.
+- **New `scripts/matrix_smoke.py`** (never run in CI, not run in this pass
+  either — same deferral): real local-only smoke test. For `codex` as host
+  it uses `codex sandbox -- ...` (free, no model call — confirmed via
+  `codex sandbox --help`); for claude/agy/copilot as host it asks that CLI
+  (via a small real prompt) to run `doctor` and report its output —
+  **VERIFY**, the exact "ask a CLI to run one shell command and print its
+  output" invocation per host is inferred from `build_command`'s existing
+  flags, not confirmed live for this specific purpose.
+- **Tests**: `tests/test_env_helper.py` (host detection incl. override/
+  CLAUDECODE/parent-chain fallback, plugin-root resolution, `whoami`
+  subprocess), `tests/test_recursion_and_env.py` (refusal when
+  `CREWBENCH_ROLE` is set; `child_env()` unit tests; a parametrized 4x4
+  host x role-CLI matrix asserting no host's markers ever leak into a
+  different CLI's child — this is the "automated 16-combination" ask from
+  6.6, done as a focused env/host-detection matrix rather than a full fake
+  dispatch x16, since the per-role-CLI dispatch shape is already covered
+  per-CLI elsewhere), `tests/test_detached_dispatch.py` (start→wait→done,
+  wait-timeout, cancel-kills-the-process-group — the last skipped on
+  Windows like the existing deadline test), `tests/test_doctor.py`
+  (installed/reachable/logged-in, each failure path, via a fake CLI plus a
+  real local TCP listener standing in for network reachability so the test
+  suite stays offline-safe), `tests/test_sandbox_signatures.py`. New fake
+  CLI fixtures: `quick_success.py` (fast claude-shaped success, used by the
+  detached-dispatch tests), `fake_status_cli.py` (branches on argv to stand
+  in for whichever status command `doctor` calls). 127/127 passing.
+- **`schemas/task-state.json`**: added optional `host_override` and
+  `doctor` fields (task-level cache of doctor results per CLI, per 6.3's
+  "cache the result per session in the task state"); `crewbench_state.py
+  new` now initializes both.
+- Synced all three manifests' description to mention `:doctor` (kept
+  `check_manifests.py` green); README's blanket "any CLI can hand any role
+  to any other CLI" replaced with a pointer to `docs/compatibility.md`, plus
+  new sections on the detached start/wait/cancel protocol and
+  sandboxes/`doctor`.
+- **Deliberately not done in this phase** (all deferred to the project's
+  Final Verification pass, per the established per-phase cost policy):
+  a real role dispatch or full `new-task` run on any non-Claude-Code host;
+  running `scripts/matrix_smoke.py` for real; confirming `codex login
+  status`'s failure-case exit code; confirming copilot's actual plugin
+  install layout.

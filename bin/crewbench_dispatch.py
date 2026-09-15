@@ -34,12 +34,16 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from crewbench_env import CONFIG_DIRS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -71,6 +75,38 @@ AGY_DENIAL_RESUMES = 2
 NO_EFFORT = {"", "none", "n/a"}
 MAX_ARGV_BYTES = 100_000  # guard well under Linux's 128 KiB MAX_ARG_STRLEN per argv element
 GRACEFUL_KILL_TIMEOUT = 10  # seconds between SIGTERM and SIGKILL for a run's process group
+
+# Env var name prefixes each host CLI is confirmed (claude) or believed
+# (codex/agy/copilot -- VERIFY, inferred from their own env-var prefixes
+# documented in --help / `copilot help environment`, not from a live nested
+# session) to set, so a child launched on a *different* CLI doesn't inherit
+# host-identity markers that could change its behavior (e.g. a nested claude
+# thinking it's still the outer Claude Code session). Confirmed: CLAUDECODE=1
+# and CLAUDE_CODE_* are present in this script's own environment when it runs
+# under Claude Code. Never touches CREWBENCH_* -- those are what this script
+# itself sets for the child below.
+HOST_ENV_PREFIXES = {
+    "claude": ("CLAUDECODE", "CLAUDE_CODE_", "CLAUDE_PLUGIN_ROOT", "CLAUDE_EFFORT", "AI_AGENT"),
+    "codex": ("CODEX_",),
+    "agy": ("ANTIGRAVITY_", "GEMINI_CLI"),
+    "copilot": ("COPILOT_",),
+}
+
+
+def child_env(cli, role, task_id):
+    """Environment for the launched child CLI process: strips other hosts'
+    identity markers and sets the recursion guard the child's own
+    crewbench_dispatch.py (if it has crewbench installed too) checks below."""
+    env = dict(os.environ)
+    for host, prefixes in HOST_ENV_PREFIXES.items():
+        if host == cli:
+            continue
+        for key in list(env):
+            if key.startswith(prefixes):
+                del env[key]
+    env["CREWBENCH_ROLE"] = role
+    env["CREWBENCH_TASK"] = task_id or ""
+    return env
 
 # Heuristic for "this looks like a test file", used to flag a tester role editing
 # non-test source. Kept as a module constant so Phase 6's project profile can extend it.
@@ -605,7 +641,295 @@ def now():
     return time.strftime("%H:%M:%S")
 
 
-def main():
+def _terminate_pid_group(pid):
+    """Send the initial terminate signal to pid's whole process group/tree
+    (POSIX SIGTERM, Windows `taskkill /T /F` which is already a hard kill).
+    Returns False if there was nothing there to signal."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return False
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _hard_kill_pid_group(pid):
+    if os.name == "nt":
+        return  # the taskkill /F above was already the hard kill
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def kill_pid_group(pid, timeout=GRACEFUL_KILL_TIMEOUT):
+    """Kill pid's whole process group/tree from outside — used by `cancel`,
+    which (unlike `main`'s own kill_process_tree) has no live Popen handle to
+    `wait()` on, so it polls for the group to disappear instead."""
+    if not _terminate_pid_group(pid):
+        return False
+    if os.name == "nt":
+        return True
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return True
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.2)
+    _hard_kill_pid_group(pid)
+    return True
+
+
+SANDBOX_ERROR_SIGNATURES = [
+    (re.compile(r"ENOTFOUND|EAI_AGAIN|getaddrinfo|ECONNREFUSED|ETIMEDOUT|network is unreachable", re.I),
+     "the host sandbox likely blocks network — the child CLI can't reach its API"),
+    (re.compile(r"\bEACCES\b|permission denied.*\.(claude|codex|gemini|copilot)", re.I),
+     "the host sandbox likely blocks writing to the child CLI's config/auth directory"),
+    (re.compile(r"not logged in|no credentials|unauthenticated|please (run|sign in)|401 unauthorized", re.I),
+     "the child CLI doesn't appear to be logged in"),
+]
+
+
+def classify_sandbox_error(text):
+    """A plain-language hint prefix for a raw child error, when it matches a
+    typical sandbox-failure signature (6.3) — None otherwise. Best-effort
+    pattern matching, not a guarantee; VERIFY against real sandboxed runs."""
+    for pattern, hint in SANDBOX_ERROR_SIGNATURES:
+        if pattern.search(text or ""):
+            return hint
+    return None
+
+
+NETWORK_CHECK_HOSTS = {
+    # VERIFY: these are each CLI's most likely API host based on its
+    # documented auth/provider, not confirmed from CLI docs — a false
+    # negative here (host reachable but this isn't the real endpoint) is
+    # possible; `doctor`'s other checks (auth status) are the stronger signal.
+    "claude": ("api.anthropic.com", 443),
+    "codex": ("api.openai.com", 443),
+    "agy": ("generativelanguage.googleapis.com", 443),
+    "copilot": ("api.github.com", 443),
+}
+
+
+def _network_check_target(cli):
+    """NETWORK_CHECK_HOSTS[cli], unless CREWBENCH_NETWORK_CHECK_OVERRIDE_<CLI>
+    (e.g. "127.0.0.1:54321") is set — for tests, to check the real
+    reachable/unreachable logic without depending on live internet access;
+    the production path is unchanged when unset."""
+    override = os.environ.get(f"CREWBENCH_NETWORK_CHECK_OVERRIDE_{cli.upper()}")
+    if override and ":" in override:
+        host, port = override.rsplit(":", 1)
+        return host, int(port)
+    return NETWORK_CHECK_HOSTS[cli]
+
+
+def _network_ok(cli, timeout=3):
+    host, port = _network_check_target(cli)
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True, f"reached {host}:{port}"
+    except OSError as exc:
+        return False, f"could not reach {host}:{port} ({exc})"
+
+
+def _auth_check(cli, cli_path):
+    """(logged_in, detail) using the cheapest non-interactive status command
+    each CLI offers (ground rule: use one if it exists, else a minimal ping).
+    Confirmed live on this machine: `claude auth status --json` (loggedIn
+    bool + email) and `codex login status` (exit 0 + "Logged in as ..." /
+    exit non-zero otherwise — the failure exit code itself is VERIFY, only
+    the success case was observed). agy and copilot have no dedicated
+    auth-status subcommand documented in --help as of writing — VERIFY:
+    agy falls back to `agy models`, a real (cheap) network+auth call; copilot
+    falls back to checking for a stored credential/token file, which is
+    weaker evidence than an actual call and can't be tightened without
+    spending a real prompt."""
+    try:
+        if cli == "claude":
+            r = subprocess.run([cli_path, "auth", "status", "--json"],
+                                capture_output=True, text=True, timeout=15)
+            data = json.loads(r.stdout or "{}")
+            return bool(data.get("loggedIn")), (data.get("email") or r.stdout.strip() or r.stderr.strip())
+        if cli == "codex":
+            r = subprocess.run([cli_path, "login", "status"], capture_output=True, text=True, timeout=15)
+            return r.returncode == 0, (r.stdout or r.stderr).strip()
+        if cli == "agy":
+            r = subprocess.run([cli_path, "models"], capture_output=True, text=True, timeout=20)
+            ok = r.returncode == 0 and bool(r.stdout.strip())
+            detail = (r.stdout or r.stderr).strip().splitlines()
+            return ok, (detail[0] if detail else "no output")
+        if cli == "copilot":
+            has_token = any(os.environ.get(v) for v in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"))
+            config_dir = Path(os.path.expanduser(CONFIG_DIRS["copilot"]))
+            has_stored = (config_dir / "config.json").exists()
+            ok = has_token or has_stored
+            detail = ("found a token env var or stored credential (best-effort check only — "
+                      "VERIFY, no dedicated status command found)" if ok else
+                      "no token env var or stored credential found — VERIFY, this check can't "
+                      "positively confirm login without a real prompt call")
+            return ok, detail
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+        return False, str(exc)
+    return False, "no auth check implemented for this CLI"
+
+
+def cmd_doctor(argv):
+    """`crewbench_dispatch.py doctor --cli <cli> [--cwd <dir>]` — preflight
+    for delegating to <cli> from inside a (possibly sandboxed) host: is it
+    installed, is its config dir writable, can it reach its API, is it
+    logged in. Prints a JSON report and exits 0 only if every check passed."""
+    p = argparse.ArgumentParser(prog="crewbench_dispatch.py doctor")
+    p.add_argument("--cli", required=True, choices=["claude", "agy", "codex", "copilot"])
+    p.add_argument("--cwd", default=None)
+    args = p.parse_args(argv)
+    report = {"cli": args.cli, "installed": False, "version": None,
+              "config_dir": None, "config_dir_writable": None,
+              "network_ok": None, "network_detail": None,
+              "logged_in": None, "auth_detail": None, "ok": False, "errors": []}
+    cli_path = resolve_cli_path(args.cli)
+    if not cli_path:
+        report["errors"].append(f"{args.cli} is not installed or not on PATH")
+        print(json.dumps(report, indent=2))
+        sys.exit(1)
+    report["installed"] = True
+    try:
+        v = subprocess.run([cli_path, "--version"], capture_output=True, text=True, timeout=10)
+        report["version"] = (v.stdout or v.stderr).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        report["errors"].append(f"could not read {args.cli}'s version: {exc}")
+
+    config_dir = os.path.expanduser(CONFIG_DIRS[args.cli])
+    report["config_dir"] = config_dir
+    writable = os.path.isdir(config_dir) and os.access(config_dir, os.W_OK)
+    report["config_dir_writable"] = writable
+    if not writable:
+        report["errors"].append(
+            f"{args.cli}'s config dir ({config_dir}) is missing or not writable from here — a "
+            "headless child needs to read (and sometimes refresh) its login there")
+
+    net_ok, net_detail = _network_ok(args.cli)
+    report["network_ok"], report["network_detail"] = net_ok, net_detail
+    if not net_ok:
+        report["errors"].append(
+            f"host sandbox blocks network — the {args.cli} child can't reach its API ({net_detail})")
+
+    logged_in, auth_detail = _auth_check(args.cli, cli_path)
+    report["logged_in"], report["auth_detail"] = logged_in, auth_detail
+    if not logged_in:
+        report["errors"].append(
+            f"{args.cli} does not appear to be logged in ({auth_detail}) — run its login command "
+            "outside the sandbox, then retry")
+
+    report["ok"] = not report["errors"]
+    print(json.dumps(report, indent=2))
+    sys.exit(0 if report["ok"] else 1)
+
+
+def _read_status(runs_dir):
+    try:
+        return json.loads((runs_dir / "status.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def cmd_start(argv):
+    """`crewbench_dispatch.py start <the same flags as the foreground form>`
+    — launches the run fully detached and returns immediately. The detached
+    process is just another `main()` invocation (same code path, so results
+    land in exactly the same files); only the launch itself differs."""
+    args = build_arg_parser().parse_args(argv)
+    args.cwd = os.path.abspath(args.cwd) if args.cwd else os.getcwd()
+    runs_dir, run = resolve_run_paths(args)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    launcher_log = runs_dir / f"{run}.launcher.log"
+    cmd = [sys.executable, str(Path(__file__).resolve())] + argv
+    popen_kwargs = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                          | getattr(subprocess, "DETACHED_PROCESS", 0))
+    else:
+        popen_kwargs["start_new_session"] = True
+    with open(launcher_log, "w") as lf:
+        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, **popen_kwargs)
+    update_status(runs_dir, run, {"state": "starting", "launcher_pid": proc.pid})
+    print(json.dumps({
+        "run": run, "pid": proc.pid,
+        "log_file": str(runs_dir / f"{run}.log"),
+        "status_file": str(runs_dir / "status.json"),
+    }, indent=2))
+
+
+def cmd_wait(argv):
+    """`crewbench_dispatch.py wait --task-dir <dir> --run <run> [--run <run2>] --max-seconds <n>`
+    — blocks (below the smallest host shell-tool timeout you've found for
+    your host) then reports each named run's current status.json entry, plus
+    its full envelope for any that already finished. Call repeatedly until
+    every run is done/failed."""
+    p = argparse.ArgumentParser(prog="crewbench_dispatch.py wait")
+    p.add_argument("--task-dir", required=True)
+    p.add_argument("--run", action="append", dest="runs", required=True)
+    p.add_argument("--max-seconds", type=float, default=240)
+    p.add_argument("--poll-interval", type=float, default=2.0)
+    args = p.parse_args(argv)
+    runs_dir = Path(args.task_dir) / "runs"
+    deadline = time.time() + args.max_seconds
+    statuses = {}
+    while True:
+        status = _read_status(runs_dir)
+        statuses = {r: status.get(r, {"state": "unknown"}) for r in args.runs}
+        if all(statuses[r].get("state") in ("done", "failed") for r in args.runs):
+            break
+        if time.time() >= deadline:
+            break
+        time.sleep(args.poll_interval)
+    envelopes = {}
+    for r in args.runs:
+        result_file = runs_dir / f"{r}.result.json"
+        if result_file.exists():
+            try:
+                envelopes[r] = json.loads(result_file.read_text())
+            except (OSError, ValueError):
+                envelopes[r] = None
+    all_finished = all(statuses[r].get("state") in ("done", "failed") for r in args.runs)
+    print(json.dumps({"runs": statuses, "envelopes": envelopes, "all_finished": all_finished}, indent=2))
+    sys.exit(0 if all_finished else 1)
+
+
+def cmd_cancel(argv):
+    """`crewbench_dispatch.py cancel --task-dir <dir> --run <run>` — kills
+    that run's process group (both the CLI child and, if `start` launched it,
+    the launcher) and marks it `failed` in status.json."""
+    p = argparse.ArgumentParser(prog="crewbench_dispatch.py cancel")
+    p.add_argument("--task-dir", required=True)
+    p.add_argument("--run", required=True)
+    args = p.parse_args(argv)
+    runs_dir = Path(args.task_dir) / "runs"
+    entry = _read_status(runs_dir).get(args.run, {})
+    killed_any = False
+    for key in ("pid", "launcher_pid"):
+        pid = entry.get(key)
+        if pid:
+            killed_any = kill_pid_group(pid) or killed_any
+    update_status(runs_dir, args.run, {"state": "failed", "error": "cancelled by user",
+                                       "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S")})
+    print(json.dumps({"run": args.run, "cancelled": killed_any}, indent=2))
+
+
+def build_arg_parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--role", required=True, choices=ROLES)
     p.add_argument("--cli", required=True, choices=["claude", "agy", "codex", "copilot"])
@@ -623,9 +947,13 @@ def main():
                    help="working directory for the child CLI and git snapshots "
                         "(default: the directory this script is run from) — pass the "
                         "task's worktree path for Phase 5 worktree isolation")
-    args = p.parse_args()
-    args.cwd = os.path.abspath(args.cwd) if args.cwd else os.getcwd()
+    return p
 
+
+def resolve_run_paths(args):
+    """(runs_dir, run) for this invocation's artifacts — shared by the
+    foreground path and `start`, so a detached launch names its files
+    identically to a foreground one."""
     handoff_path = Path(args.handoff)
     if args.task_dir:
         runs_dir = Path(args.task_dir) / "runs"
@@ -636,6 +964,22 @@ def main():
         # named after --handoff itself.
         runs_dir = handoff_path.resolve().parent
         run = handoff_path.stem
+    return runs_dir, run
+
+
+def main(argv=None):
+    if os.environ.get("CREWBENCH_ROLE"):
+        raise SystemExit(
+            "crewbench_dispatch.py refuses to run: CREWBENCH_ROLE="
+            f"{os.environ['CREWBENCH_ROLE']!r} is already set in this process's environment, "
+            "meaning this is itself a crew role's child process. A crew member must never "
+            "dispatch another crew or invoke crewbench skills — only the Team Lead does that.")
+    args = build_arg_parser().parse_args(argv)
+    args.cwd = os.path.abspath(args.cwd) if args.cwd else os.getcwd()
+
+    handoff_path = Path(args.handoff)
+    runs_dir, run = resolve_run_paths(args)
+    task_id = Path(args.task_dir).name if args.task_dir else None
     out_path = runs_dir / f"{run}.result.json"
     raw_path = runs_dir / f"{run}.raw.txt"
     log_path = runs_dir / f"{run}.log"
@@ -693,31 +1037,17 @@ def main():
                                 stdout=subprocess.PIPE,
                                 # codex/copilot report progress on stderr: show it live
                                 stderr=subprocess.PIPE if args.cli in ("claude", "agy") else subprocess.STDOUT,
-                                text=True, bufsize=1, cwd=args.cwd, **popen_kwargs)
+                                text=True, bufsize=1, cwd=args.cwd,
+                                env=child_env(args.cli, args.role, task_id), **popen_kwargs)
 
     def kill_process_tree(proc):
         """Kill the whole process group/tree, not just the direct child (the
         CLIs spawn node/helper processes that would otherwise survive)."""
+        if not _terminate_pid_group(proc.pid):
+            return
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
-        try:
-            pgid = os.getpgid(proc.pid)
-        except ProcessLookupError:
-            return
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-
-        def hard_kill():
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-
-        hard_timer = threading.Timer(GRACEFUL_KILL_TIMEOUT, hard_kill)
+        hard_timer = threading.Timer(GRACEFUL_KILL_TIMEOUT, _hard_kill_pid_group, args=(proc.pid,))
         hard_timer.start()
         try:
             proc.wait(timeout=GRACEFUL_KILL_TIMEOUT)
@@ -855,11 +1185,21 @@ def main():
                     "command(npm test)")
     if problem:
         tail = (stderr or stdout or "").strip().splitlines()[-5:]
-        problem += "" if not tail else " | " + " / ".join(short(t, 300) for t in tail)
+        tail_text = " / ".join(short(t, 300) for t in tail)
+        hint = classify_sandbox_error(problem + " " + tail_text)
+        if hint:
+            problem = f"{hint}: {problem}"
+        problem += "" if not tail else " | " + tail_text
     envelope["error"] = problem
     envelope["ok"] = problem is None
     finish()
 
 
+SUBCOMMANDS = {"start": cmd_start, "wait": cmd_wait, "cancel": cmd_cancel, "doctor": cmd_doctor}
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] in SUBCOMMANDS:
+        SUBCOMMANDS[sys.argv[1]](sys.argv[2:])
+    else:
+        main(sys.argv[1:])

@@ -20,6 +20,14 @@
     "base_commit": { "type": ["string", "null"] },
     "branch": { "type": ["string", "null"] },
     "worktree": { "type": ["string", "null"], "description": "Absolute path, or null in in-place mode." },
+    "host_override": {
+      "type": ["string", "null"],
+      "description": "Set only when crewbench_env.py whoami couldn't determine the host CLI and the user was asked once (see lib/dispatch.md 'Host detection and plugin root'); null otherwise."
+    },
+    "doctor": {
+      "type": "object",
+      "description": "Cached crewbench_dispatch.py doctor results for this task's session, keyed by CLI name, so a non-host CLI in the lineup isn't re-checked every round (see lib/dispatch.md's Sandboxes and doctor section)."
+    },
     "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
     "design_spec_file": { "type": ["string", "null"] },
     "rounds": {

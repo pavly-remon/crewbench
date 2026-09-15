@@ -51,7 +51,9 @@ text the user gave when invoking this skill.
    `in-place` — create `.crewbench/wt/<task-id>` and run environment setup.
    Save `base_commit`, `branch`, `worktree` and `lineup` (once agreed in
    step 2) to `state.json` so `/crewbench:resume` can pick this task back
-   up later.
+   up later. For every non-host CLI in the agreed lineup, run `doctor`
+   per dispatch.md's "Sandboxes and doctor" section and cache the result
+   in `state.json.doctor` before delegating anything.
 
 4. Delegate implementation to the developer role with a clear, scoped task
    description (include the UI/UX spec if one was produced), dispatched

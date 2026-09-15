@@ -42,6 +42,14 @@ Read `<root>/lib/dispatch.md`, sections 1 and 2, for the lineup format.
    directory the way a headless dispatch can, so isolation there is
    best-effort (the role is told the worktree path, not confined to it).
 
+   For any role whose CLI differs from the current host (run
+   `python3 <root>/bin/crewbench_env.py whoami` once to know `host`), check
+   `<root>/docs/compatibility.md` for that host x role-CLI cell. If it's
+   marked `partial` or `unsupported`, say so plainly (with the cell's
+   caveat) before showing the final table — don't silently accept it. This
+   is a heads-up, not a block: proceed if the user still wants that
+   combination.
+
 3. Ask before writing. On yes, save only the fields that differ from
    `<root>/config/defaults.json` into `.crewbench/team.json` (merge with
    what's there; `loop` and `workspace` live alongside `roles` and

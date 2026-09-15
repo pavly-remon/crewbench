@@ -153,6 +153,8 @@ def cmd_new(args):
         "base_commit": args.base_commit,
         "branch": args.branch,
         "worktree": None,
+        "host_override": None,
+        "doctor": {},
         "acceptance_criteria": [],
         "design_spec_file": args.design_spec_file,
         "rounds": [],

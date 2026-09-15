@@ -8,6 +8,37 @@ Antigravity CLI (`agy`), or Codex CLI.
 `<root>` below is the crewbench install directory (the one containing
 `agents/`, `bin/`, `config/`, `lib/` and `schemas/`).
 
+## Host detection and plugin root
+
+Before anything else, know which CLI you (the Team Lead) are actually
+running in — the dispatch route (§3) and the flags used against your own
+`host` CLI both depend on it. Don't rely on your own sense of "which model
+am I" — resolve it the same way every time:
+
+- **`<root>`** — the placeholder in each skill's "Before you start" line
+  (`${CLAUDE_PLUGIN_ROOT}`) is expanded by some hosts and not others. In
+  order: (1) if it read as an actual path, not a literal placeholder, use it;
+  (2) otherwise `<root>` is two directories above the `SKILL.md` file you are
+  reading right now — every host that can invoke a skill at all gives you
+  that file's own path in the process, so this always works; (3) as a last
+  resort (e.g. you're reasoning about `<root>` before reading any skill,
+  which shouldn't normally happen), the crewbench plugin cache is at
+  `~/.claude/plugins/cache/*/crewbench/*` (Claude Code), `~/.codex/plugins/
+  cache/*/crewbench/*` (Codex), `~/.gemini/config/plugins/crewbench` (agy),
+  or `~/.copilot/installed-plugins/*/crewbench*` (Copilot — VERIFY, layout
+  inferred from `copilot plugin --help`, not confirmed against a real
+  install).
+- **`host`** — run `python3 <root>/bin/crewbench_env.py whoami` once per
+  task (cheap, no network). It prints `{"host": ..., "plugin_root": ...,
+  "python": ..., "platform": ..., "config_dir": ...}`. `host` is `claude`
+  when `CLAUDECODE=1` is set (confirmed live in Claude Code's own
+  environment); otherwise it's read off your own process's ancestry looking
+  for `codex`, `agy` or `copilot` (POSIX only — no reliable signal was found
+  for any of the three on Windows, VERIFY). If it comes back `"unknown"`,
+  ask the user once which CLI they're running crewbench from and record the
+  answer as `state.json.host_override` (§0) — reuse it silently for the rest
+  of the task and on `/crewbench:resume`, without asking again.
+
 ## 0. Task folder and state
 
 Every `new-task`, `test`, `review` and `design` invocation gets a task
@@ -164,6 +195,34 @@ isolation mechanism, since the child process's actual cwd is set to the
 worktree. `/crewbench:team` should mention this trade-off when the lineup
 mixes native and headless roles under `workspace.mode: worktree`.
 
+### Per-host dispatch matrix
+
+Every host CLI can hand any role to any of the four role-CLIs, including
+back to its own CLI headlessly. Route and caveats, by host (rows) and role
+CLI (columns) — "native" only ever applies on the diagonal (role CLI ==
+host), and only when the rules above also allow it:
+
+| Host \\ role CLI | claude | codex | agy | copilot |
+|---|---|---|---|---|
+| **Claude Code** | native subagent (model always passed explicitly), or headless if effort ≠ medium or `permissions: skip` | headless | headless | headless |
+| **Codex** | headless | headless (own CLI, different session — pass `--ephemeral` per §4's "Same-CLI headless delegation" note) | headless | headless |
+| **Copilot CLI** | headless | headless | headless | native custom agent only when Copilot can be given a model per call or the resolved model/effort match the tier default (currently unreachable — see above); otherwise headless |
+| **agy** | headless | headless | headless (own CLI, different `--conversation`) | headless |
+
+Every headless cell goes through §4's one dispatch script with `--cli
+<role-cli>`; the flags it builds per CLI are in §4's Safety table and don't
+change by host. Before dispatching to any **non-host** CLI, run `doctor` for
+it once per task (see "Sandboxes and doctor" below) — a host's own shell
+sandbox is the most common way a cross-CLI cell fails in practice (6.3), not
+the dispatch script itself. When tester and code-reviewer run in parallel,
+every host does it the same way: `start` both runs (§4), then one `wait`
+call naming both — there's no per-host difference here, since `start`/`wait`
+don't depend on your shell tool's own timeout or backgrounding behavior.
+
+Real-CLI verification status per cell lives in
+[`docs/compatibility.md`](../docs/compatibility.md), not here — this table
+is the routing rule, that doc is the evidence.
+
 ### Native subagent hand-offs
 
 Native and headless roles must return the same shape of result so mixed
@@ -224,19 +283,55 @@ run the script from if omitted.
    `E2BIG` on large hand-offs (a full diff, prior rounds' results). You never
    need to build this split yourself; it's internal to the script.
 
-2. Run the script from the project root in the background and wait for
-   it (allow up to 30 minutes). Pass `--effort none` when the chosen model
-   takes no effort setting. As soon as it starts, tell the user how to watch
-   it, e.g.:
+2. **Launch it detached, then poll — don't rely on your shell tool's own
+   wait/background semantics.** Your host's shell tool may have a per-call
+   time limit shorter than a role can take, and some hosts kill a
+   background job the moment the tool call that started it returns
+   (`VERIFY` per host — see `docs/compatibility.md`'s notes). The dispatch
+   script's own `start`/`wait` subcommands sidestep this entirely, since the
+   run keeps going in its own detached process group regardless of what your
+   shell tool call does next:
+
+   ```
+   python3 <root>/bin/crewbench_dispatch.py start --role <role> --cli <cli> \
+       --model <model> --effort <effort> \
+       --task-dir .crewbench/tasks/<task-id> --round <n> \
+       --cwd <worktree-or-project-root> \
+       --handoff <handoff-file> [--skip-permissions]
+   ```
+
+   Returns immediately with `{"run": "<role>-r<round>", "pid": ..., "log_file": ...}`.
+   Pass `--effort none` when the chosen model takes no effort setting. As
+   soon as it starts, tell the user how to watch it, e.g.:
 
    > Developer is working on agy — watch it live with
    > `tail -f .crewbench/tasks/<task-id>/runs/developer-r1.log`
 
-   The log shows each tool the role uses (files read and edited, commands
-   run) with timestamps. `<task-dir>/runs/status.json` lists every run with
-   its state (running / done / failed), pid, log file and session id — read
-   it when the user asks what the crew is doing (`/crewbench:status` does
-   this for the user directly).
+   Then poll with `wait`, choosing `--max-seconds` comfortably under your
+   own host's shell-tool timeout (e.g. 240s) and calling it again if it
+   comes back `"all_finished": false`:
+
+   ```
+   python3 <root>/bin/crewbench_dispatch.py wait \
+       --task-dir .crewbench/tasks/<task-id> \
+       --run <role>-r<round> [--run <role2>-r<round>] \
+       --max-seconds 240
+   ```
+
+   Prints `{"runs": {...status.json entries...}, "envelopes": {...finished
+   runs' full envelopes...}, "all_finished": bool}`. If the user wants to
+   abandon a run mid-flight, `crewbench_dispatch.py cancel --task-dir
+   <task-dir> --run <role>-r<round>` kills its whole process group and marks
+   it `failed`.
+
+   `<task-dir>/runs/status.json` lists every run with its state (starting /
+   running / done / failed), pid, log file and session id regardless of
+   which of `start`/`wait` you last called — read it directly when the user
+   asks what the crew is doing (`/crewbench:status` does this for the user
+   directly). The foreground, single-call form (no `start`/`wait`/`cancel`
+   subcommand — just the flags as shown at the top of this section) still
+   works exactly as before, for hosts or scripts where blocking in place is
+   fine; `start`+`wait` is the one that works everywhere.
 
 3. The script prints a JSON envelope and saves it to
    `<task-dir>/runs/<role>-r<round>.result.json`:
@@ -282,9 +377,10 @@ run the script from if omitted.
    into the developer's fix list, and pass earlier results along verbatim
    in later hand-offs so roles on different CLIs share the same facts.
 
-4. When tester and code-reviewer run in parallel, start both before
-   waiting on either (background shell jobs, or a native subagent call
-   alongside a background job).
+4. When tester and code-reviewer run in parallel: `start` both (or `start`
+   one and dispatch the other as a native subagent, in a mixed lineup)
+   before your first `wait` call, then `wait` naming both runs at once — one
+   call, not one per run.
 
 5. If `ok` is false, tell the user the `error` in plain words and ask
    whether to retry, switch that role's CLI, or stop. If `blocked` or
@@ -350,6 +446,86 @@ unblocked — report it to the user instead. If your own CLI refuses to
 launch a `skip` run (e.g. Claude Code's auto mode blocks it), tell the user
 it was blocked and ask whether to approve it themselves or switch that role
 to `safe`; don't try to get around the block.
+
+### Sandboxes and doctor
+
+Your own shell tool may itself be sandboxed (Codex `workspace-write`
+normally blocks outbound network; agy `--sandbox`; Copilot's tool approvals;
+Claude Code's auto mode), and a role CLI started from inside that sandbox
+inherits it — it can end up with no network (can't reach its model API), no
+write access to its own config/auth directory (`~/.claude`, `~/.codex`,
+`~/.gemini`, `~/.copilot`), or blocked process spawning. This is the most
+common reason a cross-CLI cell in the dispatch matrix (§3) fails in
+practice, and it looks like a confusing dispatch-script error unless you
+check for it first.
+
+Before the **first** dispatch to each **non-host** CLI in the agreed lineup
+for a task, run:
+
+```
+python3 <root>/bin/crewbench_dispatch.py doctor --cli <cli>
+```
+
+Prints `{"cli", "installed", "version", "config_dir", "config_dir_writable",
+"network_ok", "network_detail", "logged_in", "auth_detail", "ok", "errors":
+[...]}` and exits 0 only when everything checked out. Cache the result in
+`state.json.doctor.<cli>` (§0) for the rest of the task's session — don't
+re-run `doctor` every round. If `ok` is false, tell the user the specific
+`errors` (e.g. `"host sandbox blocks network — the codex child can't reach
+its API"`) and what to change (run the host with network access for this
+session, log in outside the sandbox, approve the command manually) instead
+of failing mid-task with a raw exit-code error. Never change your own or
+another CLI's sandbox or permission settings yourself.
+
+`doctor`'s auth check uses the cheapest non-interactive status command each
+CLI offers: `claude auth status --json`, `codex login status` (both
+confirmed). agy has no dedicated status command, so it falls back to `agy
+models` (a real, small network+auth call); copilot has none either, so it
+falls back to checking for a stored credential or token env var, which is
+weaker evidence than an actual call (`VERIFY` if either CLI adds a real
+status command). If `crewbench_dispatch.py`'s own envelope `error` for a
+regular dispatch (not `doctor`) matches a network, `EACCES`, or
+not-logged-in signature, it already says so in plain words instead of just
+the exit code — pass that along verbatim rather than re-diagnosing it
+yourself.
+
+### Nested-agent hygiene
+
+The CLI you dispatch a role to may well have crewbench installed too — a
+role must never treat that as an invitation to delegate further:
+
+- **Recursion guard.** The dispatch script sets `CREWBENCH_ROLE=<role>` and
+  `CREWBENCH_TASK=<task-id>` in every headless child's environment (this is
+  automatic — you don't set these yourself), and refuses to run at all if
+  `CREWBENCH_ROLE` is already set in its own environment. A role's brief and
+  limits already say it must never invoke crewbench skills or dispatch other
+  agents; this is the enforced backstop for that rule on the headless path.
+  For a **native** subagent hand-off, say the same thing explicitly in the
+  hand-off text, since there's no environment variable to enforce it there.
+  Where a CLI can disable its own plugins/skills for one run, the dispatch
+  script uses it for extra safety: Claude gets `--strict-mcp-config`
+  (MCP only) plus its scoped `--tools` (already effectively blocking skill
+  invocation); `VERIFY` — no equivalent "disable plugins for this run" flag
+  was confirmed for codex, agy or copilot's headless mode as of writing, so
+  the recursion guard above is their only enforcement.
+- **Host environment leakage.** Each host CLI sets its own environment
+  markers (confirmed: Claude Code sets `CLAUDECODE=1` and `CLAUDE_CODE_*`).
+  A nested CLI inheriting a *different* host's markers could misbehave —
+  the dispatch script strips every other host's known marker prefixes from
+  a headless child's environment before launch, keeping only the target
+  CLI's own (see `HOST_ENV_PREFIXES` in `bin/crewbench_dispatch.py` for the
+  exact list, which is deliberately conservative and may not be
+  exhaustive — `VERIFY` if a host adds new markers).
+- **Same-CLI headless delegation** (e.g. a codex host dispatching a codex
+  developer at a different effort). The dispatch script doesn't add any
+  extra isolation beyond the env stripping above — codex's `--ephemeral`
+  flag (skip persisting session files) and `-p/--profile` (layer a separate
+  config) are available if a nested codex session collides with the host's
+  own session state; add them to the lineup's notes if you hit this in
+  practice (`VERIFY`, not wired into the script by default).
+- **Auth isolation.** Never copy, read or print a CLI's credential files —
+  the child always uses the user's own normal login for that CLI, found via
+  its own config directory (unchanged, never redirected).
 
 ## 5. Worktree isolation (new-task only)
 

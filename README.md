@@ -48,9 +48,10 @@ then install `crewbench` from the `PiCode` marketplace in `/plugins`.
 | `/crewbench:team [change]` | Show or change the team lineup (CLI, model, effort per role) |
 | `/crewbench:status [task-id]` | Recent tasks, or one task's phase/lineup/rounds/running runs. Read-only |
 | `/crewbench:resume [task-id]` | Resume an interrupted task from its saved state, without re-asking the lineup |
+| `/crewbench:doctor` | Check that every CLI in the lineup is installed, reachable and logged in from this host. Read-only |
 
 In Codex, invoke the skills by name (`$new-task`, `$test`, `$review`,
-`$design`, `$team`, `$status`, `$resume`).
+`$design`, `$team`, `$status`, `$resume`, `$doctor`).
 
 `test`, `review`, and `design` only report — they never change your code. Each
 offers to hand its results to `/crewbench:new-task` if you want something
@@ -144,7 +145,10 @@ run once in a fresh worktree (e.g. install deps). Change any of these with
 - **Headless CLI** otherwise, through `bin/crewbench_dispatch.py`. Any CLI
   can be the Team Lead and hand any role to any other CLI — e.g. `agy` as
   Team Lead with Claude as developer, or Claude as Team Lead with Codex as
-  reviewer. The other CLI must be installed and logged in.
+  reviewer. The other CLI must be installed and logged in; run
+  `/crewbench:doctor` to check. Not every host x role-CLI combination has
+  been run for real yet — see [`docs/compatibility.md`](docs/compatibility.md)
+  for exactly what's verified today before relying on an unusual pairing.
 
 Every headless role returns a JSON result (schemas in [`schemas/`](schemas/)),
 so roles on different CLIs share the same structured facts: the developer's
@@ -226,6 +230,23 @@ role finishes, its result includes a `resume_command` — `agy --conversation
 <id>`, `claude --resume <id>`, `codex resume <id>` — to open the full
 session in that CLI.
 
+Under the hood, every headless role is launched detached
+(`crewbench_dispatch.py start`) and polled (`... wait`) rather than run in
+the foreground and blocked on — this avoids depending on your own CLI's
+shell-tool timeout or its background-job behavior, which vary by host. The
+Team Lead can also `crewbench_dispatch.py cancel` a run mid-flight.
+
+### Sandboxes and CLI health
+
+A role CLI started from inside your own CLI's sandbox inherits it — it can
+end up with no network, no write access to its own config/auth directory, or
+blocked process spawning. `/crewbench:doctor` (or
+`crewbench_dispatch.py doctor --cli <cli>`) checks a CLI is installed,
+reachable, and logged in *from your current host* before it's dispatched to,
+and the Team Lead runs it once per task for every non-host CLI in the
+lineup. See [`docs/compatibility.md`](docs/compatibility.md) for which
+host x role-CLI combinations have actually been run for real.
+
 The full protocol is in [`lib/dispatch.md`](lib/dispatch.md).
 
 ## Agents
@@ -247,7 +268,7 @@ Role briefs live in [`agents/`](agents/) and are shared by every CLI.
 | `plugin.json` | Antigravity CLI (also read by Copilot CLI) |
 | `.codex-plugin/`, `.agents/plugins/` | Codex CLI |
 | `skills/`, `agents/`, `lib/`, `config/`, `schemas/`, `bin/` | all |
-| `tests/`, `.github/workflows/`, `scripts/` | dev-only: pytest suite, CI, maintenance scripts — not needed at runtime |
+| `tests/`, `.github/workflows/`, `scripts/`, `docs/` | dev-only: pytest suite, CI, maintenance scripts, compatibility matrix — not needed at runtime |
 
 In a project using crewbench, `.crewbench/` holds `team.json`,
 `project.json` and `project.md` (all committable), plus an
