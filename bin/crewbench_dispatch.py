@@ -154,13 +154,13 @@ def build_prompt(role, cli, handoff, schema, skip=False):
         brief.strip(),
         "## Limits\n\n" + limits_for(role, cli, skip),
         "## Hand-off from the Team Lead\n\n" + handoff.strip(),
-        "## How to report\n\n"
+        "## Running non-interactively\n\n"
         "You are running non-interactively as part of a crewbench team. Don't ask "
         "questions; put ambiguities in your result. If an action you need is denied "
         "or blocked by the sandbox, don't try to work around it — list it under "
-        "\"blocked\" and continue with what you can do.\n\n"
-        "Your final answer must be a single JSON object matching this JSON Schema, "
-        "with no text before or after it:\n\n" + json.dumps(schema, indent=2),
+        "\"blocked\" and continue with what you can do. Your brief's \"Report format\" "
+        "section above already told you to end with a single JSON object and nothing "
+        "else — here is the exact JSON Schema it must match:\n\n" + json.dumps(schema, indent=2),
     ])
 
 

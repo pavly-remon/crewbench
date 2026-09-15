@@ -41,20 +41,30 @@ text the user gave when invoking this skill.
    code-reviewer, plus ui-ux if it's being used) — one question covering
    both is fine.
 
-3. Delegate implementation to the developer role with a
-   clear, scoped task description (include the UI/UX spec if one was
-   produced).
+3. Record the base commit (`git rev-parse HEAD`) before delegating — the
+   reviewer needs it every round (dispatch.md §5). Delegate implementation
+   to the developer role with a clear, scoped task description (include the
+   UI/UX spec if one was produced). This is round 1.
 
-4. Once the developer reports done, dispatch the tester and
-   code-reviewer roles in parallel against the same files changed.
+4. Once the developer reports done, dispatch the tester and code-reviewer
+   roles in parallel against the same files changed, following dispatch.md
+   §5 for what to pass each of them (round 1: the diff against the base
+   commit; round ≥ 2: also the previous round's issues/failures and the
+   delta diff).
 
-5. Merge their feedback. Wait for both. If both approve, report in plain
-   language and go to step 8. If either flags issues, combine all issues
-   into a single list and send the developer back once — don't run two
-   separate fix loops.
+5. Merge their feedback per dispatch.md §5's severity threshold: if the
+   tester passed and every reviewer issue is below `loop.fix_threshold`
+   (and any `previous_issues` are all `resolved`), go to step 8 — list
+   below-threshold issues in the final report as optional follow-ups. Wait
+   for both roles to finish before deciding. Otherwise combine everything
+   at or above the threshold plus all tester failures into a single fix
+   list and send the developer back once — don't run two separate fix
+   loops.
 
-6. Cap retries at 3. If still failing after 3 rounds, stop and summarize
-   exactly what keeps failing, instead of continuing to loop.
+6. Apply dispatch.md §5's stopping rules: cap at `loop.max_rounds`, and
+   stop early on oscillation (the same issue or failing test unresolved two
+   rounds running). Either way, stop and summarize exactly what keeps
+   failing instead of continuing to loop.
 
 7. Never dump raw subagent output on the user. Translate to a short,
    plain-language status update.

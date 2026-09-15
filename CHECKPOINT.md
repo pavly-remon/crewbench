@@ -34,7 +34,7 @@ need it for local test runs; CI installs it).
 | 0 Read repo + plan | done | (this file) |
 | 1 Correctness bugs | done | fix: Phase 1 correctness bugs |
 | 2 Test harness + CI | done | test: Phase 2 test harness and CI |
-| 3 Diff-aware review loop | pending | |
+| 3 Diff-aware review loop | done | feat: Phase 3 diff-aware review loop |
 | 4 Task identity/state/status/resume | pending | |
 | 5 Git worktree isolation | pending | |
 | 6 Project profile + gate | pending | |
@@ -141,3 +141,35 @@ phases land (running it once per phase burns real API/CLI usage).
   check Phase 9's `bump_version.py` will reuse). Synced `.codex-plugin/
   plugin.json`'s description to match the other two now so this check
   starts green rather than red-until-Phase-9.
+
+### Phase 3
+
+- All four `agents/*.md` briefs get a `## Report format` section (generic —
+  "matching your result schema", not the schema text itself). The script's
+  `build_prompt` "## How to report" section renamed to "## Running
+  non-interactively" and trimmed to not repeat the "must be JSON" sentence,
+  just supplying the concrete schema JSON. dispatch.md gained a "Native
+  subagent hand-offs" subsection: include the schema in native hand-offs,
+  parse trailing JSON the same way the script does, and ask once to
+  restate as JSON before giving up and treating the round as failed.
+- `schemas/code-reviewer.json`: issues now require a stable `id`
+  (`R<round>-<n>`); added an optional `previous_issues[]` (`id`, `status`:
+  resolved/still_present, `note`).
+- `config/defaults.json` gained `loop: {max_rounds: 3, fix_threshold:
+  major}`, merged the same later-wins way as `roles`/`tiers`.
+- dispatch.md gained a new `## 5. Diff-aware review and the fix loop`
+  section (old §5 Reporting renumbered to §6): round-1 always gets the
+  full diff against a remembered base commit; round ≥2 also gets previous
+  issues/failures and a delta diff; severity-threshold gating; oscillation
+  stop (same file+category issue, or same test, `still_present`/failing
+  two rounds running). `skills/new-task/SKILL.md` and `skills/team/
+  SKILL.md` updated to match (team now shows/edits `loop` too).
+- **Deviation**: 3.2 explicitly says "against the task's base commit — see
+  Phase 4" and "once the state exists, store it in state.json" — Phase 4's
+  `state.json`/`base_commit` field doesn't exist yet in this phase order,
+  so dispatch.md instructs the Team Lead to just remember the base commit
+  for the session now, with an explicit forward-reference comment for
+  Phase 4 to formalize. Same for the per-round delta-diff snapshot.
+- Tests: extended `test_validate_schema.py` fixtures with the new required
+  `id` field; added `tests/test_loop_config.py` (defaults.json shape,
+  previous_issues validation, bad-status rejection). 79/79 passing.

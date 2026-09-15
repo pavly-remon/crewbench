@@ -20,15 +20,21 @@ Read `<root>/lib/dispatch.md`, sections 1 and 2, for the lineup format.
 
 1. Build the current lineup (defaults merged with `.crewbench/team.json`)
    and show it as a table: role, CLI, model (tier and what it resolves to),
-   effort. Say which values come from the project file vs. the defaults.
+   effort. Also show the current `loop` settings (`max_rounds`,
+   `fix_threshold`) on one line below the table. Say which values come from
+   the project file vs. the defaults.
 
 2. If a change was requested (above, or in reply), apply it and show the
-   new table. Validate: `cli` is one of host/claude/codex/agy/copilot,
+   new table/line. Validate: `cli` is one of host/claude/codex/agy/copilot,
    effort is one of low/medium/high/xhigh/max, permissions is safe or skip
-   (skip has no effect on code-reviewer). For any non-host CLI, check
-   it's installed with `command -v` and warn if it isn't. For agy, check the
-   effort exists for that model (`agy models`) and show the closest one.
+   (skip has no effect on code-reviewer), `loop.max_rounds` is a positive
+   integer, `loop.fix_threshold` is one of blocker/major/minor. For any
+   non-host CLI, check it's installed with `command -v` and warn if it
+   isn't. For agy, check the effort exists for that model (`agy models`)
+   and show the closest one. Accept plain-language loop changes too — "stop
+   after 5 rounds", "only re-fix on blockers".
 
 3. Ask before writing. On yes, save only the fields that differ from
    `<root>/config/defaults.json` into `.crewbench/team.json` (merge with
-   what's there). "reset" means delete that file, after confirming.
+   what's there; `loop` lives alongside `roles` and `tiers`). "reset" means
+   delete that file, after confirming.

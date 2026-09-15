@@ -33,6 +33,19 @@ Merge, later wins:
 Resolve `host` to the CLI you are actually running in, then resolve a tier
 through `tiers[<cli>]`. An exact model name is passed through unchanged.
 
+### Loop settings
+
+Also merged from the same three sources (same later-wins order), under a
+`loop` key, one set for the whole task rather than per role:
+
+| Field | Values |
+|---|---|
+| `max_rounds` | Maximum fix rounds before stopping and reporting stuck (default `3`) |
+| `fix_threshold` | Minimum reviewer severity that triggers another fix round: `blocker` \| `major` \| `minor` (default `major`; `blocker` > `major` > `minor`) |
+
+Used by `new-task`'s fix loop (see its skill and §5, "Diff-aware review and
+the fix loop", below).
+
 ## 2. Align with the user
 
 Before delegating anything, show the lineup for the roles this skill will
@@ -83,6 +96,30 @@ natively (a `skip` role always uses the headless route):
 
 **Headless CLI** — everything else. You run the dispatch script through
 your shell tool (section 4); it starts the other CLI non-interactively.
+
+### Native subagent hand-offs
+
+Native and headless roles must return the same shape of result so mixed
+lineups (some roles native, some headless) give you consistent data to
+merge. Every role's brief already ends with a "Report format" section
+telling it to end its answer with a single JSON object and nothing else —
+but unlike the headless route, a native Agent call doesn't automatically
+attach the concrete JSON Schema. So:
+
+- Read `<root>/schemas/<role>.json` and include its exact contents in the
+  hand-off you give the native subagent (e.g. "Your result must be a single
+  JSON object matching this schema, with no text before or after it:" plus
+  the schema JSON).
+- After the subagent replies, parse the trailing JSON object from its
+  answer the same way the dispatch script does: if the whole answer isn't
+  valid JSON, look for the last fenced ```json block, and failing that, the
+  last top-level `{...}` object in the text.
+- If no valid JSON comes out of that, ask the same subagent once, in the
+  same conversation, to restate its previous answer as a single JSON object
+  matching the schema you gave it, with nothing else. If that still doesn't
+  parse, treat the result as `{"...": ..., "ok": false}`-shaped for your own
+  merging purposes — i.e. treat it as a failed/blocked round for that role
+  and say so in your report, rather than guessing at its content.
 
 ## 4. Headless dispatch
 
@@ -158,7 +195,9 @@ for that role.
      `tests_added`, `failures[]` (test, file, expected, actual, reason),
      `blocked`
    - code-reviewer: `verdict` (approve / changes_requested), `summary`,
-     `issues[]` (file, line, severity, category, change), `blocked`
+     `issues[]` (id, file, line, severity, category, change),
+     `previous_issues[]` (id, status: resolved/still_present, note — only
+     from round 2 on), `blocked`
    - ui-ux: `status`, `summary`, `spec_markdown`, `reused_components`,
      `questions`, `blocked`
 
@@ -235,7 +274,57 @@ launch a `skip` run (e.g. Claude Code's auto mode blocks it), tell the user
 it was blocked and ask whether to approve it themselves or switch that role
 to `safe`; don't try to get around the block.
 
-## 5. Reporting
+## 5. Diff-aware review and the fix loop
+
+This applies to `new-task`'s tester/code-reviewer rounds (see its skill for
+the overall flow); `test`, `review` and `design` don't loop.
+
+### Round 1: always give the reviewer a diff
+
+Pass the code-reviewer: the task and acceptance criteria, `git diff --stat`
+and the full `git diff` of the task's changes against the base commit (the
+commit HEAD was at before the developer started — remember it for the
+task; once Phase 4's task state exists, it's `state.json.base_commit`), and
+the developer's `files_changed`. Tell it this is round 1.
+
+### Round ≥ 2: previous issues + the delta
+
+In addition to the round-1 inputs, pass the code-reviewer:
+
+- The previous round's `issues[]` verbatim.
+- The delta diff — what changed since the previous round only (save a
+  diff or a `git stash create` snapshot's hash per round so you can produce
+  this; once Phase 4 exists, store it in `state.json.rounds[]`).
+
+Tell it which round this is (so it can number new issues `R<round>-<n>`)
+and ask for `previous_issues[]`: `resolved` or `still_present` for each
+prior issue.
+
+Do the same for the tester: pass its previous round's `failures[]` and ask
+it to rerun those first before checking anything new.
+
+### Severity threshold
+
+Only send the developer back for another round if either is true:
+- The tester's `verdict` is not `pass` (any `failures[]`), or
+- The reviewer has an `issues[]` (or `previous_issues[]` still
+  `still_present`) entry at or above `loop.fix_threshold` (`blocker` >
+  `major` > `minor`).
+
+Issues below the threshold are never sent back — list them in the final
+report as "optional follow-ups" instead.
+
+### Stopping the loop
+
+- Cap rounds at `loop.max_rounds`. If still failing at the cap, stop and
+  report exactly what's stuck, per the oscillation rule below.
+- **Oscillation:** if the same issue — same `file` and `category`, marked
+  `still_present` for two consecutive rounds — or the same failing test
+  (same `test` + `file`) fails two rounds in a row, stop early even if
+  under `max_rounds`. Report it as stuck: the exact item, and what the
+  developer already tried against it.
+
+## 6. Reporting
 
 When summarizing results to the user, mention which CLI/model did the work
 only when it isn't the default lineup, or when something failed.

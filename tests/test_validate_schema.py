@@ -40,8 +40,8 @@ def test_validate_gives_precise_nested_array_path(dispatch):
     result = {
         "verdict": "changes_requested", "summary": "x", "blocked": [],
         "issues": [
-            {"file": "a.py", "line": 1, "severity": "major", "category": "correctness", "change": "fix it"},
-            {"file": "b.py", "line": 2, "severity": "critical", "category": "correctness", "change": "fix it"},
+            {"id": "R1-1", "file": "a.py", "line": 1, "severity": "major", "category": "correctness", "change": "fix it"},
+            {"id": "R1-2", "file": "b.py", "line": 2, "severity": "critical", "category": "correctness", "change": "fix it"},
         ],
     }
     err = dispatch.validate(result, schema)
@@ -68,7 +68,7 @@ def test_validate_nullable_line_field(dispatch):
     schema = json.loads((dispatch.ROOT / "schemas" / "code-reviewer.json").read_text())
     result = {
         "verdict": "changes_requested", "summary": "x", "blocked": [],
-        "issues": [{"file": "a.py", "line": None, "severity": "minor",
+        "issues": [{"id": "R1-1", "file": "a.py", "line": None, "severity": "minor",
                     "category": "consistency", "change": "y"}],
     }
     assert dispatch.validate(result, schema) is None

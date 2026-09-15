@@ -16,6 +16,10 @@
       "items": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable id for tracking this issue across rounds, e.g. \"R1-3\" (round 1, 3rd issue)."
+          },
           "file": {
             "type": "string"
           },
@@ -48,11 +52,41 @@
           }
         },
         "required": [
+          "id",
           "file",
           "line",
           "severity",
           "category",
           "change"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "previous_issues": {
+      "type": "array",
+      "description": "Only present from round 2 on: the status of each issue from the previous round's `issues`.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The id from the previous round's issue, e.g. \"R1-3\"."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "still_present"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "note"
         ],
         "additionalProperties": false
       }

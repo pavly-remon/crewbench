@@ -63,8 +63,12 @@ The Team Lead will:
 3. Show the team lineup and let you keep or change it.
 4. Hand implementation to the developer.
 5. Run the tester and code reviewer in parallel on the changed files.
-6. Send one combined fix list back to the developer if either flags issues,
-   up to 3 rounds.
+6. Send one combined fix list back to the developer if the tester fails or
+   the reviewer raises an issue at or above `loop.fix_threshold` (default
+   `major`), up to `loop.max_rounds` (default 3). Later rounds review only
+   the delta and re-check the previous round's issues/failures; stuck items
+   (unresolved two rounds running) stop the loop early. Below-threshold
+   issues are listed as optional follow-ups instead of triggering a round.
 7. Report back in plain language.
 
 ## Team lineup
@@ -101,13 +105,20 @@ project:
   },
   "tiers": {
     "codex": { "strong": "gpt-5.6-sol" }
+  },
+  "loop": {
+    "max_rounds": 5,
+    "fix_threshold": "blocker"
   }
 }
 ```
 
 `cli` is `host`, `claude`, `codex`, `agy` or `copilot`; `model` is a
 tier or an exact model name; `effort` is `low`–`max`; `permissions` is
-`safe` or `skip`. Defaults live in
+`safe` or `skip`. `loop.max_rounds` caps fix rounds (default 3);
+`loop.fix_threshold` is the minimum reviewer severity that triggers another
+round (`blocker` > `major` > `minor`, default `major`). Change either with
+`/crewbench:team`. Defaults live in
 [`config/defaults.json`](config/defaults.json).
 
 ### How roles are run

@@ -10,5 +10,9 @@
     "codex":   { "cheap": "gpt-5.6-terra",   "strong": "gpt-5.6-sol" },
     "agy":     { "cheap": "gemini-3.8-flash", "strong": "gemini-3.1-pro" },
     "copilot": { "cheap": "claude-sonnet-5", "strong": "claude-opus-5" }
+  },
+  "loop": {
+    "max_rounds": 3,
+    "fix_threshold": "major"
   }
 }

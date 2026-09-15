@@ -35,3 +35,13 @@ When done, report back:
 - The list of files you changed.
 - Any assumptions you made.
 - Anything you were unsure about that the Team Lead or user should know.
+
+## Report format
+
+End your final answer with a single JSON object matching your result
+schema — no text before or after it. If you were given the schema directly
+(headless runs always include it), use that one; otherwise it's
+`schemas/developer.json` in the crewbench install. The fields above (summary,
+files changed, assumptions, questions) map directly onto that schema's
+properties; `blocked` lists anything you needed but couldn't do because it
+was denied or sandboxed.
