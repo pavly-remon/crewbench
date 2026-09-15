@@ -14,5 +14,10 @@
   "loop": {
     "max_rounds": 3,
     "fix_threshold": "major"
+  },
+  "workspace": {
+    "mode": "worktree",
+    "setup": [],
+    "copy": [".env", ".env.local"]
   }
 }

@@ -48,8 +48,9 @@ folder before anything else happens:
 
 `test`, `review` and `design` use the same task folder and `state.json`
 shape (a `command` of `test`/`review`/`design`) but never loop past one
-round and have no `base_commit`/`branch`/`worktree` beyond what §5 of
-`review` already gathers.
+round and stay `in-place` — no `base_commit`/`branch`/`worktree` fields to
+maintain beyond what `review`'s own workflow already gathers (the branch
+and base it's comparing).
 
 ## 1. Build the lineup
 
@@ -86,8 +87,21 @@ Also merged from the same three sources (same later-wins order), under a
 | `max_rounds` | Maximum fix rounds before stopping and reporting stuck (default `3`) |
 | `fix_threshold` | Minimum reviewer severity that triggers another fix round: `blocker` \| `major` \| `minor` (default `major`; `blocker` > `major` > `minor`) |
 
-Used by `new-task`'s fix loop (see its skill and §5, "Diff-aware review and
+Used by `new-task`'s fix loop (see its skill and §6, "Diff-aware review and
 the fix loop", below).
+
+### Workspace settings
+
+Also merged the same way, under a `workspace` key:
+
+| Field | Values |
+|---|---|
+| `mode` | `worktree` (default — `new-task` isolates the task in `git worktree add .crewbench/wt/<task-id>`) or `in-place` (work directly in the current checkout, pre-Phase-5 behavior) |
+| `setup` | Shell commands to run once in a fresh worktree before delegating (e.g. `["npm ci"]`); empty by default |
+| `copy` | Ignored files to offer copying from the main tree into a fresh worktree (default `[".env", ".env.local"]`) |
+
+Used by `new-task`'s pre-flight (§5, "Worktree isolation", below). `test`, `review` and `design`
+always stay `in-place` regardless of this setting — they don't change code.
 
 ## 2. Align with the user
 
@@ -140,6 +154,16 @@ natively (a `skip` role always uses the headless route):
 **Headless CLI** — everything else. You run the dispatch script through
 your shell tool (section 4); it starts the other CLI non-interactively.
 
+**Worktree trade-off:** a native subagent shares your own process's working
+directory — it has no independent cwd to point at the task's worktree. When
+`workspace.mode` is `worktree` (§5), state the worktree's absolute path in
+every native hand-off and instruct the role to work only inside it, but
+treat this as best-effort: nothing stops it from touching a path outside
+that tree. Headless dispatch's `--cwd <worktree>` (§4) is the reliable
+isolation mechanism, since the child process's actual cwd is set to the
+worktree. `/crewbench:team` should mention this trade-off when the lineup
+mixes native and headless roles under `workspace.mode: worktree`.
+
 ### Native subagent hand-offs
 
 Native and headless roles must return the same shape of result so mixed
@@ -173,13 +197,18 @@ whichever CLI the role runs on:
 python3 <root>/bin/crewbench_dispatch.py --role <role> --cli <cli> \
     --model <model> --effort <effort> \
     --task-dir .crewbench/tasks/<task-id> --round <n> \
+    --cwd <worktree-or-project-root> \
     --handoff <handoff-file> [--skip-permissions]
 ```
 
 Add `--skip-permissions` only when the agreed lineup has `permissions: skip`
 for that role. With `--task-dir`, every run artifact is named
 `<task-dir>/runs/<role>-r<round>.*` regardless of what `--handoff` itself is
-called, so nothing collides across rounds.
+called, so nothing collides across rounds. `--cwd` is the child CLI's
+working directory and the root the git safety snapshot (§1.3/Phase 1) runs
+against — pass the task's worktree path when `workspace.mode` is
+`worktree` (§5), otherwise the project root; it defaults to wherever you
+run the script from if omitted.
 
 1. Write the hand-off to `.crewbench/tasks/<task-id>/runs/<role>-r<round>.md`
    (§0 already put `.crewbench/tasks/` in `.git/info/exclude`). Include
@@ -322,7 +351,85 @@ launch a `skip` run (e.g. Claude Code's auto mode blocks it), tell the user
 it was blocked and ask whether to approve it themselves or switch that role
 to `safe`; don't try to get around the block.
 
-## 5. Diff-aware review and the fix loop
+## 5. Worktree isolation (new-task only)
+
+This is the default for `new-task` (`workspace.mode: worktree`, §1). `test`,
+`review` and `design` always stay `in-place` — they never touch code.
+
+### Pre-flight, after scoping and before implementation
+
+1. Record `base_commit` (`git rev-parse HEAD`) and the current branch, and
+   save both to `state.json` (§0).
+2. If `workspace.mode` is `in-place`, skip straight to delegating — there's
+   no worktree to set up, and the git safety checks (Phase 1) run against
+   the current checkout as before.
+3. Otherwise, check whether the main tree is dirty (`git status
+   --porcelain`). If it is, tell the user which files are dirty and ask:
+   continue anyway (the worktree starts from `base_commit` HEAD and will
+   **not** include those uncommitted changes), commit/stash them
+   themselves first, or use `in-place` for this task instead. Never stash
+   or commit on the user's behalf.
+4. Create the worktree: `git worktree add .crewbench/wt/<task-id> -b
+   crew/<task-id> <base_commit>`. Save the worktree's absolute path to
+   `state.json.worktree` and the branch name to `state.json.branch`.
+5. **Environment setup** — a fresh worktree has no `node_modules`, no
+   `.env*`, no build caches, so a frontend (or similar) project will break
+   without this step:
+   - Run `workspace.setup`'s commands, if any are configured, inside the
+     worktree.
+   - Otherwise, if Phase 6's project profile has an install command, ask
+     the user once whether to run it and offer to save it into
+     `workspace.setup` for next time.
+   - Offer to copy files matching `workspace.copy` from the main tree into
+     the worktree — list which files exist first, and only copy on yes.
+     Never copy anything without that confirmation; these are often
+     secrets.
+
+### Running roles against the worktree
+
+- Headless dispatch: pass `--cwd <worktree-absolute-path>` (§4) on every
+  call for this task. This also means the git safety snapshot (Phase 1)
+  runs against the worktree, not the main checkout.
+- Native subagents: state the worktree's absolute path in the hand-off and
+  instruct the role to work only inside it (see §3's "Worktree trade-off"
+  note — this is best-effort, not enforced).
+
+### Commit step (replaces the plain in-place commit step)
+
+After the loop finishes and the user approves the work:
+
+1. Show `git -C <worktree> status` and `git -C <worktree> diff --stat
+   <base_commit>`, propose a commit message, and only on an explicit yes
+   commit **on the worktree's branch** (`crew/<task-id>`).
+2. If the original branch has moved since `base_commit`, say so before
+   offering to merge.
+3. Ask how to bring the work back, and only act on an explicit choice:
+   - **Merge** `crew/<task-id>` into the original branch.
+   - **Cherry-pick** the commit onto the original branch.
+   - **Leave the branch** as-is, for a PR later.
+   - **Do nothing yet.**
+4. Push only on a separate, explicit yes — same as the in-place flow.
+
+### Cleanup
+
+Once the work is merged/cherry-picked, or the task is stopped, ask whether
+to remove the worktree (`git worktree remove .crewbench/wt/<task-id>`) and
+delete `crew/<task-id>`. `/crewbench:status --cleanup` finds finished tasks
+with a leftover worktree and offers this per task; it also runs `git
+worktree prune` for any worktree directories someone deleted by hand.
+
+### `in-place` mode
+
+Keeps the pre-Phase-5 behavior exactly, including the Phase 1 git safety
+warnings — the difference is only that `workspace.mode` made it an
+explicit choice instead of the only option.
+
+`review` may optionally create a detached worktree for the branch under
+review so the reviewer can read files from disk instead of relying on
+`git show` output — offer this, don't default to it, since `review` is
+meant to stay lightweight and read-only against the current checkout.
+
+## 6. Diff-aware review and the fix loop
 
 This applies to `new-task`'s tester/code-reviewer rounds (see its skill for
 the overall flow); `test`, `review` and `design` don't loop.
@@ -372,7 +479,7 @@ report as "optional follow-ups" instead.
   under `max_rounds`. Report it as stuck: the exact item, and what the
   developer already tried against it.
 
-## 6. Reporting
+## 7. Reporting
 
 When summarizing results to the user, mention which CLI/model did the work
 only when it isn't the default lineup, or when something failed.

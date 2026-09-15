@@ -210,7 +210,7 @@ def build_command(args, prompt, prompt_file, schema_path, tmp, conversation=None
     if args.cli == "agy":
         # --add-dir makes the project agy's workspace, so reads and edits there
         # don't need a prompt; shell commands still follow the user's allowlist.
-        cmd = ["agy", "--model", model, "--sandbox", "--add-dir", os.getcwd(),
+        cmd = ["agy", "--model", model, "--sandbox", "--add-dir", args.cwd,
                "--mode", "plan" if role in READ_ONLY else "accept-edits",
                "--output-format", "stream-json", "--json-schema", str(schema_path),
                "--print-timeout", f"{max(1, int(timeout_s))}s"]
@@ -619,7 +619,12 @@ def main():
     p.add_argument("--timeout", type=int, default=1800, help="seconds (default 1800)")
     p.add_argument("--skip-permissions", action="store_true",
                    help="run the child with permission checks skipped (ignored for code-reviewer)")
+    p.add_argument("--cwd", default=None,
+                   help="working directory for the child CLI and git snapshots "
+                        "(default: the directory this script is run from) — pass the "
+                        "task's worktree path for Phase 5 worktree isolation")
     args = p.parse_args()
+    args.cwd = os.path.abspath(args.cwd) if args.cwd else os.getcwd()
 
     handoff_path = Path(args.handoff)
     if args.task_dir:
@@ -688,7 +693,7 @@ def main():
                                 stdout=subprocess.PIPE,
                                 # codex/copilot report progress on stderr: show it live
                                 stderr=subprocess.PIPE if args.cli in ("claude", "agy") else subprocess.STDOUT,
-                                text=True, bufsize=1, cwd=os.getcwd(), **popen_kwargs)
+                                text=True, bufsize=1, cwd=args.cwd, **popen_kwargs)
 
     def kill_process_tree(proc):
         """Kill the whole process group/tree, not just the direct child (the
@@ -781,7 +786,7 @@ def main():
         print(f"crewbench: {run} running on {args.cli} — live log: tail -f {log_path}",
               file=sys.stderr, flush=True)
         start = time.time()
-        git_before = git_state()
+        git_before = git_state(args.cwd)
         code = run_attempt(cmd, stdin, log, stderr_path)
 
         # Headless agy ends the whole run when a command is denied. Resume the same
@@ -831,7 +836,7 @@ def main():
 
     envelope["permission_denials"] = denials
     envelope["result"] = result
-    git_warnings, git_notes = git_changes(args.role, git_before, git_state())
+    git_warnings, git_notes = git_changes(args.role, git_before, git_state(args.cwd))
     problem = error or validate(result, schema)
     # Report only — the Team Lead and user decide what to keep; never undo anything here.
     envelope["warnings"].extend(git_warnings)

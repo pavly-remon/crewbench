@@ -39,8 +39,8 @@ placeholder, the root is the directory two levels above this SKILL.md.
 
 3. `--cleanup` (with or without a task id): list finished tasks (`phase`
    in done/stopped/failed) that still have a worktree at
-   `.crewbench/wt/<task-id>` (Phase 5). For each, ask before removing it
-   (`git worktree remove`) and deleting its branch. Also run
+   `.crewbench/wt/<task-id>` (dispatch.md §5). For each, ask before
+   removing it (`git worktree remove`) and deleting its branch. Also run
    `git worktree prune` for any worktree directories that were deleted by
    hand outside git. Do nothing without per-task confirmation.
 

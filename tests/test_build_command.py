@@ -4,10 +4,10 @@ import pytest
 
 
 def make_args(role="developer", cli="claude", model="m", effort="medium",
-              timeout=1800, skip_permissions=False):
+              timeout=1800, skip_permissions=False, cwd="/tmp/project"):
     ns = argparse.Namespace()
     ns.role, ns.cli, ns.model, ns.effort = role, cli, model, effort
-    ns.timeout, ns.skip_permissions = timeout, skip_permissions
+    ns.timeout, ns.skip_permissions, ns.cwd = timeout, skip_permissions, cwd
     return ns
 
 
@@ -28,6 +28,9 @@ def test_build_command_shape(dispatch, tmp_path, cli, role, skip):
 
     assert cmd[0] == cli
     d.check_argv_size(cmd)  # must never trip on a normal-sized prompt
+
+    if cli == "agy":
+        assert args.cwd in cmd  # --add-dir <cwd>, honors Phase 5 worktree isolation
 
     if cli in ("claude", "codex"):
         assert stdin is not None and "FULL PROMPT" in stdin

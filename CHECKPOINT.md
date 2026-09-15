@@ -36,7 +36,7 @@ need it for local test runs; CI installs it).
 | 2 Test harness + CI | done | test: Phase 2 test harness and CI |
 | 3 Diff-aware review loop | done | feat: Phase 3 diff-aware review loop |
 | 4 Task identity/state/status/resume | done | feat: Phase 4 task identity, state, status and resume |
-| 5 Git worktree isolation | pending | |
+| 5 Git worktree isolation | done | feat: Phase 5 git worktree isolation |
 | 6 Project profile + gate | pending | |
 | 7 Less ceremony | pending | |
 | 8 Usage/timing report | pending | |
@@ -219,3 +219,44 @@ phases land (running it once per phase burns real API/CLI usage).
   says "moves into the task folder" without pinning the exact subpath, and
   keeping it next to the run artifacts it describes (as it already sat
   next to them pre-Phase-4) seemed more useful than a new top-level file.
+
+### Phase 5
+
+- `crewbench_dispatch.py` gained `--cwd` (default: the directory the
+  script is run from) and every place that used `os.getcwd()` (agy's
+  `--add-dir`, the child process's cwd, both `git_state()` calls) now uses
+  it — this is the actual isolation mechanism for headless roles. Updated
+  `tests/test_build_command.py`'s fake args to carry `cwd` and assert
+  agy's `--add-dir` honors it.
+- `config/defaults.json` gained `workspace: {mode: "worktree", setup: [],
+  copy: [".env", ".env.local"]}`, merged the same later-wins way as
+  `loop`/`roles`/`tiers`.
+- `lib/dispatch.md` gained a new `## 5. Worktree isolation (new-task only)`
+  section (renumbering old §5/§6 "Diff-aware review"/"Reporting" to §6/§7,
+  and fixing every cross-reference in dispatch.md and
+  `skills/new-task/SKILL.md` accordingly — double-checked with a grep for
+  the old numbers): the pre-flight (base commit, dirty-tree check,
+  `git worktree add`, environment setup with confirmation before running
+  anything or copying `.env*`), running roles against it (`--cwd` for
+  headless; a documented best-effort/no-enforcement caveat for native
+  subagents, called out in §3 too), the worktree commit step (merge /
+  cherry-pick / leave-the-branch / nothing-yet, replacing the old plain
+  commit step), and cleanup (worktree remove + branch delete, wired to
+  `/crewbench:status --cleanup`, which was inert until now).
+- `new-task/SKILL.md`'s workflow renumbered to insert the pre-flight as
+  step 3 and rewrite the commit step (now step 9) around the worktree
+  flow, still falling back to the plain in-place flow when
+  `workspace.mode` is `in-place`.
+- `team/SKILL.md` now shows/edits `workspace` alongside `loop`, and warns
+  about the native-subagent/worktree isolation trade-off when the lineup
+  mixes them.
+- `review/SKILL.md` gained the optional offer (not default) to check out
+  the reviewed branch into a detached worktree instead of relying on
+  `git show`, per the prompt's Phase 5 item for `review`.
+- README's workflow list, team.json example, and layout section updated
+  for worktrees/`workspace`; `test`/`review`/`design` documented as always
+  `in-place`.
+- 86/86 tests still passing (no new test infra needed here beyond the
+  `--cwd` assertion above — the worktree *flow* itself is prose/skill
+  logic the Team Lead executes with `git`/shell tools, not new script
+  code, so there's no additional unit-testable surface in `bin/`).

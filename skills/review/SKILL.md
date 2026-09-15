@@ -51,10 +51,14 @@ text the user gave when invoking this skill.
    If there are no changes between the branches, say so and stop.
 
 3. Make the changed files readable. If the branch being reviewed is not
-   the one checked out, the files on disk won't match the branch — tell the
-   reviewer to rely on the diff (and `git show <branch>:<path>` output you
-   pass along for any file it needs in full) rather than reading those files
-   from disk.
+   the one checked out, the files on disk won't match the branch — either
+   tell the reviewer to rely on the diff (and `git show <branch>:<path>`
+   output you pass along for any file it needs in full), or offer to check
+   out `<branch>` into a detached worktree (`git worktree add
+   .crewbench/wt/<task-id> <branch> --detach`) so it can read real files
+   from disk instead. Offer this, don't default to it — `review` is meant
+   to stay lightweight; clean the worktree up (`git worktree remove`) when
+   done.
 
 4. Delegate to the code-reviewer role with the branch names,
    the commit list, the changed file list, and the diff.

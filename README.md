@@ -63,15 +63,21 @@ The Team Lead will:
 1. Ask clarifying questions if the task is underspecified.
 2. Offer a UI/UX spec if the task touches the UI (only runs if you say yes).
 3. Show the team lineup and let you keep or change it.
-4. Hand implementation to the developer.
-5. Run the tester and code reviewer in parallel on the changed files.
-6. Send one combined fix list back to the developer if the tester fails or
+4. Isolate the task in a git worktree (`.crewbench/wt/<task-id>`, default —
+   set `workspace.mode: in-place` to work directly in your checkout
+   instead). Asks first if your tree is dirty, and about running an
+   install command in the fresh worktree.
+5. Hand implementation to the developer.
+6. Run the tester and code reviewer in parallel on the changed files.
+7. Send one combined fix list back to the developer if the tester fails or
    the reviewer raises an issue at or above `loop.fix_threshold` (default
    `major`), up to `loop.max_rounds` (default 3). Later rounds review only
    the delta and re-check the previous round's issues/failures; stuck items
    (unresolved two rounds running) stop the loop early. Below-threshold
    issues are listed as optional follow-ups instead of triggering a round.
-7. Report back in plain language.
+8. Report back in plain language. In worktree mode, ask how to bring the
+   commit back (merge, cherry-pick, leave the branch, or nothing yet)
+   before offering to remove the worktree.
 
 ## Team lineup
 
@@ -111,6 +117,10 @@ project:
   "loop": {
     "max_rounds": 5,
     "fix_threshold": "blocker"
+  },
+  "workspace": {
+    "mode": "in-place",
+    "setup": ["npm ci"]
   }
 }
 ```
@@ -119,7 +129,10 @@ project:
 tier or an exact model name; `effort` is `low`–`max`; `permissions` is
 `safe` or `skip`. `loop.max_rounds` caps fix rounds (default 3);
 `loop.fix_threshold` is the minimum reviewer severity that triggers another
-round (`blocker` > `major` > `minor`, default `major`). Change either with
+round (`blocker` > `major` > `minor`, default `major`).
+`workspace.mode` is `worktree` (default — `new-task` isolates each task in
+`.crewbench/wt/<task-id>`) or `in-place`; `workspace.setup` are commands to
+run once in a fresh worktree (e.g. install deps). Change any of these with
 `/crewbench:team`. Defaults live in
 [`config/defaults.json`](config/defaults.json).
 
