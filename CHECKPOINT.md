@@ -33,7 +33,7 @@ need it for local test runs; CI installs it).
 |---|---|---|
 | 0 Read repo + plan | done | (this file) |
 | 1 Correctness bugs | done | fix: Phase 1 correctness bugs |
-| 2 Test harness + CI | pending | |
+| 2 Test harness + CI | done | test: Phase 2 test harness and CI |
 | 3 Diff-aware review loop | pending | |
 | 4 Task identity/state/status/resume | pending | |
 | 5 Git worktree isolation | pending | |
@@ -106,3 +106,38 @@ throwaway repo for checkout-revert, tester non-test-file, and
 code-reviewer-touched-tree cases. Did not run a real headless dispatch
 against a live CLI yet — saved for the Final Verification pass once more
 phases land (running it once per phase burns real API/CLI usage).
+
+### Phase 2
+
+- `tests/` (76 tests, all passing locally with `pytest` in a throwaway venv —
+  not installed system-wide, per the stdlib-only rule for `bin/`):
+  `test_build_command.py` (argv shape x 4 CLIs x 4 roles x safe/skip, stdin
+  vs pointer-file, argv-size guard), `test_extract_json.py`,
+  `test_validate_schema.py` (against the real schema files),
+  `test_git_safety.py` (real temp git repos: commit, stash, `checkout --`,
+  `reset --hard`, fetch-only via a second clone pushing to a shared bare
+  remote, and an actual push), `test_agy_rules.py` (broken-rule detection,
+  missing/malformed settings.json), `test_stream_parsers.py` (against the
+  new fixtures), `test_deadline.py` (spawns the real dispatch script against
+  a fake CLI that spawns its own child and sleeps past --timeout; asserts
+  the whole run finishes near the timeout, not `timeout+60` x resumes, and
+  that the grandchild is dead afterward — skipped on Windows, where the
+  `taskkill /T /F` path is exercised manually per the ground rules).
+- Found and fixed a real bug while writing `test_deadline.py`: on timeout,
+  `parse_output()`'s "no result event in output" error was shadowing the
+  "timed out after Ns" message entirely (the old `if problem is None` guard
+  never ran once `error` was already set). Timeout now always shows up in
+  `error`, with any parse error appended in parens.
+- Added `CREWBENCH_CLI_OVERRIDE_<CLI>` (checked before falling back to
+  `shutil.which`), used by `test_deadline.py`; production path unchanged
+  when unset.
+- Fixtures under `tests/fixtures/` are hand-written/synthetic, marked as
+  such in `tests/fixtures/README.md` (no real CLI output was captured for
+  this repo).
+- `.github/workflows/ci.yml`: pytest on 3.9/3.12 x ubuntu/macos, a separate
+  Windows job (3.9/3.12, same suite minus the POSIX-only deadline test), and
+  a `manifests` job running `scripts/check_manifests.py` (new — fails on
+  version/description divergence across the three manifests; this is the
+  check Phase 9's `bump_version.py` will reuse). Synced `.codex-plugin/
+  plugin.json`'s description to match the other two now so this check
+  starts green rather than red-until-Phase-9.

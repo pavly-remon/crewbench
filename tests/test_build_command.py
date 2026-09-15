@@ -1,0 +1,83 @@
+import argparse
+
+import pytest
+
+
+def make_args(role="developer", cli="claude", model="m", effort="medium",
+              timeout=1800, skip_permissions=False):
+    ns = argparse.Namespace()
+    ns.role, ns.cli, ns.model, ns.effort = role, cli, model, effort
+    ns.timeout, ns.skip_permissions = timeout, skip_permissions
+    return ns
+
+
+CLIS = ["claude", "agy", "codex", "copilot"]
+ROLES = ["developer", "tester", "code-reviewer", "ui-ux"]
+
+
+@pytest.mark.parametrize("cli", CLIS)
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("skip", [False, True])
+def test_build_command_shape(dispatch, tmp_path, cli, role, skip):
+    d = dispatch
+    args = make_args(role=role, cli=cli, skip_permissions=skip)
+    schema_path = d.ROOT / "schemas" / f"{role}.json"
+    prompt_file = tmp_path / "run.prompt.md"
+    cmd, stdin, last_message = d.build_command(
+        args, "FULL PROMPT " * 5000, prompt_file, schema_path, str(tmp_path), timeout_s=100)
+
+    assert cmd[0] == cli
+    d.check_argv_size(cmd)  # must never trip on a normal-sized prompt
+
+    if cli in ("claude", "codex"):
+        assert stdin is not None and "FULL PROMPT" in stdin
+    else:
+        # agy/copilot have no documented stdin prompt mode: prompt goes to a
+        # file, and argv only carries a short pointer to it.
+        assert stdin is None
+        joined = " ".join(cmd)
+        assert "FULL PROMPT" not in joined
+        assert str(prompt_file) in joined
+
+    if role in d.READ_ONLY:
+        # code-reviewer is always read-only, skip flags must never appear
+        assert "--dangerously-skip-permissions" not in cmd
+        assert "danger-full-access" not in cmd
+        assert "bypassPermissions" not in cmd
+        assert "--allow-all-tools" not in cmd
+    elif skip:
+        if cli == "claude":
+            assert "bypassPermissions" in cmd
+        elif cli == "agy":
+            assert "--dangerously-skip-permissions" in cmd
+        elif cli == "codex":
+            assert "danger-full-access" in cmd
+        elif cli == "copilot":
+            assert "--allow-all-tools" in cmd
+
+
+def test_build_command_argv_guard_fires_on_oversized_prompt(dispatch, tmp_path):
+    d = dispatch
+    args = make_args(cli="agy")  # agy inlines a pointer, but let's force a huge one
+    schema_path = d.ROOT / "schemas" / "developer.json"
+    huge_path = "x" * (d.MAX_ARGV_BYTES + 1)
+    with pytest.raises(ValueError):
+        cmd, _, _ = d.build_command(args, "prompt", huge_path, schema_path, str(tmp_path), timeout_s=10)
+        d.check_argv_size(cmd)
+
+
+def test_agy_print_timeout_uses_remaining_time(dispatch, tmp_path):
+    d = dispatch
+    args = make_args(cli="agy", timeout=1800)
+    schema_path = d.ROOT / "schemas" / "developer.json"
+    cmd, _, _ = d.build_command(args, "prompt", tmp_path / "p.md", schema_path, str(tmp_path), timeout_s=42)
+    i = cmd.index("--print-timeout")
+    assert cmd[i + 1] == "42s"
+
+
+def test_unknown_cli_raises(dispatch, tmp_path):
+    d = dispatch
+    args = make_args(cli="not-a-cli")
+    schema_path = d.ROOT / "schemas" / "developer.json"
+    with pytest.raises(SystemExit):
+        d.build_command(args, "prompt", tmp_path / "p.md", schema_path, str(tmp_path))

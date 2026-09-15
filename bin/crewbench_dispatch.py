@@ -78,6 +78,14 @@ def is_test_path(path, extra_pattern=None):
     return bool(extra_pattern and extra_pattern.search(path))
 
 
+def resolve_cli_path(cli):
+    """The executable to run for `cli`: CREWBENCH_CLI_OVERRIDE_<CLI> if set
+    (for tests — inject a fake CLI script without touching the production
+    path), otherwise whatever's on PATH."""
+    override = os.environ.get(f"CREWBENCH_CLI_OVERRIDE_{cli.upper()}")
+    return override or shutil.which(cli)
+
+
 def strip_frontmatter(text):
     if text.startswith("---"):
         end = text.find("\n---", 3)
@@ -625,7 +633,8 @@ def main():
         print(json.dumps(envelope, indent=2))
         sys.exit(0 if envelope["ok"] else 1)
 
-    if shutil.which(args.cli) is None:
+    cli_path = resolve_cli_path(args.cli)
+    if cli_path is None:
         envelope["error"] = f"{args.cli} is not installed or not on PATH"
         finish()
 
@@ -738,6 +747,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1) as log:
         cmd, stdin, last_message = build_command(args, prompt, prompt_path, schema_path, tmp,
                                                  timeout_s=deadline - time.time())
+        cmd[0] = cli_path
         try:
             check_argv_size(cmd)
         except ValueError as exc:
@@ -780,6 +790,7 @@ def main():
             cmd, stdin, _ = build_command(args, follow_up, resume_prompt_path, schema_path, tmp,
                                           conversation=stream.session_id,
                                           timeout_s=deadline - time.time())
+            cmd[0] = cli_path
             try:
                 check_argv_size(cmd)
             except ValueError as exc:
@@ -810,8 +821,11 @@ def main():
     envelope["notes"] = git_notes
     if problem is None and code not in (0, None):
         problem = f"{args.cli} exited with code {code}"
-    if problem is None and timed_out.is_set():
-        problem = f"timed out after {args.timeout}s"
+    if timed_out.is_set():
+        # Take priority over a generic "no result event" from parse_output —
+        # a timeout is always the more useful explanation for that.
+        timeout_msg = f"timed out after {args.timeout}s"
+        problem = timeout_msg if problem is None else f"{timeout_msg} ({problem})"
     if problem and args.cli == "agy" and denials:
         targets = [d.get("command") or d.get("action", "?") for d in denials if isinstance(d, dict)]
         problem += (" | headless agy denied: " + ", ".join(targets) + ". agy only runs commands "
