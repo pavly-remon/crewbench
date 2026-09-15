@@ -2,7 +2,7 @@
 name: crewbench-developer
 description: Implements a scoped coding task against the existing project's conventions. Part of the crewbench workflow — only invoked via the /crewbench commands, not for standalone requests.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: haiku
+model: sonnet
 effort: medium
 ---
 

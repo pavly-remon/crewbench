@@ -6,9 +6,12 @@ Usage:
       --model gemini-3.8-flash --effort medium --handoff .crewbench/runs/dev-1.md
 
 The role brief, tool limits and result schema are added automatically; the
-handoff file only needs the task itself. Child agents never run with
-permission checks disabled: each CLI is started sandboxed or with a scoped
-tool set, and anything the child can't do is reported under "blocked".
+handoff file only needs the task itself. By default (`permissions: safe`)
+each CLI is started sandboxed or with a scoped tool set, and anything the
+child can't do is reported under "blocked". Pass --skip-permissions (only
+when the agreed lineup says `permissions: skip`) to run the child with
+permission checks skipped instead — never enabled for the read-only
+code-reviewer.
 
 While the role works, a readable live log is written to <handoff>.log
 (watch it with `tail -f`) and .crewbench/runs/status.json tracks every run.
@@ -19,11 +22,12 @@ code is 0 when the role returned a valid result, 1 otherwise.
 """
 
 import argparse
-import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -59,6 +63,19 @@ CLAUDE_TOOLS = {
 READ_ONLY = {"code-reviewer"}
 AGY_DENIAL_RESUMES = 2
 NO_EFFORT = {"", "none", "n/a"}
+MAX_ARGV_BYTES = 100_000  # guard well under Linux's 128 KiB MAX_ARG_STRLEN per argv element
+GRACEFUL_KILL_TIMEOUT = 10  # seconds between SIGTERM and SIGKILL for a run's process group
+
+# Heuristic for "this looks like a test file", used to flag a tester role editing
+# non-test source. Kept as a module constant so Phase 6's project profile can extend it.
+TEST_PATH_PATTERNS = re.compile(
+    r"(^|[\\/])(tests?|__tests__|spec|e2e)([\\/]|$)|\.(test|spec)\.[^./\\]+$", re.I)
+
+
+def is_test_path(path, extra_pattern=None):
+    if TEST_PATH_PATTERNS.search(path):
+        return True
+    return bool(extra_pattern and extra_pattern.search(path))
 
 
 def strip_frontmatter(text):
@@ -139,10 +156,30 @@ def build_prompt(role, cli, handoff, schema, skip=False):
     ])
 
 
-def build_command(args, prompt, schema_path, tmp, conversation=None):
-    """Return (argv, stdin_text, codex_last_message_file). Claude and agy stream JSON events."""
+def _prompt_pointer(prompt_file):
+    """Short text for CLIs whose -p/--prompt takes the prompt as an argv value
+    (no documented stdin mode: agy and Copilot, per `--help` as of writing —
+    VERIFY if a future version adds one) instead of the full prompt, to avoid
+    E2BIG on large hand-offs (see MAX_ARGV_BYTES below)."""
+    return (
+        "Your complete instructions for this task are in the file at this exact "
+        f"absolute path: {prompt_file}\n\nRead the whole file and follow it exactly "
+        "— it contains your role brief, your limits for this run, the Team Lead's "
+        "hand-off, and how to report your final answer. Treat it as if it were "
+        "written here directly; this message is only a pointer to it.")
+
+
+def build_command(args, prompt, prompt_file, schema_path, tmp, conversation=None, timeout_s=None):
+    """Return (argv, stdin_text, codex_last_message_file). Claude and agy stream JSON events.
+
+    `prompt` is the full assembled prompt; `prompt_file` is where it (or, for a
+    resume follow-up, the follow-up text) was written to disk. Claude and Codex
+    read the full prompt from stdin (no argv size limit there); agy and Copilot
+    get a short pointer to `prompt_file` instead.
+    """
     role, model, effort = args.role, args.model, args.effort
     has_effort = effort.lower() not in NO_EFFORT
+    timeout_s = args.timeout if timeout_s is None else timeout_s
     # --skip-permissions never applies to the read-only reviewer.
     skip = args.skip_permissions and role not in READ_ONLY
     if args.cli == "claude":
@@ -162,14 +199,14 @@ def build_command(args, prompt, schema_path, tmp, conversation=None):
         cmd = ["agy", "--model", model, "--sandbox", "--add-dir", os.getcwd(),
                "--mode", "plan" if role in READ_ONLY else "accept-edits",
                "--output-format", "stream-json", "--json-schema", str(schema_path),
-               "--print-timeout", f"{args.timeout}s"]
+               "--print-timeout", f"{max(1, int(timeout_s))}s"]
         if skip:
             cmd += ["--dangerously-skip-permissions"]
         if conversation:
             cmd += ["--conversation", conversation]
         if has_effort:
             cmd += ["--effort", effort]
-        return cmd + [f"-p={prompt}"], None, None
+        return cmd + [f"-p={_prompt_pointer(prompt_file)}"], None, None
     if args.cli == "codex":
         last = Path(tmp) / "last-message.txt"
         cmd = ["codex", "exec", "-m", model,
@@ -189,33 +226,127 @@ def build_command(args, prompt, schema_path, tmp, conversation=None):
                 cmd += ["--allow-tool=write"]
         if has_effort:
             cmd += ["--effort", effort]
-        return cmd + ["-p", prompt], None, None
+        return cmd + ["-p", _prompt_pointer(prompt_file)], None, None
     raise SystemExit(f"unknown cli: {args.cli}")
 
 
-def git_state():
-    """Snapshot HEAD, current branch and remote refs; None outside a git repo."""
-    def git(*a):
-        r = subprocess.run(["git", *a], capture_output=True, text=True, cwd=os.getcwd())
-        return r.stdout.strip() if r.returncode == 0 else None
-    head = git("rev-parse", "HEAD")
+def check_argv_size(cmd):
+    """Fail fast with a clear error instead of letting exec() fail with E2BIG."""
+    for element in cmd:
+        size = len(element.encode("utf-8", "surrogateescape"))
+        if size > MAX_ARGV_BYTES:
+            raise ValueError(
+                f"a single command-line argument is {size} bytes, over the "
+                f"{MAX_ARGV_BYTES}-byte guard (real OS limits are ~128 KiB and "
+                "vary by platform) — this would likely fail with E2BIG; the "
+                f"offending value starts with: {element[:200]!r}")
+
+
+def _git(*args, cwd):
+    r = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _hash_file(cwd, path):
+    try:
+        with open(os.path.join(cwd, path), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None  # deleted, a symlink to nowhere, or unreadable
+
+
+def _dirty_snapshot(cwd):
+    """Map path -> content hash (None if deleted) for every modified/added/
+    untracked-but-not-ignored path, from `git status --porcelain=v1 -z`."""
+    r = subprocess.run(["git", "status", "--porcelain=v1", "-z"],
+                        capture_output=True, cwd=cwd)
+    if r.returncode != 0:
+        return {}
+    fields = r.stdout.decode("utf-8", "replace").split("\0")
+    dirty = {}
+    i = 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if not entry:
+            continue
+        code, path = entry[:2], entry[3:]
+        if "R" in code or "C" in code:
+            i += 1  # rename/copy entries carry an extra "original path" field
+        dirty[path] = None if "D" in code else _hash_file(cwd, path)
+    return dirty
+
+
+def git_state(cwd=None):
+    """Snapshot HEAD, branch, remote refs, stash and working-tree dirt.
+
+    Returns None outside a git repo. Used both to report roles that change git
+    history and, via `dirty`, to catch a role silently reverting or discarding
+    its own (or an earlier round's) uncommitted work.
+    """
+    cwd = cwd or os.getcwd()
+    head = _git("rev-parse", "HEAD", cwd=cwd)
     if head is None:
         return None
-    return {"head": head, "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
-            "remotes": git("for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes")}
+    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=cwd)
+    return {
+        "head": head,
+        "branch": _git("rev-parse", "--abbrev-ref", "HEAD", cwd=cwd),
+        "remotes": _git("for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes", cwd=cwd),
+        "stash": _git("stash", "list", "--format=%H", cwd=cwd) or "",
+        "upstream": upstream,
+        "upstream_commit": _git("rev-parse", "@{u}", cwd=cwd) if upstream else None,
+        "dirty": _dirty_snapshot(cwd),
+    }
 
 
-def git_changes(before, after):
+def git_changes(role, before, after, extra_test_pattern=None):
+    """Return (warnings, notes) describing what changed in the working tree
+    and git state between two git_state() snapshots. Report-only: never undoes
+    anything. `role` tailors a couple of checks (read-only reviewer, tester)."""
     if not before or not after:
-        return None
-    changes = []
+        return [], []
+    warnings, notes = [], []
     if before["branch"] != after["branch"]:
-        changes.append(f"switched branch {before['branch']} -> {after['branch']}")
+        warnings.append(f"{role} switched branch {before['branch']} -> {after['branch']}")
     if before["head"] != after["head"]:
-        changes.append(f"moved HEAD {before['head'][:8]} -> {after['head'][:8]} (commit, reset or rebase)")
+        warnings.append(f"{role} moved HEAD {before['head'][:8]} -> {after['head'][:8]} (commit, reset or rebase)")
+    if before["stash"] != after["stash"]:
+        warnings.append(f"{role} changed the stash list (git stash)")
+
+    before_dirty, after_dirty = before.get("dirty", {}), after.get("dirty", {})
+    # A path is "reverted or deleted" if it was dirty before and is either gone
+    # from the dirty set now (matches HEAD again) or now shows as deleted.
+    reverted = sorted(
+        path for path in before_dirty
+        if path not in after_dirty or after_dirty[path] is None
+    )
+    if reverted:
+        warnings.append(f"{role} reverted or deleted uncommitted changes in: {', '.join(reverted)}")
+
+    if role == "code-reviewer" and before_dirty != after_dirty:
+        warnings.append(f"{role} is read-only but the working tree changed")
+
+    if role == "tester":
+        touched = {p for p in after_dirty if after_dirty.get(p) != before_dirty.get(p)}
+        non_test = sorted(p for p in touched if not is_test_path(p, extra_test_pattern))
+        if non_test:
+            warnings.append(f"tester changed non-test files: {', '.join(non_test)}")
+
     if before["remotes"] != after["remotes"]:
-        changes.append("remote-tracking refs changed (push or fetch)")
-    return "; ".join(changes) or None
+        history_moved = before["head"] != after["head"]
+        pushed = (
+            before.get("upstream_commit") and after.get("upstream_commit")
+            and before["upstream_commit"] != after["upstream_commit"]
+            and after["upstream_commit"] == after["head"]
+        )
+        if pushed:
+            warnings.append(f"{role} pushed to {after.get('upstream')}")
+        elif not history_moved:
+            notes.append("remote-tracking refs updated (likely git fetch)")
+        else:
+            notes.append("remote-tracking refs changed alongside local history — not necessarily a push")
+    return warnings, notes
 
 
 def resume_command(cli, session_id):
@@ -357,31 +488,103 @@ def parse_output(cli, stream, stdout, last_message_file):
     return extract_json(stdout), [], None
 
 
+_JSON_TYPES = {
+    "string": str, "boolean": bool, "array": list, "object": dict, "null": type(None),
+}
+
+
+def _type_ok(value, type_name):
+    if type_name == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if type_name == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    expected = _JSON_TYPES.get(type_name)
+    return expected is not None and isinstance(value, expected)
+
+
+def validate_schema(value, schema, path=""):
+    """Recursively validate `value` against a JSON Schema subset: type
+    (including type lists), enum, required, properties, additionalProperties:
+    false, items. Returns None or a precise "<path> <problem>" error string."""
+    label = path or "result"
+    schema_type = schema.get("type")
+    if schema_type is not None:
+        types = schema_type if isinstance(schema_type, list) else [schema_type]
+        if not any(_type_ok(value, t) for t in types):
+            return f"{label} must be of type {schema_type}, got {type(value).__name__}"
+    if "enum" in schema and value not in schema["enum"]:
+        return f"{label} must be one of {schema['enum']}, got {value!r}"
+    if isinstance(value, dict) and "properties" in schema:
+        missing = [k for k in schema.get("required", []) if k not in value]
+        if missing:
+            return f"{label} missing required fields: {', '.join(missing)}"
+        props = schema["properties"]
+        if schema.get("additionalProperties") is False:
+            extra = [k for k in value if k not in props]
+            if extra:
+                return f"{label} has unexpected fields: {', '.join(extra)}"
+        for key, subschema in props.items():
+            if key in value:
+                child = f"{path}.{key}" if path else key
+                err = validate_schema(value[key], subschema, child)
+                if err:
+                    return err
+    if isinstance(value, list) and "items" in schema:
+        items_schema = schema["items"]
+        for i, item in enumerate(value):
+            err = validate_schema(item, items_schema, f"{path}[{i}]" if path else f"[{i}]")
+            if err:
+                return err
+    return None
+
+
 def validate(result, schema):
     if not isinstance(result, dict):
         return "result is not a JSON object"
-    missing = [k for k in schema["required"] if k not in result]
-    if missing:
-        return "result missing fields: " + ", ".join(missing)
-    for key, spec in schema["properties"].items():
-        if "enum" in spec and key in result and result[key] not in spec["enum"]:
-            return f"{key} must be one of {spec['enum']}, got {result[key]!r}"
-    return None
+    return validate_schema(result, schema, "")
+
+
+def _lock_file(handle):
+    """Take an exclusive lock on an open file handle. POSIX uses fcntl, Windows msvcrt.
+
+    Imported lazily so the module loads on platforms missing the other's lock module.
+    """
+    if os.name == "nt":
+        import msvcrt
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(handle, fcntl.LOCK_EX)
+
+
+def _unlock_file(handle):
+    if os.name == "nt":
+        import msvcrt
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+    # POSIX: fcntl locks release automatically when the file descriptor closes.
 
 
 def update_status(runs_dir, run, fields):
     """Merge fields into .crewbench/runs/status.json under this run's name."""
     path = runs_dir / "status.json"
     with open(runs_dir / ".status.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        _lock_file(lock)
         try:
-            status = json.loads(path.read_text())
-        except (OSError, ValueError):
-            status = {}
-        status.setdefault(run, {}).update(fields)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(status, indent=2) + "\n")
-        tmp.replace(path)
+            try:
+                status = json.loads(path.read_text())
+            except (OSError, ValueError):
+                status = {}
+            status.setdefault(run, {}).update(fields)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(status, indent=2) + "\n")
+            tmp.replace(path)
+        finally:
+            _unlock_file(lock)
 
 
 def now():
@@ -430,6 +633,8 @@ def main():
     schema = json.loads(schema_path.read_text())
     prompt = build_prompt(args.role, args.cli, handoff_path.read_text(), schema,
                           args.skip_permissions and args.role not in READ_ONLY)
+    prompt_path = handoff_path.with_suffix(".prompt.md")
+    prompt_path.write_text(prompt)
     stream = Stream(args.cli)
     stdout_lines, stderr_parts = [], []
     warnings = []
@@ -443,40 +648,101 @@ def main():
     envelope["warnings"] = warnings
     timed_out = threading.Event()
     code = None
+    # One deadline for the whole run, including agy denial-resumes: each attempt
+    # only gets what's left, so retries can't stack into ~N x --timeout.
+    deadline = time.time() + args.timeout
+
+    def spawn(cmd, stdin):
+        popen_kwargs = {}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True  # own process group, for group-kill on timeout
+        return subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
+                                # codex/copilot report progress on stderr: show it live
+                                stderr=subprocess.PIPE if args.cli in ("claude", "agy") else subprocess.STDOUT,
+                                text=True, bufsize=1, cwd=os.getcwd(), **popen_kwargs)
+
+    def kill_process_tree(proc):
+        """Kill the whole process group/tree, not just the direct child (the
+        CLIs spawn node/helper processes that would otherwise survive)."""
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        try:
+            pgid = os.getpgid(proc.pid)
+        except ProcessLookupError:
+            return
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+
+        def hard_kill():
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+        hard_timer = threading.Timer(GRACEFUL_KILL_TIMEOUT, hard_kill)
+        hard_timer.start()
+        try:
+            proc.wait(timeout=GRACEFUL_KILL_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            hard_timer.cancel()
 
     def run_attempt(cmd, stdin, log, stderr_path):
-        with open(stderr_path, "w") as stderr_file:
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE,
-                                    # codex/copilot report progress on stderr: show it live
-                                    stderr=stderr_file if args.cli in ("claude", "agy") else subprocess.STDOUT,
-                                    text=True, bufsize=1, cwd=os.getcwd())
-            update_status(runs_dir, run, {"state": "running", "pid": proc.pid})
-            if stdin:
-                proc.stdin.write(stdin)
-                proc.stdin.close()
+        remaining = deadline - time.time()
+        if remaining <= 1:
+            timed_out.set()
+            return None
+        proc = spawn(cmd, stdin)
+        update_status(runs_dir, run, {"state": "running", "pid": proc.pid})
+        if stdin:
+            proc.stdin.write(stdin)
+            proc.stdin.close()
 
-            def kill():
-                timed_out.set()
-                proc.kill()
+        def kill():
+            timed_out.set()
+            kill_process_tree(proc)
 
-            timer = threading.Timer(args.timeout + 60, kill)
-            timer.start()
-            recorded_session = stream.session_id
-            for line in proc.stdout:
-                stdout_lines.append(line)
-                for entry in stream.feed(line):
-                    log.write(f"[{now()}] {entry}\n")
-                if stream.session_id and stream.session_id != recorded_session:
-                    recorded_session = stream.session_id
-                    update_status(runs_dir, run, {"session_id": recorded_session})
-            result_code = proc.wait()
-            timer.cancel()
-        stderr_parts.append(Path(stderr_path).read_text())
+        timer = threading.Timer(remaining, kill)
+        timer.start()
+        stderr_thread = None
+        if proc.stderr is not None:
+            def drain_stderr():
+                with open(stderr_path, "a") as f:
+                    for line in proc.stderr:
+                        f.write(line)
+            stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+            stderr_thread.start()
+        recorded_session = stream.session_id
+        for line in proc.stdout:
+            stdout_lines.append(line)
+            for entry in stream.feed(line):
+                log.write(f"[{now()}] {entry}\n")
+            if stream.session_id and stream.session_id != recorded_session:
+                recorded_session = stream.session_id
+                update_status(runs_dir, run, {"session_id": recorded_session})
+        result_code = proc.wait()
+        timer.cancel()
+        if stderr_thread:
+            stderr_thread.join(timeout=5)
+        stderr_parts.append(Path(stderr_path).read_text() if Path(stderr_path).exists() else "")
         return result_code
 
     with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1) as log:
-        cmd, stdin, last_message = build_command(args, prompt, schema_path, tmp)
+        cmd, stdin, last_message = build_command(args, prompt, prompt_path, schema_path, tmp,
+                                                 timeout_s=deadline - time.time())
+        try:
+            check_argv_size(cmd)
+        except ValueError as exc:
+            envelope["error"] = str(exc)
+            finish()
         stderr_path = Path(tmp) / "stderr.txt"
         log.write(f"[{now()}] {args.role} on {args.cli} ({args.model}, effort {args.effort})\n")
         for warning in warnings:
@@ -494,7 +760,7 @@ def main():
         # Headless agy ends the whole run when a command is denied. Resume the same
         # conversation, tell it the command stays denied, and let it carry on.
         denied_seen = []
-        for _ in range(AGY_DENIAL_RESUMES):
+        for resume_n in range(AGY_DENIAL_RESUMES):
             final = stream.final or {}
             new_denied = [c for c in stream.denied_commands if c not in denied_seen]
             if (args.cli != "agy" or timed_out.is_set() or not stream.session_id or not new_denied
@@ -509,7 +775,16 @@ def main():
                 "variants of them. " + AGY_FILE_TOOLS + " If a command is truly required, list "
                 "it under \"blocked\". Continue the task from where you stopped, then give your "
                 "final answer as the JSON object described earlier.")
-            cmd, stdin, _ = build_command(args, follow_up, schema_path, tmp, conversation=stream.session_id)
+            resume_prompt_path = handoff_path.with_suffix(f".resume{resume_n + 1}.prompt.md")
+            resume_prompt_path.write_text(follow_up)
+            cmd, stdin, _ = build_command(args, follow_up, resume_prompt_path, schema_path, tmp,
+                                          conversation=stream.session_id,
+                                          timeout_s=deadline - time.time())
+            try:
+                check_argv_size(cmd)
+            except ValueError as exc:
+                envelope["error"] = str(exc)
+                finish()
             code = run_attempt(cmd, stdin, log, stderr_path)
 
         stderr = "\n".join(stderr_parts)
@@ -528,11 +803,11 @@ def main():
 
     envelope["permission_denials"] = denials
     envelope["result"] = result
-    git_changed = git_changes(git_before, git_state())
+    git_warnings, git_notes = git_changes(args.role, git_before, git_state())
     problem = error or validate(result, schema)
-    if git_changed:
-        # Report only — the Team Lead and user decide what to keep.
-        envelope["warnings"].append(f"{args.role} changed git history against its instructions: {git_changed}")
+    # Report only — the Team Lead and user decide what to keep; never undo anything here.
+    envelope["warnings"].extend(git_warnings)
+    envelope["notes"] = git_notes
     if problem is None and code not in (0, None):
         problem = f"{args.cli} exited with code {code}"
     if problem is None and timed_out.is_set():

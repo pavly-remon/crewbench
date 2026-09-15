@@ -60,13 +60,23 @@ For each role, after resolving:
 natively (a `skip` role always uses the headless route):
 
 - Claude Code: the `crewbench:crewbench-<role>` subagent (`ui-ux` →
-  `crewbench:crewbench-ui-ux`). Pass `model` on the Agent call when it
-  differs from the agent's frontmatter (developer/ui-ux: `sonnet`,
-  tester/code-reviewer: `opus`). Effort can't be set per call — if the
-  effort isn't `medium`, use the headless route with `claude` instead.
-- Copilot CLI: the `crewbench-<role>` custom agent, only when model and
-  effort equal the frontmatter defaults; otherwise go headless with
-  `copilot`.
+  `crewbench:crewbench-ui-ux`). **Always pass the resolved `model` explicitly
+  on the Agent call, regardless of the agent's frontmatter** — never rely on
+  the frontmatter matching, since the two can drift. Effort can't be set per
+  call — if the effort isn't `medium`, use the headless route with `claude`
+  instead.
+- Copilot CLI: the `crewbench-<role>` custom agent, only when Copilot's
+  custom-agent invocation can be given a model per call (check
+  `copilot --help` / `copilot help commands` for a per-agent or per-call
+  model override — as of writing no such flag was found, so this branch is
+  currently unreachable and Copilot always uses the headless route below;
+  `VERIFY` if a future Copilot version adds one), **or** when the resolved
+  `model` equals `tiers.copilot[<the role's default tier>]` (i.e. the
+  Copilot-native tier default: `claude-sonnet-5` for developer/ui-ux,
+  `claude-opus-5` for tester/code-reviewer) and the effort is `medium`.
+  Otherwise use the headless route with `copilot`. Do not compare against the
+  agent frontmatter's `model:` value (`sonnet`/`opus`) — those are Claude
+  model names, not Copilot ones.
 - Antigravity CLI and Codex CLI: always use the headless route (neither
   lets crewbench pin a subagent's model and effort, so they can only be
   guaranteed through a separate process).
@@ -91,8 +101,15 @@ for that role.
    `.crewbench/runs/` to `.git/info/exclude` if it isn't ignored). Include
    only the hand-off itself — task, acceptance criteria, files, diff, spec,
    previous role results — everything the native subagent would have
-   received. The script adds the role brief from `<root>/agents/`, the
-   role's limits, and the JSON result schema from `<root>/schemas/`.
+   received. The script assembles the full prompt (role brief from
+   `<root>/agents/`, the role's limits, this hand-off, and the JSON result
+   schema from `<root>/schemas/`) and writes it to
+   `.crewbench/runs/<role>-<n>.prompt.md`. Claude and Codex read that full
+   prompt from stdin; agy and Copilot don't support a prompt on stdin, so
+   they instead get a short `-p`/`--prompt` telling them to read their
+   complete instructions from that file's absolute path — this avoids
+   `E2BIG` on large hand-offs (a full diff, prior rounds' results). You never
+   need to build this split yourself; it's internal to the script.
 
 2. Run the script from the project root in the background and wait for
    it (allow up to 30 minutes). Pass `--effort none` when the chosen model
@@ -115,11 +132,19 @@ for that role.
      "role": "developer", "cli": "agy", "model": "gemini-3.8-flash", "effort": "medium",
      "ok": true, "exit_code": 0, "duration_s": 41.2,
      "result": { "status": "done", "summary": "...", "files_changed": [], "assumptions": [], "questions": [], "blocked": [] },
-     "permission_denials": [], "error": null,
+     "permission_denials": [], "error": null, "warnings": [], "notes": [],
      "session_id": "1c16c942-...", "resume_command": "agy --conversation 1c16c942-...",
      "result_file": "...", "log_file": "...", "raw_output_file": "..."
    }
    ```
+
+   The whole run (including any agy denial-resumes) shares one deadline
+   derived from `--timeout`; a resume only gets whatever time is left, so a
+   role can't stack retries into several multiples of the timeout. On
+   timeout, the script kills the CLI's entire process group/tree (not just
+   the direct child — the CLIs spawn node/helper processes that would
+   otherwise survive), and the run ends `failed` with `error` describing the
+   timeout.
 
    `session_id` and `resume_command` (e.g. `agy --conversation <id>`,
    `claude --resume <id>`) let the user open the role's full session once
@@ -149,8 +174,11 @@ for that role.
    whether to retry, switch that role's CLI, or stop. If `blocked` or
    `permission_denials` is non-empty, tell the user what the role couldn't
    do — never retry it with permission checks disabled.
-   If `warnings` is non-empty (e.g. agy allow rules that can never match),
-   pass them on to the user once — don't change their settings yourself.
+   If `warnings` is non-empty (e.g. agy allow rules that can never match, or
+   a role touching git history or files it shouldn't have), pass them on to
+   the user once — don't change their settings yourself and don't undo
+   anything on their behalf. `notes` (e.g. "remote-tracking refs updated
+   (likely git fetch)") are informational only — no action needed.
 
 ### Safety
 
@@ -177,10 +205,28 @@ With `permissions: skip` (`--skip-permissions`), the role runs unattended:
 
 No crew role commits or pushes — their briefs and limits say so. Only the
 Team Lead commits, and only after the user explicitly confirms; pushing
-needs its own confirmation. The script compares HEAD, branch and remote
-refs before and after each run and adds a `warnings` entry if a role
-changed git history anyway. Don't undo it yourself — tell the user and let
-them decide.
+needs its own confirmation. The script snapshots HEAD, branch, remote refs,
+the stash list, and a content hash of every dirty (modified/added/untracked)
+path before and after each run, and adds a `warnings` entry if a role:
+
+- moved HEAD, switched branch, or changed the stash list (`git stash`);
+- reverted or deleted files that were uncommitted before the run started —
+  this is the key signal in fix rounds, where "dirty before" is the
+  developer's own earlier, still-unapproved work (e.g. a rogue
+  `git checkout -- .` or `git reset --hard` would otherwise wipe it
+  silently);
+- is `code-reviewer` and the working tree changed at all (it must stay
+  read-only);
+- is `tester` and changed a file that doesn't look like a test (path
+  doesn't contain `test`/`tests`/`__tests__`/`spec`/`e2e` and isn't
+  `*.test.*`/`*.spec.*`).
+
+A remote-tracking-ref change that isn't accompanied by local history moving
+is reported as an informational `notes` entry ("likely git fetch"), not a
+warning — harmless fetches shouldn't look like a "push or fetch" scare. Where
+the upstream ref can be resolved, an actual push is called out by name
+instead. This is all report-only: the script never undoes anything — tell
+the user and let them decide.
 
 Only use `--skip-permissions` when the lineup says so; never add skip flags
 any other way, and never edit a CLI's permission settings to get a role

@@ -2,7 +2,7 @@
 name: crewbench-code-reviewer
 description: Performs a static code review of recently changed files for correctness, style consistency, security, and maintainability. Part of the crewbench workflow — only invoked via the /crewbench commands.
 tools: Read, Grep, Glob
-model: sonnet
+model: opus
 effort: medium
 ---
 
