@@ -3,7 +3,13 @@
 
 Usage:
   python3 <root>/bin/crewbench_dispatch.py --role developer --cli agy \
-      --model gemini-3.8-flash --effort medium --handoff .crewbench/runs/dev-1.md
+      --model gemini-3.8-flash --effort medium --round 1 \
+      --task-dir .crewbench/tasks/<task-id> --handoff <path-to-hand-off.md>
+
+With --task-dir, run artifacts (log, prompt, result, raw output) are named
+<task-dir>/runs/<role>-r<round>.*, so the round is always in the filename.
+Without it (pre-Phase-4 callers), they're named after --handoff itself,
+e.g. --handoff foo/dev-1.md writes foo/dev-1.result.json etc.
 
 The role brief, tool limits and result schema are added automatically; the
 handoff file only needs the task itself. By default (`permissions: safe`)
@@ -13,10 +19,10 @@ when the agreed lineup says `permissions: skip`) to run the child with
 permission checks skipped instead — never enabled for the read-only
 code-reviewer.
 
-While the role works, a readable live log is written to <handoff>.log
-(watch it with `tail -f`) and .crewbench/runs/status.json tracks every run.
-When done, prints the envelope as JSON on stdout and writes it next to the
-handoff file (<handoff>.result.json, raw output in <handoff>.raw.txt). The
+While the role works, a readable live log is written to <run>.log (watch it
+with `tail -f`) and <task-dir>/runs/status.json (or the handoff's directory,
+pre-Phase-4) tracks every run. When done, prints the envelope as JSON on
+stdout and writes it to <run>.result.json (raw output in <run>.raw.txt). The
 envelope includes the child's session id and a command to reopen it. Exit
 code is 0 when the role returned a valid result, 1 otherwise.
 """
@@ -606,17 +612,28 @@ def main():
     p.add_argument("--model", required=True)
     p.add_argument("--effort", default="medium", help='low|medium|high|xhigh|max, or "none" to omit')
     p.add_argument("--handoff", required=True, help="file with the task hand-off")
+    p.add_argument("--task-dir", default=None,
+                   help=".crewbench/tasks/<task-id> — if given, run artifacts go under "
+                        "<task-dir>/runs/<role>-r<round>.* instead of next to --handoff")
+    p.add_argument("--round", type=int, default=1, help="fix-loop round number (only used with --task-dir)")
     p.add_argument("--timeout", type=int, default=1800, help="seconds (default 1800)")
     p.add_argument("--skip-permissions", action="store_true",
                    help="run the child with permission checks skipped (ignored for code-reviewer)")
     args = p.parse_args()
 
     handoff_path = Path(args.handoff)
-    runs_dir = handoff_path.resolve().parent
-    run = handoff_path.stem
-    out_path = handoff_path.with_suffix(".result.json")
-    raw_path = handoff_path.with_suffix(".raw.txt")
-    log_path = handoff_path.with_suffix(".log")
+    if args.task_dir:
+        runs_dir = Path(args.task_dir) / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        run = f"{args.role}-r{args.round}"
+    else:
+        # Back-compat: no --task-dir means the pre-Phase-4 layout, everything
+        # named after --handoff itself.
+        runs_dir = handoff_path.resolve().parent
+        run = handoff_path.stem
+    out_path = runs_dir / f"{run}.result.json"
+    raw_path = runs_dir / f"{run}.raw.txt"
+    log_path = runs_dir / f"{run}.log"
     envelope = {"role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort,
                 "skip_permissions": args.skip_permissions and args.role not in READ_ONLY,
                 "ok": False, "exit_code": None, "duration_s": None, "result": None,
@@ -642,7 +659,7 @@ def main():
     schema = json.loads(schema_path.read_text())
     prompt = build_prompt(args.role, args.cli, handoff_path.read_text(), schema,
                           args.skip_permissions and args.role not in READ_ONLY)
-    prompt_path = handoff_path.with_suffix(".prompt.md")
+    prompt_path = runs_dir / f"{run}.prompt.md"
     prompt_path.write_text(prompt)
     stream = Stream(args.cli)
     stdout_lines, stderr_parts = [], []
@@ -785,7 +802,7 @@ def main():
                 "variants of them. " + AGY_FILE_TOOLS + " If a command is truly required, list "
                 "it under \"blocked\". Continue the task from where you stopped, then give your "
                 "final answer as the JSON object described earlier.")
-            resume_prompt_path = handoff_path.with_suffix(f".resume{resume_n + 1}.prompt.md")
+            resume_prompt_path = runs_dir / f"{run}.resume{resume_n + 1}.prompt.md"
             resume_prompt_path.write_text(follow_up)
             cmd, stdin, _ = build_command(args, follow_up, resume_prompt_path, schema_path, tmp,
                                           conversation=stream.session_id,

@@ -23,6 +23,11 @@ the lineup, align it with the user, then dispatch each role natively or
 through another CLI as it describes. "Delegate to <role>" below always means
 "dispatch per that protocol".
 
+Set up the task folder per dispatch.md §0 before anything else: compute the
+task id, create `.crewbench/tasks/<task-id>/state.json`, and make sure
+`.crewbench/tasks/` and `.crewbench/wt/` are in `.git/info/exclude`. Update
+`state.json`'s `phase` as you move through the steps below.
+
 If the arguments line above is empty or still shows a placeholder, use the
 text the user gave when invoking this skill.
 

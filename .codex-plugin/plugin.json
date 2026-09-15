@@ -1,9 +1,16 @@
 {
   "name": "crewbench",
   "version": "2.5.0",
-  "description": "A five-role dev team (Team Lead, Developer, Tester, Code Reviewer, UI/UX Designer) with per-role model, effort and CLI routing, invoked via /crewbench:new-task, :test, :review, :design and :team",
-  "author": { "name": "Pavly" },
+  "description": "A five-role dev team (Team Lead, Developer, Tester, Code Reviewer, UI/UX Designer) with per-role model, effort and CLI routing, invoked via /crewbench:new-task, :test, :review, :design, :team, :status and :resume",
+  "author": {
+    "name": "Pavly"
+  },
   "license": "MIT",
-  "keywords": ["agents", "team", "code-review", "testing"],
+  "keywords": [
+    "agents",
+    "team",
+    "code-review",
+    "testing"
+  ],
   "skills": "./skills/"
 }

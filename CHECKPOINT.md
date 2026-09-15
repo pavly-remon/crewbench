@@ -35,7 +35,7 @@ need it for local test runs; CI installs it).
 | 1 Correctness bugs | done | fix: Phase 1 correctness bugs |
 | 2 Test harness + CI | done | test: Phase 2 test harness and CI |
 | 3 Diff-aware review loop | done | feat: Phase 3 diff-aware review loop |
-| 4 Task identity/state/status/resume | pending | |
+| 4 Task identity/state/status/resume | done | feat: Phase 4 task identity, state, status and resume |
 | 5 Git worktree isolation | pending | |
 | 6 Project profile + gate | pending | |
 | 7 Less ceremony | pending | |
@@ -173,3 +173,49 @@ phases land (running it once per phase burns real API/CLI usage).
 - Tests: extended `test_validate_schema.py` fixtures with the new required
   `id` field; added `tests/test_loop_config.py` (defaults.json shape,
   previous_issues validation, bad-status rejection). 79/79 passing.
+
+### Phase 4
+
+- New `bin/crewbench_state.py` (stdlib, imports the lock helper from
+  `crewbench_dispatch.py` since both live in `bin/`): `slug` (task-id from
+  free text), `new`, `get`, `set <dotted.key> <value>`, `append
+  <dotted.key> <value>`, `list`. Every write is atomic + locked and
+  upserts `.crewbench/index.json`. Added `schemas/task-state.json`
+  documenting the shape (loose `additionalProperties: true` — this file is
+  written by our own script, not an LLM, so it doesn't need the strict
+  role-schema contract).
+- `crewbench_dispatch.py` gained `--task-dir`/`--round`: when given, every
+  run artifact (log/prompt/result/raw/resume-prompt) is named
+  `<task-dir>/runs/<role>-r<round>.*` instead of being derived from
+  `--handoff`'s own filename. `--handoff` alone (no `--task-dir`) still
+  works exactly as before — verified via `test_deadline.py`'s existing
+  no-task-dir invocation still passing, plus a new
+  `test_task_dir_and_round_name_run_artifacts` test.
+- `lib/dispatch.md` gained a `## 0. Task folder and state` section
+  documenting the layout, task-id/state lifecycle, and the
+  `.git/info/exclude` requirement (`tasks/`, `wt/` ignored;
+  `team.json`/`project.json`/`project.md`/`index.json` stay committable).
+  Section 4's example command and paths updated to the new layout; old
+  `.crewbench/runs/...` references replaced throughout (README included).
+- All four run-a-task skills (`new-task`, `test`, `review`, `design`) get
+  a short addition to "Before you start" pointing at §0 for task-folder
+  setup — full de-duplication of this boilerplate is Phase 9's job, this
+  phase just adds the new instruction consistently.
+- New `skills/status/SKILL.md` (list tasks / one task's full status,
+  including live-run PID checks and a `--cleanup` worktree-removal path
+  that's inert until Phase 5 creates worktrees) and
+  `skills/resume/SKILL.md` (reload state, reconcile dead "running" runs,
+  detect a working tree that's drifted from what state implies, continue
+  from the current phase without re-asking the lineup). Both read-only
+  except `status --cleanup`'s explicit-confirmation worktree removal.
+- Synced all three manifests' `description` to also mention `:status` and
+  `:resume` (kept `scripts/check_manifests.py` green).
+- Tests: `tests/test_state_helper.py` (slug/id generation, new/get/set/
+  append/list against the real script as a subprocess, missing-state
+  error), plus the task-dir/round dispatch test above. 86/86 passing.
+- **Deviation**: `status.json` lives at `<task-dir>/runs/status.json`
+  (i.e. inside the `runs/` subfolder, which is itself inside the task
+  folder) rather than directly at `<task-dir>/status.json` — the prompt
+  says "moves into the task folder" without pinning the exact subpath, and
+  keeping it next to the run artifacts it describes (as it already sat
+  next to them pre-Phase-4) seemed more useful than a new top-level file.

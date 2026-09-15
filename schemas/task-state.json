@@ -1,0 +1,52 @@
+{
+  "type": "object",
+  "description": "One .crewbench/tasks/<task-id>/state.json. Written and read by bin/crewbench_state.py; see lib/dispatch.md's state.json section for the field-by-field protocol (when the Team Lead updates each one).",
+  "properties": {
+    "id": { "type": "string", "description": "YYYYMMDD-HHMM-<up to 5 word kebab slug>" },
+    "command": { "type": "string", "enum": ["new-task", "test", "review", "design"] },
+    "title": { "type": "string" },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" },
+    "phase": {
+      "type": "string",
+      "enum": ["scoping", "design", "implementing", "verifying", "fixing",
+               "awaiting_commit", "done", "stopped", "failed"]
+    },
+    "round": { "type": "integer" },
+    "lineup": {
+      "type": "object",
+      "description": "The resolved, user-agreed lineup for this task (see lib/dispatch.md §1)."
+    },
+    "base_commit": { "type": ["string", "null"] },
+    "branch": { "type": ["string", "null"] },
+    "worktree": { "type": ["string", "null"], "description": "Absolute path, or null in in-place mode." },
+    "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+    "design_spec_file": { "type": ["string", "null"] },
+    "rounds": {
+      "type": "array",
+      "description": "One entry per fix-loop round.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "round": { "type": "integer" },
+          "runs": { "type": "array", "items": { "type": "string" } },
+          "verdicts": { "type": "object" },
+          "open_issue_ids": { "type": "array", "items": { "type": "string" } },
+          "snapshot_ref": { "type": ["string", "null"] }
+        },
+        "required": ["round", "runs"]
+      }
+    },
+    "usage": {
+      "type": "object",
+      "description": "Per-role aggregate: runs, total duration, tokens (if known), model, CLI. See lib/dispatch.md's usage section."
+    },
+    "notes": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": [
+    "id", "command", "title", "created_at", "updated_at", "phase", "round",
+    "lineup", "base_commit", "branch", "worktree", "acceptance_criteria",
+    "design_spec_file", "rounds", "usage", "notes"
+  ],
+  "additionalProperties": true
+}

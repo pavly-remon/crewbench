@@ -46,9 +46,11 @@ then install `crewbench` from the `PiCode` marketplace in `/plugins`.
 | `/crewbench:review <branch> [base]` | Code reviewer reviews a branch's changes against `base` (default branch if omitted) |
 | `/crewbench:design <description>` | UI/UX designer produces an implementable design spec |
 | `/crewbench:team [change]` | Show or change the team lineup (CLI, model, effort per role) |
+| `/crewbench:status [task-id]` | Recent tasks, or one task's phase/lineup/rounds/running runs. Read-only |
+| `/crewbench:resume [task-id]` | Resume an interrupted task from its saved state, without re-asking the lineup |
 
 In Codex, invoke the skills by name (`$new-task`, `$test`, `$review`,
-`$design`, `$team`).
+`$design`, `$team`, `$status`, `$resume`).
 
 `test`, `review`, and `design` only report — they never change your code. Each
 offers to hand its results to `/crewbench:new-task` if you want something
@@ -195,7 +197,7 @@ Each headless role writes a live log. The Team Lead tells you the command
 when a role starts:
 
 ```
-tail -f .crewbench/runs/developer-1.log
+tail -f .crewbench/tasks/<task-id>/runs/developer-r1.log
 ```
 
 ```
@@ -205,10 +207,11 @@ tail -f .crewbench/runs/developer-1.log
 [01:22:49] finished: SUCCESS
 ```
 
-`.crewbench/runs/status.json` lists every run (running / done / failed) with
-its log and session id. When a role finishes, its result includes a
-`resume_command` — `agy --conversation <id>`, `claude --resume <id>`,
-`codex resume <id>` — to open the full session in that CLI.
+`<task-dir>/runs/status.json` lists every run (running / done / failed) with
+its log and session id — or just ask `/crewbench:status <task-id>`. When a
+role finishes, its result includes a `resume_command` — `agy --conversation
+<id>`, `claude --resume <id>`, `codex resume <id>` — to open the full
+session in that CLI.
 
 The full protocol is in [`lib/dispatch.md`](lib/dispatch.md).
 
@@ -231,6 +234,12 @@ Role briefs live in [`agents/`](agents/) and are shared by every CLI.
 | `plugin.json` | Antigravity CLI (also read by Copilot CLI) |
 | `.codex-plugin/`, `.agents/plugins/` | Codex CLI |
 | `skills/`, `agents/`, `lib/`, `config/`, `schemas/`, `bin/` | all |
+| `tests/`, `.github/workflows/`, `scripts/` | dev-only: pytest suite, CI, maintenance scripts — not needed at runtime |
+
+In a project using crewbench, `.crewbench/` holds `team.json`,
+`project.json` and `project.md` (all committable), plus an
+auto-maintained `index.json` and per-task `tasks/<task-id>/` and (worktree
+mode) `wt/<task-id>/` — see [`lib/dispatch.md`](lib/dispatch.md) §0.
 
 ## License
 

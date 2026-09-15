@@ -23,6 +23,11 @@ the lineup, align it with the user, then dispatch each role natively or
 through another CLI as it describes. "Delegate to <role>" below always means
 "dispatch per that protocol".
 
+Set up the task folder per dispatch.md §0 before anything else: compute the
+task id, create `.crewbench/tasks/<task-id>/state.json`, and make sure
+`.crewbench/tasks/` and `.crewbench/wt/` are in `.git/info/exclude`. Update
+`state.json`'s `phase` as you move through the steps below.
+
 If the arguments line above is empty or still shows a placeholder, use the
 text the user gave when invoking this skill.
 
@@ -42,9 +47,12 @@ text the user gave when invoking this skill.
    both is fine.
 
 3. Record the base commit (`git rev-parse HEAD`) before delegating — the
-   reviewer needs it every round (dispatch.md §5). Delegate implementation
-   to the developer role with a clear, scoped task description (include the
-   UI/UX spec if one was produced). This is round 1.
+   reviewer needs it every round (dispatch.md §5). Save it with
+   `crewbench_state.py set --key base_commit --value '"<sha>"'` (and
+   `lineup`, once agreed in step 2) so `/crewbench:resume` can pick this
+   task back up later. Delegate implementation to the developer role with a
+   clear, scoped task description (include the UI/UX spec if one was
+   produced). This is round 1 — set `phase` to `implementing`.
 
 4. Once the developer reports done, dispatch the tester and code-reviewer
    roles in parallel against the same files changed, following dispatch.md

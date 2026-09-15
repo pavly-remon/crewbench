@@ -75,6 +75,35 @@ def test_agy_print_timeout_uses_remaining_time(dispatch, tmp_path):
     assert cmd[i + 1] == "42s"
 
 
+def test_task_dir_and_round_name_run_artifacts(dispatch, git_repo, tmp_path, fake_cli_dir):
+    import json
+    import os
+    import subprocess
+    import sys
+
+    task_dir = git_repo / ".crewbench" / "tasks" / "t1"
+    handoff = tmp_path / "handoff.md"
+    handoff.write_text("Task: trivial.\n")
+    env = dict(os.environ)
+    env["CREWBENCH_CLI_OVERRIDE_CLAUDE"] = str(fake_cli_dir / "hang_and_spawn.py")
+    env["FAKE_CLI_SLEEP"] = "0.1"  # exits fast, no structured output -> a clean parse-error failure
+
+    proc = subprocess.run(
+        [sys.executable, str(dispatch.ROOT / "bin" / "crewbench_dispatch.py"),
+         "--role", "tester", "--cli", "claude", "--model", "m", "--effort", "none",
+         "--handoff", str(handoff), "--task-dir", str(task_dir), "--round", "2",
+         "--timeout", "10"],
+        cwd=git_repo, env=env, capture_output=True, text=True, timeout=20,
+    )
+    envelope = json.loads(proc.stdout)
+    assert envelope["ok"] is False  # fake CLI never produces valid JSON — expected
+    run_files = {p.name for p in (task_dir / "runs").iterdir()}
+    assert "tester-r2.log" in run_files
+    assert "tester-r2.prompt.md" in run_files
+    assert "tester-r2.result.json" in run_files
+    assert "tester-r2.raw.txt" in run_files
+
+
 def test_unknown_cli_raises(dispatch, tmp_path):
     d = dispatch
     args = make_args(cli="not-a-cli")

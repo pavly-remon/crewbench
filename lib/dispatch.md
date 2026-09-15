@@ -8,6 +8,49 @@ Antigravity CLI (`agy`), or Codex CLI.
 `<root>` below is the crewbench install directory (the one containing
 `agents/`, `bin/`, `config/`, `lib/` and `schemas/`).
 
+## 0. Task folder and state
+
+Every `new-task`, `test`, `review` and `design` invocation gets a task
+folder before anything else happens:
+
+```
+.crewbench/
+  team.json            (unchanged, user-owned, committable)
+  project.json         (Phase 6, committable)
+  project.md           (Phase 6, committable)
+  index.json           (auto-maintained — don't hand-edit)
+  tasks/<task-id>/
+    state.json
+    runs/<role>-r<round>.md | .prompt.md | .log | .result.json | .raw.txt
+  wt/<task-id>/        (Phase 5, worktrees — not created by in-place tasks)
+```
+
+1. Compute the task id: `python3 <root>/bin/crewbench_state.py slug "<task
+   text>"` → `YYYYMMDD-HHMM-<up-to-5-word-kebab-slug>`.
+2. Create the state file:
+   `python3 <root>/bin/crewbench_state.py new --task-dir
+   .crewbench/tasks/<task-id> --id <task-id> --command <new-task|test|review|design>
+   --title "<short title>"`. This also upserts `.crewbench/index.json`.
+3. Ensure `.crewbench/tasks/` and `.crewbench/wt/` are in
+   `.git/info/exclude` (append them if missing; leave `team.json`,
+   `project.json`, `project.md`, `index.json` out of that ignore list —
+   they're meant to be committed).
+4. Update `state.json` at every phase transition — `set --key phase
+   --value "<phase>"` (see `schemas/task-state.json` for the enum), and
+   `append --key rounds --value '{...}'` after each fix round. Round-aware
+   headless dispatches use `--task-dir .crewbench/tasks/<task-id> --round
+   <n>` (§4) instead of a bare `--handoff` path, so run artifacts land at
+   `.crewbench/tasks/<task-id>/runs/<role>-r<n>.*`.
+5. On a normal finish, set `phase` to `done`/`stopped`/`failed` as
+   appropriate; on an unhandled error, still leave the state file in a
+   sensible phase rather than abandoning it half-updated — `/crewbench:
+   resume` and `/crewbench:status` read it as-is.
+
+`test`, `review` and `design` use the same task folder and `state.json`
+shape (a `command` of `test`/`review`/`design`) but never loop past one
+round and have no `base_commit`/`branch`/`worktree` beyond what §5 of
+`review` already gathers.
+
 ## 1. Build the lineup
 
 A lineup entry has four fields per role:
@@ -128,20 +171,24 @@ whichever CLI the role runs on:
 
 ```
 python3 <root>/bin/crewbench_dispatch.py --role <role> --cli <cli> \
-    --model <model> --effort <effort> --handoff <handoff-file> [--skip-permissions]
+    --model <model> --effort <effort> \
+    --task-dir .crewbench/tasks/<task-id> --round <n> \
+    --handoff <handoff-file> [--skip-permissions]
 ```
 
 Add `--skip-permissions` only when the agreed lineup has `permissions: skip`
-for that role.
+for that role. With `--task-dir`, every run artifact is named
+`<task-dir>/runs/<role>-r<round>.*` regardless of what `--handoff` itself is
+called, so nothing collides across rounds.
 
-1. Write the hand-off to `.crewbench/runs/<role>-<n>.md` (add
-   `.crewbench/runs/` to `.git/info/exclude` if it isn't ignored). Include
+1. Write the hand-off to `.crewbench/tasks/<task-id>/runs/<role>-r<round>.md`
+   (§0 already put `.crewbench/tasks/` in `.git/info/exclude`). Include
    only the hand-off itself — task, acceptance criteria, files, diff, spec,
    previous role results — everything the native subagent would have
    received. The script assembles the full prompt (role brief from
    `<root>/agents/`, the role's limits, this hand-off, and the JSON result
    schema from `<root>/schemas/`) and writes it to
-   `.crewbench/runs/<role>-<n>.prompt.md`. Claude and Codex read that full
+   `<role>-r<round>.prompt.md` next to it. Claude and Codex read that full
    prompt from stdin; agy and Copilot don't support a prompt on stdin, so
    they instead get a short `-p`/`--prompt` telling them to read their
    complete instructions from that file's absolute path — this avoids
@@ -154,15 +201,16 @@ for that role.
    it, e.g.:
 
    > Developer is working on agy — watch it live with
-   > `tail -f .crewbench/runs/developer-1.log`
+   > `tail -f .crewbench/tasks/<task-id>/runs/developer-r1.log`
 
    The log shows each tool the role uses (files read and edited, commands
-   run) with timestamps. `.crewbench/runs/status.json` lists every run with
+   run) with timestamps. `<task-dir>/runs/status.json` lists every run with
    its state (running / done / failed), pid, log file and session id — read
-   it when the user asks what the crew is doing.
+   it when the user asks what the crew is doing (`/crewbench:status` does
+   this for the user directly).
 
 3. The script prints a JSON envelope and saves it to
-   `.crewbench/runs/<role>-<n>.result.json`:
+   `<task-dir>/runs/<role>-r<round>.result.json`:
 
    ```json
    {
