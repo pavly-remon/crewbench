@@ -21,16 +21,24 @@ Read `<root>/lib/dispatch.md`, sections 1 and 2, for the lineup format.
 1. Build the current lineup (defaults merged with `.crewbench/team.json`)
    and show it as a table: role, CLI, model (tier and what it resolves to),
    effort. Also show the current `loop` settings (`max_rounds`,
-   `fix_threshold`) and `workspace` settings (`mode`, `setup`) on one or
-   two lines below the table. Say which values come from the project file
-   vs. the defaults.
+   `fix_threshold`), `workspace` settings (`mode`, `setup`), and
+   `confirm_lineup` (`always`/`when_unsaved`/`never`) on one or two lines
+   below the table. Say which values come from the project file vs. the
+   defaults.
+
+   Then check the "`skip` launch friction on a Claude Code host" note in
+   dispatch.md's Commits section: if you're running as `claude` and
+   `~/.claude/settings.json` doesn't already allow-list dispatch calls,
+   show the exact line to add and what it permits, once. Skip this check
+   entirely on any other host.
 
 2. If a change was requested (above, or in reply), apply it and show the
    new table/lines. Validate: `cli` is one of host/claude/codex/agy/copilot,
    effort is one of low/medium/high/xhigh/max, permissions is safe or skip
    (skip has no effect on code-reviewer), `loop.max_rounds` is a positive
    integer, `loop.fix_threshold` is one of blocker/major/minor,
-   `workspace.mode` is `worktree` or `in-place`. For any non-host CLI,
+   `workspace.mode` is `worktree` or `in-place`, `confirm_lineup` is
+   always/when_unsaved/never. For any non-host CLI,
    check it's installed with `command -v` and warn if it isn't. For agy,
    check the effort exists for that model (`agy models`) and show the
    closest one. Accept plain-language changes too — "stop after 5 rounds",
@@ -52,5 +60,5 @@ Read `<root>/lib/dispatch.md`, sections 1 and 2, for the lineup format.
 
 3. Ask before writing. On yes, save only the fields that differ from
    `<root>/config/defaults.json` into `.crewbench/team.json` (merge with
-   what's there; `loop` and `workspace` live alongside `roles` and
-   `tiers`). "reset" means delete that file, after confirming.
+   what's there; `loop`, `workspace` and `confirm_lineup` live alongside
+   `roles` and `tiers`). "reset" means delete that file, after confirming.

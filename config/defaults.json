@@ -15,6 +15,7 @@
     "max_rounds": 3,
     "fix_threshold": "major"
   },
+  "confirm_lineup": "when_unsaved",
   "workspace": {
     "mode": "worktree",
     "setup": [],

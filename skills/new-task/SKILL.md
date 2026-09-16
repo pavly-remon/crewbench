@@ -1,7 +1,7 @@
 ---
 name: new-task
 description: Run a new task through the crewbench team (Team Lead delegates to developer, tester, code-reviewer, ui-ux-designer)
-argument-hint: "[task description]"
+argument-hint: "[task description] [--yes] [--design] [--in-place] [--rounds N] [--dev cli[:model]] [--review cli[:model]]"
 disable-model-invocation: true
 ---
 
@@ -30,6 +30,12 @@ task id, create `.crewbench/tasks/<task-id>/state.json`, and make sure
 "Project profile": if `.crewbench/project.json` doesn't exist yet, run
 detection and get it confirmed once before delegating anything.
 
+Before treating the rest of the arguments line as the task text, pull out
+any flags per dispatch.md §1's "Flags in $ARGUMENTS" (`--yes`, `--design`,
+`--in-place`, `--rounds N`, `--dev <cli[:model]>`, `--review
+<cli[:model]>`) and apply them as this task's own lineup/loop/workspace
+overrides — the rest of the line is the task description.
+
 If the arguments line above is empty or still shows a placeholder, use the
 text the user gave when invoking this skill.
 
@@ -39,18 +45,24 @@ text the user gave when invoking this skill.
    affected areas, edge cases), ask clarifying questions before delegating
    anything.
 
-2. Check for a UI/UX component. If the task touches layout, components, or
-   user-facing interaction, ask: "This looks like it touches UI — want the
-   ui-ux role to spec it first?" Only invoke it if the user
-   says yes. Never invoke it automatically.
+2. Check for a UI/UX component. If `--design` was given, use the ui-ux
+   role without asking. If `--yes` was given (and `--design` wasn't),
+   skip the question and assume no design. Otherwise, if the task touches
+   layout, components, or user-facing interaction, ask: "This looks like
+   it touches UI — want the ui-ux role to spec it first?" Only invoke it
+   if the user says yes. Never invoke it automatically.
 
    Then align the team lineup with the user (developer, tester,
-   code-reviewer, plus ui-ux if it's being used) — one question covering
-   both is fine.
+   code-reviewer, plus ui-ux if it's being used) per dispatch.md §2 —
+   fold this into the same message as the UI/UX question above when both
+   apply, rather than asking twice. `--dev`/`--review` (if given) already
+   pin those roles' CLI/model — show them as decided, don't ask about them
+   again.
 
 3. Run the worktree pre-flight from dispatch.md §5: record `base_commit`
    and branch, check for a dirty tree, and — unless `workspace.mode` is
-   `in-place` — create `.crewbench/wt/<task-id>` and run environment setup.
+   `in-place` (configured, or forced by `--in-place` for this task only)
+   — create `.crewbench/wt/<task-id>` and run environment setup.
    Save `base_commit`, `branch`, `worktree` and `lineup` (once agreed in
    step 2) to `state.json` so `/crewbench:resume` can pick this task back
    up later. For every non-host CLI in the agreed lineup, run `doctor`
@@ -83,7 +95,8 @@ text the user gave when invoking this skill.
    list and send the developer back once — don't run two separate fix
    loops.
 
-8. Apply dispatch.md §6's stopping rules: cap at `loop.max_rounds`, and
+8. Apply dispatch.md §6's stopping rules: cap at `loop.max_rounds`
+   (`--rounds N`, if given, overrides it for this task only), and
    stop early on oscillation (the same issue or failing test unresolved two
    rounds running). Either way, stop and summarize exactly what keeps
    failing instead of continuing to loop.

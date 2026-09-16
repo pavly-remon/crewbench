@@ -41,10 +41,10 @@ then install `crewbench` from the `PiCode` marketplace in `/plugins`.
 
 | Command | What it does |
 |---|---|
-| `/crewbench:new-task <task description>` | Full workflow: scope, (optional) design, implement, test + review, fix loop |
-| `/crewbench:test <scenario>` | Tester writes and/or runs tests for one scenario and reports pass/fail |
-| `/crewbench:review <branch> [base]` | Code reviewer reviews a branch's changes against `base` (default branch if omitted) |
-| `/crewbench:design <description>` | UI/UX designer produces an implementable design spec |
+| `/crewbench:new-task <task description> [flags]` | Full workflow: scope, (optional) design, implement, test + review, fix loop |
+| `/crewbench:test <scenario> [--yes]` | Tester writes and/or runs tests for one scenario and reports pass/fail |
+| `/crewbench:review <branch> [base] [--yes]` | Code reviewer reviews a branch's changes against `base` (default branch if omitted) |
+| `/crewbench:design <description> [--yes]` | UI/UX designer produces an implementable design spec |
 | `/crewbench:team [change]` | Show or change the team lineup (CLI, model, effort per role) |
 | `/crewbench:status [task-id]` | Recent tasks, or one task's phase/lineup/rounds/running runs. Read-only |
 | `/crewbench:resume [task-id]` | Resume an interrupted task from its saved state, without re-asking the lineup |
@@ -92,6 +92,30 @@ The first `new-task` in a project with no `.crewbench/project.json` runs
 before delegating anything — see `/crewbench:profile` to show, refresh or
 edit it any time after that.
 
+### Flags
+
+Add these to any command's arguments to skip a question you already know
+the answer to (stripped from the text, not treated as part of the
+description):
+
+| Flag | Skills | Effect |
+|---|---|---|
+| `--yes` | all | Skip the lineup-confirmation question; in `new-task`, also skip the UI/UX question (assumes no design unless `--design` is also given). Never skips a commit or push confirmation — those are always explicit. |
+| `--design` | `new-task` | Use the ui-ux role without asking. |
+| `--in-place` | `new-task` | Work directly in the current checkout for this task only, overriding `workspace.mode`. |
+| `--rounds N` | `new-task` | Cap this task's fix loop at `N` rounds, overriding `loop.max_rounds`. |
+| `--dev <cli[:model]>` | `new-task` | Run the developer role on `cli` (and `model`, if given) for this task only. |
+| `--review <cli[:model]>` | `new-task` | Same, for `code-reviewer`. |
+
+Flags only affect the one invocation — none of them get saved to
+`.crewbench/team.json` on their own.
+
+By default (`confirm_lineup: when_unsaved`), the Team Lead only asks about
+the lineup when there's no saved `.crewbench/team.json` yet; once one
+exists, it just shows the table and proceeds. Set `confirm_lineup` to
+`always` (ask every time) or `never` (never ask) in `/crewbench:team` if
+you want different behavior.
+
 ## Team lineup
 
 Default lineup — cheaper model for building, stronger model for checking,
@@ -134,7 +158,8 @@ project:
   "workspace": {
     "mode": "in-place",
     "setup": ["npm ci"]
-  }
+  },
+  "confirm_lineup": "always"
 }
 ```
 
@@ -145,8 +170,9 @@ tier or an exact model name; `effort` is `low`–`max`; `permissions` is
 round (`blocker` > `major` > `minor`, default `major`).
 `workspace.mode` is `worktree` (default — `new-task` isolates each task in
 `.crewbench/wt/<task-id>`) or `in-place`; `workspace.setup` are commands to
-run once in a fresh worktree (e.g. install deps). Change any of these with
-`/crewbench:team`. Defaults live in
+run once in a fresh worktree (e.g. install deps). `confirm_lineup` is
+`always`, `when_unsaved` (default), or `never` — see "Flags" above.
+Change any of these with `/crewbench:team`. Defaults live in
 [`config/defaults.json`](config/defaults.json).
 
 ### How roles are run
@@ -200,6 +226,9 @@ agent with permission checks skipped. Approve the dispatch when prompted
 (`/permissions` → Recently denied → `r`), or allow it in your own
 `~/.claude/settings.json`, e.g.
 `"permissions": {"allow": ["Bash(python3 */crewbench_dispatch.py *)"]}`.
+`/crewbench:team` (and the first dispatch of a session) checks for this
+allow-list entry and shows you the exact line to add if it's missing —
+crewbench never edits the file itself.
 
 **Using `agy` for a role:** reads and edits inside the project work out of
 the box, and `agy` roles are told to use their file tools instead of

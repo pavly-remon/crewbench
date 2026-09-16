@@ -1,7 +1,7 @@
 ---
 name: test
 description: Test a specific scenario with the crewbench tester (writes and/or runs tests, reports pass/fail — no code fixes)
-argument-hint: "[scenario to test]"
+argument-hint: "[scenario to test] [--yes]"
 disable-model-invocation: true
 ---
 
@@ -27,6 +27,10 @@ Set up the task folder per dispatch.md §0 before anything else: compute the
 task id, create `.crewbench/tasks/<task-id>/state.json`, and make sure
 `.crewbench/tasks/` and `.crewbench/wt/` are in `.git/info/exclude`. Update
 `state.json`'s `phase` as you move through the steps below.
+
+Strip `--yes` (see dispatch.md §1's "Flags in $ARGUMENTS") from the
+arguments before treating the rest as the scenario — it skips the
+lineup-confirmation question (§2), nothing else.
 
 If the arguments line above is empty or still shows a placeholder, use the
 text the user gave when invoking this skill.

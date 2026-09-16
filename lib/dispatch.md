@@ -163,18 +163,77 @@ Also merged the same way, under a `workspace` key:
 Used by `new-task`'s pre-flight (§5, "Worktree isolation", below). `test`, `review` and `design`
 always stay `in-place` regardless of this setting — they don't change code.
 
+### Lineup-confirmation setting
+
+Also merged the same way, under a `confirm_lineup` key:
+
+| Value | Behavior |
+|---|---|
+| `always` | Always ask (§2) before delegating, even if `.crewbench/team.json` exists. |
+| `when_unsaved` (default) | Ask only when there's no saved lineup (`.crewbench/team.json` doesn't exist) or the user is actively requesting a change this turn. If a saved lineup exists and nothing's changing, just show the table and proceed. |
+| `never` | Never ask — always just show the table and proceed, even with no saved lineup. |
+
+`--yes` (below) forces `never`-style behavior for that one invocation,
+regardless of the configured value — it does not change the setting itself.
+
+### Flags in $ARGUMENTS
+
+Every skill's `$ARGUMENTS` may carry flags ahead of or mixed into the free
+text. Strip a flag (and, where noted, its value token) out of the text
+before treating what's left as the task/scenario/description/branch name —
+an unrecognized `--something` is left alone, since it's probably part of
+the text itself (e.g. a shell flag the task description happens to
+mention), not a crewbench flag.
+
+| Flag | Skills | Effect |
+|---|---|---|
+| `--yes` | all | Force `confirm_lineup: never` for this invocation (see above); in `new-task`, also skip the UI/UX question and assume no design unless `--design` is also given. Never skips a commit or push confirmation — see "Commits" below. |
+| `--design` | `new-task` | Use the ui-ux role for this task without asking. |
+| `--in-place` | `new-task` | Force `workspace.mode: in-place` for this task only. |
+| `--rounds N` | `new-task` | Override `loop.max_rounds` for this task only (`N` a positive integer). |
+| `--dev <cli[:model]>` | `new-task` | Override the developer role's `cli` (and `model`, if given) for this task only. |
+| `--review <cli[:model]>` | `new-task` | Same, for `code-reviewer`. |
+
+These are exactly the third merge tier from §1 ("anything the user tells
+you for this task") expressed as flags instead of a live answer — apply
+them the same way you'd apply the equivalent spoken instruction, and don't
+ask about them again. They only affect this one invocation: nothing here
+gets written to `.crewbench/team.json` unless the user separately says to
+save it (§2).
+
 ## 2. Align with the user
 
 Before delegating anything, show the lineup for the roles this skill will
-use as a compact table (role, CLI, model, effort, permissions) and ask whether to keep
-it or change it. Accept plain-language changes — "reviewer on codex with
-high effort", "everyone on opus", "developer on agy with gemini flash".
+use as a compact table (role, CLI, model, effort, permissions), plus any
+non-default `loop`/`workspace` settings that apply, on one or two lines
+below it.
+
+Whether you also ask, or just show the table and proceed, follows
+`confirm_lineup` above (as overridden by `--yes` for this one call):
+
+- `always`, or `when_unsaved` with no saved `.crewbench/team.json` yet:
+  ask whether to keep the table or change it, in one single, compact
+  message — don't split this into a lineup question and a separate
+  question later if you can combine them (e.g. `new-task`'s own UI/UX
+  question belongs in the same message when both apply).
+- `when_unsaved` with a saved lineup and nothing changing this turn, or
+  `never`: just show the table (and settings) and proceed without waiting
+  for confirmation.
+- Whenever a flag or the user's own request already pins a value (a named
+  CLI/model, `--dev`, `--rounds`, etc.), don't ask about that value again —
+  show it in the table as already decided.
+
+Accept plain-language changes — "reviewer on codex with high effort",
+"everyone on opus", "developer on agy with gemini flash", "stop after 5
+rounds", "work in-place this time".
 
 - If they say go / looks good, proceed.
 - If they change something, confirm the new table, then ask once whether
   to save it as the project default. Only on yes, write the changed fields
   to `.crewbench/team.json` (create it; merge into it if it already
-  exists; keep it minimal — only fields that differ from the defaults).
+  exists; keep it minimal — only fields that differ from the defaults). A
+  flag-driven, this-task-only override (above) is never offered for
+  saving on its own — only an explicit spoken change is.
 - Don't re-ask on later rounds of the same task (fix loops reuse the
   agreed lineup).
 
@@ -446,7 +505,11 @@ With `permissions: skip` (`--skip-permissions`), the role runs unattended:
 
 No crew role commits or pushes — their briefs and limits say so. Only the
 Team Lead commits, and only after the user explicitly confirms; pushing
-needs its own confirmation. The script snapshots HEAD, branch, remote refs,
+needs its own confirmation. **Neither confirmation is ever skippable** —
+not by `confirm_lineup: never`, not by `--yes`, not by anything else in
+"Flags in $ARGUMENTS" (§1). Those only shortcut the lineup/design
+questions; the commit and push steps always stop and wait for an explicit
+answer. The script snapshots HEAD, branch, remote refs,
 the stash list, and a content hash of every dirty (modified/added/untracked)
 path before and after each run, and adds a `warnings` entry if a role:
 
@@ -475,6 +538,33 @@ unblocked — report it to the user instead. If your own CLI refuses to
 launch a `skip` run (e.g. Claude Code's auto mode blocks it), tell the user
 it was blocked and ask whether to approve it themselves or switch that role
 to `safe`; don't try to get around the block.
+
+### `skip` launch friction on a Claude Code host
+
+When you (the Team Lead) are running as `claude`, every headless
+`crewbench_dispatch.py` call (§4) goes through your own Bash tool, which by
+default asks the user to approve it every single time unless their
+`~/.claude/settings.json` already allow-lists it — pure ceremony once
+they've approved it once. Check for this proactively instead of letting
+them discover it by being asked over and over:
+
+- Read `~/.claude/settings.json` (a plain file read, not a dispatch) and
+  look in `permissions.allow` for an entry that already covers `python3
+  <root>/bin/crewbench_dispatch.py ...` invocations, e.g. `Bash(python3
+  */crewbench_dispatch.py *)` or a broader one like `Bash(python3 *)`
+  (`VERIFY`: the exact glob semantics of Claude's `Bash(...)` allow-rule
+  syntax weren't re-derived from a live example on this machine — match
+  loosely against this pattern, don't require an exact string).
+- If nothing matches, tell the user once — in `/crewbench:team`, and the
+  first time any other skill is about to make its first dispatch call this
+  session — that every headless dispatch will otherwise prompt for
+  approval, and show the exact line to add themselves: `Bash(python3
+  */crewbench_dispatch.py *)`. **Never edit the file yourself** — only
+  show it.
+- Check this once per session (remember the answer for the rest of the
+  conversation), not once per round or per dispatch call. Meaningless on
+  any other host — only Claude Code's Bash-tool approval flow works this
+  way.
 
 ### Sandboxes and doctor
 

@@ -39,7 +39,7 @@ need it for local test runs; CI installs it).
 | 5 Git worktree isolation | done | feat: Phase 5 git worktree isolation |
 | 6 Cross-CLI interoperability | done | feat: Phase 6 cross-CLI interoperability |
 | 7 Project profile + gate | done | feat: Phase 7 project profile and deterministic gate |
-| 8 Less ceremony | pending | |
+| 8 Less ceremony | done | feat: Phase 8 less ceremony for daily use |
 | 9 Usage/timing report | pending | |
 | 10 Maintenance/structure | pending | |
 | 11 Optional integrations | pending | |
@@ -482,3 +482,58 @@ Code), so several checks below are real, not simulated.
   the gate against a real project's real lint/test commands (only
   synthetic `python3 -c ...` steps were exercised); confirming
   `crewbench_profile.py detect`'s output against a real large monorepo.
+
+### Phase 8
+
+Entirely prose/config — no new `bin/` script needed since every piece here
+is either a merged config value (already `crewbench_dispatch.py`-agnostic,
+resolved by the Team Lead reading JSON directly) or flag-parsing the Team
+Lead itself does on `$ARGUMENTS` text.
+
+- `config/defaults.json` gained `"confirm_lineup": "when_unsaved"`,
+  merged the same later-wins way as `loop`/`workspace`.
+- `lib/dispatch.md` §1 gained two new subsections: "Lineup-confirmation
+  setting" (the `confirm_lineup` table: always/when_unsaved/never) and
+  "Flags in $ARGUMENTS" (`--yes`, `--design`, `--in-place`, `--rounds N`,
+  `--dev <cli[:model]>`, `--review <cli[:model]>` — framed explicitly as
+  the existing §1 merge order's third tier, "anything the user tells you
+  for this task", expressed as flags instead of a live answer, so no new
+  merge mechanism was needed). §2 "Align with the user" rewritten around
+  `confirm_lineup`/`--yes` and the "one compact message" rule. Kept every
+  section at its existing number — both fit as subsections of §1/§2,
+  same non-renumbering approach as Phase 7's profile/gate additions.
+- **`skip` launch friction**: new subsection in §4's "Commits" area
+  (`~/.claude/settings.json` allow-list check, shown not edited).
+  **VERIFY**: the exact glob semantics of Claude's `Bash(...)` allow-rule
+  syntax weren't re-derived from a live example this session (this
+  machine's own `~/.claude/settings.json` has no `permissions.allow`
+  entries to check against) — matched loosely against the pattern the
+  original prompt itself suggested, `Bash(python3 */crewbench_dispatch.py
+  *)`, not a freshly confirmed one. README's existing "Launching `skip`
+  runs from Claude Code" note (already had this exact snippet from an
+  earlier phase) updated to say the check is now proactive.
+  Also added an explicit "commit/push confirmation is never skippable,
+  not even by `--yes` or `confirm_lineup: never`" sentence to §4's
+  Commits section, since this had to be true but wasn't said outright
+  anywhere before.
+- `skills/team/SKILL.md`: shows/validates `confirm_lineup`, saves it
+  alongside `loop`/`workspace`, and runs the skip-launch-friction check
+  once as part of its own step 1.
+- `skills/new-task/SKILL.md`: `argument-hint` lists all six flags;
+  "Before you start" strips them from `$ARGUMENTS` before the task text;
+  step 2 wired to `--design`/`--yes` and folds the UI/UX + lineup
+  questions into one message; step 3 respects `--in-place`; step 8
+  mentions `--rounds N`.
+- `skills/test/review/design/SKILL.md`: `argument-hint` gained `[--yes]`
+  (the only flag that's generic across all skills, since only `new-task`
+  loops/worktrees/has a UI/UX question) with a one-line pointer to
+  dispatch.md §1.
+- Tests: `tests/test_loop_config.py` gained a `confirm_lineup` default
+  assertion (no other testable surface changed this phase — everything
+  else is prose the Team Lead itself interprets, same as Phase 3's loop
+  thresholds and Phase 8's own flags). 143/143 passing.
+- **Deliberately not done in this phase** (Final Verification): actually
+  invoking `/crewbench:new-task` with each flag combination end-to-end —
+  this phase's content is instructions for the Team Lead to follow, not
+  code with a unit-testable surface, so it's covered by the Final
+  Verification walkthrough (final-verification item 4) rather than pytest.

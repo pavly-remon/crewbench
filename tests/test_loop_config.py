@@ -7,6 +7,11 @@ def test_defaults_json_has_loop_settings(dispatch):
     assert defaults["loop"]["fix_threshold"] == "major"
 
 
+def test_defaults_json_has_confirm_lineup_setting(dispatch):
+    defaults = json.loads((dispatch.ROOT / "config" / "defaults.json").read_text())
+    assert defaults["confirm_lineup"] == "when_unsaved"
+
+
 def test_code_reviewer_schema_requires_issue_id_and_allows_previous_issues(dispatch):
     schema = json.loads((dispatch.ROOT / "schemas" / "code-reviewer.json").read_text())
     issue_schema = schema["properties"]["issues"]["items"]
