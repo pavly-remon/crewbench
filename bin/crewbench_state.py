@@ -54,11 +54,11 @@ def make_task_id(text):
 def _atomic_write(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.parent / f".{path.name}.lock"
-    with open(lock_path, "w") as lock:
+    with open(lock_path, "w", encoding="utf-8") as lock:
         _lock_file(lock)
         try:
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=2) + "\n")
+            tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
             tmp.replace(path)
         finally:
             _unlock_file(lock)
@@ -72,7 +72,7 @@ def _index_path(task_dir):
 def _update_index(task_dir, state):
     index_path = _index_path(task_dir)
     try:
-        index = json.loads(index_path.read_text())
+        index = json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         index = {}
     index[state["id"]] = {
@@ -91,7 +91,7 @@ def load_state(task_dir):
     path = _state_path(task_dir)
     if not path.exists():
         raise SystemExit(f"no state.json in {task_dir} — run `new` first")
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def save_state(task_dir, state):
@@ -191,7 +191,7 @@ def cmd_append(args):
 def cmd_list(args):
     index_path = Path(args.root) / "index.json"
     try:
-        index = json.loads(index_path.read_text())
+        index = json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         index = {}
     rows = sorted(index.values(), key=lambda r: r.get("updated_at") or "", reverse=True)

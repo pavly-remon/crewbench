@@ -163,7 +163,7 @@ def agy_command_rules():
     """
     settings = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
     try:
-        rules = json.loads(settings.read_text()).get("permissions", {}).get("allow", [])
+        rules = json.loads(settings.read_text(encoding="utf-8")).get("permissions", {}).get("allow", [])
     except (OSError, ValueError):
         return [], []
     usable, broken = [], []
@@ -210,7 +210,7 @@ def limits_for(role, cli, skip=False):
 
 
 def build_prompt(role, cli, handoff, schema, skip=False):
-    brief = strip_frontmatter((ROOT / "agents" / ROLES[role]).read_text())
+    brief = strip_frontmatter((ROOT / "agents" / ROLES[role]).read_text(encoding="utf-8"))
     return "\n\n".join([
         brief.strip(),
         "## Limits\n\n" + limits_for(role, cli, skip),
@@ -297,7 +297,7 @@ def build_command(args, prompt, prompt_file, schema_path, tmp, conversation=None
         # action; bypassPermissions (opt-in) skips permission checks.
         mode = "plan" if role in READ_ONLY else ("bypassPermissions" if skip else "auto")
         cmd = ["claude", "-p", "--model", model, "--output-format", "stream-json", "--verbose",
-               "--json-schema", schema_path.read_text(),
+               "--json-schema", schema_path.read_text(encoding="utf-8"),
                "--tools", CLAUDE_TOOLS[role], "--strict-mcp-config",
                "--permission-mode", mode]
         if has_effort:
@@ -325,7 +325,9 @@ def build_command(args, prompt, prompt_file, schema_path, tmp, conversation=None
         # screenshots) -- codex gets its own transformed copy instead of the
         # canonical file. See codex_strict_schema()'s docstring.
         strict_schema_path = Path(tmp) / "output-schema.json"
-        strict_schema_path.write_text(json.dumps(codex_strict_schema(json.loads(schema_path.read_text()))))
+        strict_schema_path.write_text(
+            json.dumps(codex_strict_schema(json.loads(schema_path.read_text(encoding="utf-8")))),
+            encoding="utf-8")
         cmd = ["codex", "exec", "-m", model,
                "-s", "read-only" if role in READ_ONLY else ("danger-full-access" if skip else "workspace-write"),
                "--output-schema", str(strict_schema_path), "-o", str(last)]
@@ -601,7 +603,7 @@ def parse_output(cli, stream, stdout, last_message_file):
         text = final.get("result") or final.get("response") or ""
         return extract_json(text), denials, None
     if cli == "codex" and last_message_file and last_message_file.exists():
-        return extract_json(last_message_file.read_text()), [], None
+        return extract_json(last_message_file.read_text(encoding="utf-8")), [], None
     return extract_json(stdout), [], None
 
 
@@ -767,16 +769,16 @@ def _unlock_file(handle):
 def update_status(runs_dir, run, fields):
     """Merge fields into <runs_dir>/status.json under this run's name."""
     path = runs_dir / "status.json"
-    with open(runs_dir / ".status.lock", "w") as lock:
+    with open(runs_dir / ".status.lock", "w", encoding="utf-8") as lock:
         _lock_file(lock)
         try:
             try:
-                status = json.loads(path.read_text())
+                status = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 status = {}
             status.setdefault(run, {}).update(fields)
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(status, indent=2) + "\n")
+            tmp.write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
             tmp.replace(path)
         finally:
             _unlock_file(lock)
@@ -1004,7 +1006,7 @@ def cmd_doctor(argv):
 
 def _read_status(runs_dir):
     try:
-        return json.loads((runs_dir / "status.json").read_text())
+        return json.loads((runs_dir / "status.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
@@ -1026,7 +1028,7 @@ def cmd_start(argv):
                                           | getattr(subprocess, "DETACHED_PROCESS", 0))
     else:
         popen_kwargs["start_new_session"] = True
-    with open(launcher_log, "w") as lf:
+    with open(launcher_log, "w", encoding="utf-8") as lf:
         proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, **popen_kwargs)
     update_status(runs_dir, run, {"state": "starting", "launcher_pid": proc.pid})
@@ -1065,7 +1067,7 @@ def cmd_wait(argv):
         result_file = runs_dir / f"{r}.result.json"
         if result_file.exists():
             try:
-                envelopes[r] = json.loads(result_file.read_text())
+                envelopes[r] = json.loads(result_file.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 envelopes[r] = None
     all_finished = all(statuses[r].get("state") in ("done", "failed") for r in args.runs)
@@ -1154,7 +1156,7 @@ def main(argv=None):
                 "result_file": str(out_path), "log_file": str(log_path), "raw_output_file": str(raw_path)}
 
     def finish():
-        out_path.write_text(json.dumps(envelope, indent=2) + "\n")
+        out_path.write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
         update_status(runs_dir, run, {"state": "done" if envelope["ok"] else "failed",
                                       "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                                       "session_id": envelope["session_id"],
@@ -1169,11 +1171,11 @@ def main(argv=None):
         finish()
 
     schema_path = ROOT / "schemas" / f"{args.role}.json"
-    schema = json.loads(schema_path.read_text())
-    prompt = build_prompt(args.role, args.cli, handoff_path.read_text(), schema,
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    prompt = build_prompt(args.role, args.cli, handoff_path.read_text(encoding="utf-8"), schema,
                           args.skip_permissions and args.role not in READ_ONLY)
     prompt_path = runs_dir / f"{run}.prompt.md"
-    prompt_path.write_text(prompt)
+    prompt_path.write_text(prompt, encoding="utf-8")
     stream = Stream(args.cli)
     stdout_lines, stderr_parts = [], []
     warnings = []
@@ -1201,7 +1203,7 @@ def main(argv=None):
                                 stdout=subprocess.PIPE,
                                 # codex/copilot report progress on stderr: show it live
                                 stderr=subprocess.PIPE if args.cli in ("claude", "agy") else subprocess.STDOUT,
-                                text=True, bufsize=1, cwd=args.cwd,
+                                text=True, encoding="utf-8", errors="replace", bufsize=1, cwd=args.cwd,
                                 env=child_env(args.cli, args.role, task_id), **popen_kwargs)
 
     def kill_process_tree(proc):
@@ -1240,7 +1242,7 @@ def main(argv=None):
         stderr_thread = None
         if proc.stderr is not None:
             def drain_stderr():
-                with open(stderr_path, "a") as f:
+                with open(stderr_path, "a", encoding="utf-8") as f:
                     for line in proc.stderr:
                         f.write(line)
             stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
@@ -1257,10 +1259,10 @@ def main(argv=None):
         timer.cancel()
         if stderr_thread:
             stderr_thread.join(timeout=5)
-        stderr_parts.append(Path(stderr_path).read_text() if Path(stderr_path).exists() else "")
+        stderr_parts.append(Path(stderr_path).read_text(encoding="utf-8") if Path(stderr_path).exists() else "")
         return result_code
 
-    with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1) as log:
+    with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1, encoding="utf-8") as log:
         cmd, stdin, last_message = build_command(args, prompt, prompt_path, schema_path, tmp,
                                                  timeout_s=deadline - time.time())
         cmd[0:1] = cli_argv_prefix(cli_path)
@@ -1302,7 +1304,7 @@ def main(argv=None):
                 "it under \"blocked\". Continue the task from where you stopped, then give your "
                 "final answer as the JSON object described earlier.")
             resume_prompt_path = runs_dir / f"{run}.resume{resume_n + 1}.prompt.md"
-            resume_prompt_path.write_text(follow_up)
+            resume_prompt_path.write_text(follow_up, encoding="utf-8")
             cmd, stdin, _ = build_command(args, follow_up, resume_prompt_path, schema_path, tmp,
                                           conversation=stream.session_id,
                                           timeout_s=deadline - time.time())
@@ -1323,7 +1325,8 @@ def main(argv=None):
         envelope["session_id"] = stream.session_id
         envelope["resume_command"] = resume_command(args.cli, stream.session_id)
         envelope["usage"] = extract_usage(args.cli, stream, stdout, envelope["duration_s"])
-        raw_path.write_text(f"$ {cmd[0]} ...\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n")
+        raw_path.write_text(f"$ {cmd[0]} ...\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n",
+                            encoding="utf-8")
         result, denials, error = parse_output(args.cli, stream, stdout, last_message)
         result = normalize_optional_nulls(result, schema)
         if stream.denied_commands:

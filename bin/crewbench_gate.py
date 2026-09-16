@@ -47,7 +47,7 @@ DEFAULT_TIMEOUT = 600
 
 def load_commands(project_json_path):
     try:
-        data = json.loads(Path(project_json_path).read_text())
+        data = json.loads(Path(project_json_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     commands = data.get("commands")
@@ -86,7 +86,8 @@ def run_step(name, command, cwd, timeout):
         popen_kwargs["start_new_session"] = True
     start = time.time()
     proc = subprocess.Popen(_split(command), cwd=cwd, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, **popen_kwargs)
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                            errors="replace", **popen_kwargs)
     timed_out = False
     try:
         output, _ = proc.communicate(timeout=timeout)
@@ -116,7 +117,7 @@ def run_gate(cwd, task_dir, round_n, project_json_path, timeout):
     steps = steps_to_run(commands)
     result = {"ok": True, "steps": []}
     log_path = runs_dir / f"gate-r{round_n}.log"
-    with open(log_path, "w") as log:
+    with open(log_path, "w", encoding="utf-8") as log:
         if not steps:
             log.write("no gate commands configured in project.json — nothing to run\n")
         for name, command in steps:
@@ -132,7 +133,7 @@ def run_gate(cwd, task_dir, round_n, project_json_path, timeout):
                 result["ok"] = False
                 break
     result_path = runs_dir / f"gate-r{round_n}.result.json"
-    result_path.write_text(json.dumps(result, indent=2) + "\n")
+    result_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result, log_path, result_path
 
 

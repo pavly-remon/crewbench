@@ -98,6 +98,7 @@ def test_task_dir_and_round_name_run_artifacts(dispatch, git_repo, tmp_path, fak
          "--timeout", "10"],
         cwd=git_repo, env=env, capture_output=True, text=True, timeout=20,
     )
+    assert proc.stdout.strip(), f"no stdout from dispatch script; stderr was:\n{proc.stderr}"
     envelope = json.loads(proc.stdout)
     assert envelope["ok"] is False  # fake CLI never produces valid JSON — expected
     run_files = {p.name for p in (task_dir / "runs").iterdir()}

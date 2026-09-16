@@ -63,7 +63,7 @@ def detect_node(root, profile):
     if not pkg_path.exists():
         return
     try:
-        pkg = json.loads(pkg_path.read_text())
+        pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pkg = {}
     scripts = pkg.get("scripts", {}) if isinstance(pkg.get("scripts"), dict) else {}
@@ -117,7 +117,7 @@ def detect_python(root, profile):
     profile["languages"].append("python")
     profile["package_manager"] = profile["package_manager"] or "pip"
     if has_pyproject:
-        text = (root / "pyproject.toml").read_text(errors="replace")
+        text = (root / "pyproject.toml").read_text(encoding="utf-8", errors="replace")
         if "poetry" in text:
             profile["package_manager"] = "poetry"
             profile["install"] = profile["install"] or "poetry install"
@@ -125,17 +125,17 @@ def detect_python(root, profile):
             profile["package_manager"] = "uv" if "[tool.uv]" in text else profile["package_manager"]
     profile["install"] = profile["install"] or ("pip install -e .[dev]" if has_pyproject else "pip install -r requirements.txt")
     has_pytest_ini = any((root / d).exists() for d in ("pytest.ini", "conftest.py"))
-    has_pytest_config = has_pyproject and "pytest" in (root / "pyproject.toml").read_text(errors="replace")
+    has_pytest_config = has_pyproject and "pytest" in (root / "pyproject.toml").read_text(encoding="utf-8", errors="replace")
     if has_pytest_ini or has_pytest_config:
         profile["frameworks"].append("pytest")
         profile["commands"]["test"] = profile["commands"]["test"] or "pytest"
         profile["commands"]["test_changed"] = profile["commands"]["test_changed"] or "pytest --picked"
         profile["test_patterns"] += ["test_*.py", "*_test.py"]
-    if (root / "ruff.toml").exists() or (root / ".ruff.toml").exists() or (has_pyproject and "ruff" in (root / "pyproject.toml").read_text(errors="replace")):
+    if (root / "ruff.toml").exists() or (root / ".ruff.toml").exists() or (has_pyproject and "ruff" in (root / "pyproject.toml").read_text(encoding="utf-8", errors="replace")):
         profile["frameworks"].append("ruff")
         profile["commands"]["lint"] = profile["commands"]["lint"] or "ruff check ."
         profile["commands"]["format_check"] = profile["commands"]["format_check"] or "ruff format --check ."
-    if (root / "mypy.ini").exists() or (has_pyproject and "mypy" in (root / "pyproject.toml").read_text(errors="replace")):
+    if (root / "mypy.ini").exists() or (has_pyproject and "mypy" in (root / "pyproject.toml").read_text(encoding="utf-8", errors="replace")):
         profile["frameworks"].append("mypy")
         profile["commands"]["typecheck"] = profile["commands"]["typecheck"] or "mypy ."
 
@@ -156,7 +156,7 @@ def detect_make(root, profile):
     if not makefile.exists():
         return
     try:
-        targets = set(re.findall(r"^([a-zA-Z][\w-]*):", makefile.read_text(errors="replace"), re.M))
+        targets = set(re.findall(r"^([a-zA-Z][\w-]*):", makefile.read_text(encoding="utf-8", errors="replace"), re.M))
     except OSError:
         return
     for field, names in (("lint", ["lint"]), ("typecheck", ["typecheck", "type-check"]),

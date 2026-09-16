@@ -27,6 +27,7 @@ jobs:
     # everything else — including the lock-helper and validator tests — runs.
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.9", "3.12"]
     steps:

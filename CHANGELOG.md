@@ -101,3 +101,10 @@ from 2.x" section before your next task.
   executable there without `shell=True`; it's now launched through the
   current Python interpreter on Windows specifically. Never affects a
   real installed CLI in production.
+- Every file the dispatch scripts read or write (role briefs, schemas,
+  prompts, logs, `state.json`, `status.json`, project files) now opens
+  with an explicit `encoding="utf-8"` instead of the platform default —
+  the role briefs and this repo's own Markdown are full of em dashes and
+  section marks that a non-UTF-8 default locale (the common case on
+  Windows) can't decode, which silently crashed the whole dispatch
+  process before it could print anything.
