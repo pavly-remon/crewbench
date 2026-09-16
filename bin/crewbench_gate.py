@@ -73,7 +73,8 @@ def _split(command):
     # VERIFY: on Windows, npm/npx/yarn etc. are usually .cmd shims that need
     # shell semantics subprocess.Popen(shell=False) doesn't provide; not
     # exercised on a real Windows machine, same precedent as other
-    # POSIX-first, Windows-best-effort code in this repo (see CHECKPOINT.md).
+    # POSIX-first, Windows-best-effort code in this repo (e.g. the lock
+    # helper in crewbench_dispatch.py's _lock_file/_unlock_file).
     return shlex.split(command, posix=(os.name != "nt"))
 
 

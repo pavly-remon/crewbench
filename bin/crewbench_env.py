@@ -160,8 +160,7 @@ def whoami():
 # Model-listing command per CLI, argv after the CLI's own path. VERIFY:
 # only agy's was confirmed (`agy models`, real output inspected on this
 # machine); `claude --help`, `codex --help` and `copilot help commands`
-# were all checked and show no equivalent -- corrects an earlier
-# assumption (see CHECKPOINT.md) that claude had one too.
+# were all checked and show no equivalent for any of the other three.
 MODEL_LIST_COMMANDS = {"agy": ["models"]}
 
 

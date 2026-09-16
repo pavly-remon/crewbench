@@ -82,6 +82,16 @@ from 2.x" section before your next task.
   entries are now caught instead of breaking the Team Lead's merge later.
 - The dispatch script no longer crashes at import time on Windows
   (`fcntl` is now imported lazily, with an `msvcrt` fallback).
-
-See `CHECKPOINT.md` for the full phase-by-phase implementation notes,
-every `VERIFY` item, and known limitations.
+- Headless `codex` dispatch no longer fails outright with a 400: OpenAI's
+  structured-outputs strict mode (which `codex exec --output-schema`
+  uses) rejects any schema with an optional top-level property, which
+  `code-reviewer`'s `previous_issues` and `tester`'s `screenshots` both
+  are by design. codex now gets its own transformed copy of the schema
+  (every property required, optional ones made nullable instead); the
+  resulting explicit `null` it sends back for an unused optional field is
+  treated the same as an omitted key for validation and merging.
+- `doctor`'s config-dir check no longer reports a CLI as unusable just
+  because its config directory (e.g. `~/.claude`) hasn't been created
+  yet on this machine — found on a fresh CI run — it now also accepts a
+  directory that doesn't exist yet but has a writable existing ancestor
+  (config dirs are typically created lazily on first login).

@@ -916,6 +916,24 @@ def _auth_check(cli, cli_path):
     return False, "no auth check implemented for this CLI"
 
 
+def _dir_writable(path):
+    """True if `path` is already a writable directory, or doesn't exist yet
+    but could be (its nearest existing ancestor is a writable directory).
+    A CLI's config dir is commonly created lazily on first login/run, so
+    "doesn't exist yet" alone isn't evidence it can't be written to --
+    real bug found running `doctor` for real on a fresh machine/CI runner
+    that had never logged into a given CLI: the old check required the
+    directory to already exist, which fails for any CLI whose config dir
+    the user's shell hasn't created yet even though login would succeed."""
+    p = Path(path)
+    if p.exists():
+        return p.is_dir() and os.access(p, os.W_OK)
+    for ancestor in p.parents:
+        if ancestor.exists():
+            return ancestor.is_dir() and os.access(ancestor, os.W_OK)
+    return False
+
+
 def cmd_doctor(argv):
     """`crewbench_dispatch.py doctor --cli <cli> [--cwd <dir>]` — preflight
     for delegating to <cli> from inside a (possibly sandboxed) host: is it
@@ -943,12 +961,12 @@ def cmd_doctor(argv):
 
     config_dir = os.path.expanduser(CONFIG_DIRS[args.cli])
     report["config_dir"] = config_dir
-    writable = os.path.isdir(config_dir) and os.access(config_dir, os.W_OK)
+    writable = _dir_writable(config_dir)
     report["config_dir_writable"] = writable
     if not writable:
         report["errors"].append(
-            f"{args.cli}'s config dir ({config_dir}) is missing or not writable from here — a "
-            "headless child needs to read (and sometimes refresh) its login there")
+            f"{args.cli}'s config dir ({config_dir}) isn't writable from here (and can't be "
+            "created) — a headless child needs to read (and sometimes refresh) its login there")
 
     net_ok, net_detail = _network_ok(args.cli)
     report["network_ok"], report["network_detail"] = net_ok, net_detail
