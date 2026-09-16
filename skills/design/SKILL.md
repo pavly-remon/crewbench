@@ -1,7 +1,7 @@
 ---
 name: design
 description: Generate a UI/UX design spec from a description with the crewbench UI/UX designer (spec only — no implementation)
-argument-hint: "[what to design]"
+argument-hint: "[what to design] [--yes]"
 disable-model-invocation: true
 ---
 
@@ -17,13 +17,12 @@ Design request: $ARGUMENTS
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
-Read `<root>/lib/dispatch.md` and follow it for every hand-off below: build
-the lineup, align it with the user, then dispatch each role natively or
-through another CLI as it describes. "Delegate to <role>" below always means
-"dispatch per that protocol".
+Read `<root>/lib/dispatch.md`'s "Before you start (every skill)" section
+and follow it — this delegates, so §0's task folder setup applies.
 
-If the arguments line above is empty or still shows a placeholder, use the
-text the user gave when invoking this skill.
+Strip `--yes` (see dispatch.md §1's "Flags in $ARGUMENTS") from the
+arguments before treating the rest as the design request — it skips the
+lineup-confirmation question (§2), nothing else.
 
 ## Workflow
 

@@ -1,0 +1,4 @@
+{"event": "init", "conversation_id": "a1b2c3d4-0000-0000-0000-000000000002", "init": {"model": "gemini-3.8-flash"}}
+{"event": "step_update", "step_update": {"step_type": "tool", "state": "COMPLETE", "tool_name": "view_file", "tool_info": {"parameters": {"AbsolutePath": "/repo/src/calc.py"}}}}
+{"event": "step_update", "step_update": {"step_type": "tool", "state": "ERROR", "tool_name": "run_command", "tool_info": {"parameters": {"CommandLine": "npm test"}, "error": {"message": "permission check failed: command not allowed"}}}}
+{"event": "result", "result": {"status": "SUCCESS", "structured_output": {"status": "blocked", "summary": "Could not run the test suite.", "files_changed": [], "assumptions": [], "questions": [], "blocked": [{"action": "run npm test", "reason": "denied by agy permission check"}]}, "num_turns": 2, "usage": {"input_tokens": 5083, "output_tokens": 137, "total_tokens": 5220, "thinking_tokens": 0, "cache_read_tokens": 24470}}}

@@ -22,3 +22,12 @@ Keep the spec concrete and implementable — avoid vague direction like
 "make it feel modern." Every element in the spec should map to something
 the developer can build without having to make a design decision of their
 own.
+
+## Report format
+
+End your final answer with a single JSON object matching your result
+schema — no text before or after it. If you were given the schema
+directly (headless runs always include it), use that one; otherwise it's
+`schemas/ui-ux.json` in the crewbench install. Put the full spec in
+`spec_markdown`. `blocked` lists anything you needed but couldn't do
+because it was denied or sandboxed.

@@ -1,7 +1,7 @@
 ---
 name: review
 description: Review the changes on a git branch with the crewbench code reviewer (read-only — no edits)
-argument-hint: "[branch name] [optional base branch]"
+argument-hint: "[branch name] [optional base branch] [--yes]"
 disable-model-invocation: true
 ---
 
@@ -18,13 +18,12 @@ Arguments: $ARGUMENTS
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
-Read `<root>/lib/dispatch.md` and follow it for every hand-off below: build
-the lineup, align it with the user, then dispatch each role natively or
-through another CLI as it describes. "Delegate to <role>" below always means
-"dispatch per that protocol".
+Read `<root>/lib/dispatch.md`'s "Before you start (every skill)" section
+and follow it — this delegates, so §0's task folder setup applies.
 
-If the arguments line above is empty or still shows a placeholder, use the
-text the user gave when invoking this skill.
+Strip `--yes` (see dispatch.md §1's "Flags in $ARGUMENTS") from the
+arguments before parsing branch names from what's left — it skips the
+lineup-confirmation question (§2), nothing else.
 
 ## Workflow
 
@@ -46,10 +45,14 @@ text the user gave when invoking this skill.
    If there are no changes between the branches, say so and stop.
 
 3. Make the changed files readable. If the branch being reviewed is not
-   the one checked out, the files on disk won't match the branch — tell the
-   reviewer to rely on the diff (and `git show <branch>:<path>` output you
-   pass along for any file it needs in full) rather than reading those files
-   from disk.
+   the one checked out, the files on disk won't match the branch — either
+   tell the reviewer to rely on the diff (and `git show <branch>:<path>`
+   output you pass along for any file it needs in full), or offer to check
+   out `<branch>` into a detached worktree (`git worktree add
+   .crewbench/wt/<task-id> <branch> --detach`) so it can read real files
+   from disk instead. Offer this, don't default to it — `review` is meant
+   to stay lightweight; clean the worktree up (`git worktree remove`) when
+   done.
 
 4. Delegate to the code-reviewer role with the branch names,
    the commit list, the changed file list, and the diff.
