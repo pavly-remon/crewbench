@@ -26,7 +26,9 @@ through another CLI as it describes. "Delegate to <role>" below always means
 Set up the task folder per dispatch.md §0 before anything else: compute the
 task id, create `.crewbench/tasks/<task-id>/state.json`, and make sure
 `.crewbench/tasks/` and `.crewbench/wt/` are in `.git/info/exclude`. Update
-`state.json`'s `phase` as you move through the steps below.
+`state.json`'s `phase` as you move through the steps below. Also per §0's
+"Project profile": if `.crewbench/project.json` doesn't exist yet, run
+detection and get it confirmed once before delegating anything.
 
 If the arguments line above is empty or still shows a placeholder, use the
 text the user gave when invoking this skill.
@@ -60,30 +62,36 @@ text the user gave when invoking this skill.
    against the worktree per §5. This is round 1 — set `phase` to
    `implementing`.
 
-5. Once the developer reports done, dispatch the tester and code-reviewer
-   roles in parallel against the same files changed, following dispatch.md
-   §6 for what to pass each of them (round 1: the diff against the base
-   commit; round ≥ 2: also the previous round's issues/failures and the
-   delta diff).
+5. Once the developer reports done, run the gate per dispatch.md §6's
+   "Deterministic gate". If it fails, send the failing step's output back
+   to the developer as this round's fix list and go back to step 4 — this
+   round doesn't dispatch the tester or code-reviewer at all. If it passes
+   (or nothing is configured), continue to step 6.
 
-6. Merge their feedback per dispatch.md §6's severity threshold: if the
+6. Dispatch the tester and code-reviewer roles in parallel against the same
+   files changed, following dispatch.md §6 for what to pass each of them
+   (round 1: the diff against the base commit; round ≥ 2: also the previous
+   round's issues/failures and the delta diff). Tell the tester which gate
+   steps already passed.
+
+7. Merge their feedback per dispatch.md §6's severity threshold: if the
    tester passed and every reviewer issue is below `loop.fix_threshold`
-   (and any `previous_issues` are all `resolved`), go to step 9 — list
+   (and any `previous_issues` are all `resolved`), go to step 10 — list
    below-threshold issues in the final report as optional follow-ups. Wait
    for both roles to finish before deciding. Otherwise combine everything
    at or above the threshold plus all tester failures into a single fix
    list and send the developer back once — don't run two separate fix
    loops.
 
-7. Apply dispatch.md §6's stopping rules: cap at `loop.max_rounds`, and
+8. Apply dispatch.md §6's stopping rules: cap at `loop.max_rounds`, and
    stop early on oscillation (the same issue or failing test unresolved two
    rounds running). Either way, stop and summarize exactly what keeps
    failing instead of continuing to loop.
 
-8. Never dump raw subagent output on the user. Translate to a short,
+9. Never dump raw subagent output on the user. Translate to a short,
    plain-language status update.
 
-9. Committing is yours alone — no crew role commits or pushes. Follow
+10. Committing is yours alone — no crew role commits or pushes. Follow
    dispatch.md §5's commit step (worktree mode: commit on `crew/<task-id>`,
    then ask how to bring it back — merge, cherry-pick, leave the branch, or
    nothing yet) or the plain in-place flow (`git status`/`git diff --stat`,

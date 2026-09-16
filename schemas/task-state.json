@@ -38,6 +38,10 @@
         "properties": {
           "round": { "type": "integer" },
           "runs": { "type": "array", "items": { "type": "string" } },
+          "gate": {
+            "type": ["object", "null"],
+            "description": "bin/crewbench_gate.py's result for this round, when the gate ran (see lib/dispatch.md §6's 'Deterministic gate'). null when nothing was configured or the round had no gate step."
+          },
           "verdicts": { "type": "object" },
           "open_issue_ids": { "type": "array", "items": { "type": "string" } },
           "snapshot_ref": { "type": ["string", "null"] }

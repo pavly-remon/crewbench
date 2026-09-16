@@ -47,8 +47,8 @@ folder before anything else happens:
 ```
 .crewbench/
   team.json            (unchanged, user-owned, committable)
-  project.json         (Phase 6, committable)
-  project.md           (Phase 6, committable)
+  project.json         (Phase 7, committable)
+  project.md           (Phase 7, committable)
   index.json           (auto-maintained — don't hand-edit)
   tasks/<task-id>/
     state.json
@@ -82,6 +82,35 @@ shape (a `command` of `test`/`review`/`design`) but never loop past one
 round and stay `in-place` — no `base_commit`/`branch`/`worktree` fields to
 maintain beyond what `review`'s own workflow already gathers (the branch
 and base it's comparing).
+
+### Project profile
+
+Before the first hand-off of any task, make sure `.crewbench/project.json`
+exists:
+
+- If it does, read it (and `.crewbench/project.md`, if present) and include
+  a short summary of both — package manager, configured `commands`,
+  languages/frameworks, source dirs, and `project.md`'s conventions — in
+  **every** role hand-off, so each role doesn't have to rediscover configs
+  itself.
+- If it doesn't, run `python3 <root>/bin/crewbench_profile.py detect --cwd .`,
+  show the compact result to the user, and ask them to confirm or correct it
+  once (this is the same flow `/crewbench:profile refresh` runs any time
+  later). Only after they confirm, write `.crewbench/project.json` (fields
+  per `schemas/project.json`) with `confirmed: true`. Never write it
+  silently. If detection finds nothing (empty `languages`), that's a valid
+  confirmed result too — don't loop asking.
+- `project.json`'s `commands` (`lint`, `typecheck`, `test`, `test_changed`,
+  `build`, `format_check`) feed `bin/crewbench_gate.py` (§6, "Deterministic
+  gate") directly — the gate reads `project.json` itself, you don't pass its
+  commands on the command line.
+- `project.json`'s `agy_allow_rules` are suggestions only — show them (with
+  `crewbench_profile.py agy-rules`) via `/crewbench:profile`, never write to
+  `~/.gemini/antigravity-cli/settings.json` yourself.
+- `project.md` is free-form prose (folder structure, state management,
+  styling approach, testing conventions) that only the user or
+  `/crewbench:profile edit` adds to — crewbench never invents conventions
+  and writes them there on its own.
 
 ## 1. Build the lineup
 
@@ -553,8 +582,8 @@ This is the default for `new-task` (`workspace.mode: worktree`, §1). `test`,
    without this step:
    - Run `workspace.setup`'s commands, if any are configured, inside the
      worktree.
-   - Otherwise, if Phase 6's project profile has an install command, ask
-     the user once whether to run it and offer to save it into
+   - Otherwise, if `project.json` (§0's "Project profile") has an install
+     command, ask the user once whether to run it and offer to save it into
      `workspace.setup` for next time.
    - Offer to copy files matching `workspace.copy` from the main tree into
      the worktree — list which files exist first, and only copy on yes.
@@ -609,6 +638,38 @@ meant to stay lightweight and read-only against the current checkout.
 
 This applies to `new-task`'s tester/code-reviewer rounds (see its skill for
 the overall flow); `test`, `review` and `design` don't loop.
+
+### Deterministic gate (before the LLM tester)
+
+Once the developer reports done for a round, run the gate before dispatching
+the tester and code-reviewer:
+
+```
+python3 <root>/bin/crewbench_gate.py --cwd <worktree-or-project-root> \
+    --task-dir .crewbench/tasks/<task-id> --round <n>
+```
+
+It reads `.crewbench/project.json`'s `commands` itself (no need to pass
+them) and runs, in order, whichever of `format_check`, `lint`, `typecheck`,
+`test_changed` (or `test` if `test_changed` isn't configured) has a command
+configured — skipping any that don't. It stops at the first failing step.
+Output is captured to `<task-dir>/runs/gate-r<n>.log`; the JSON result
+(`{"ok": bool, "steps": [{"name", "command", "exit_code", "duration_s",
+"timed_out", "output_tail"}, ...]}`) is also written to
+`<task-dir>/runs/gate-r<n>.result.json` and printed on stdout. It runs
+synchronously under your own shell tool (it's a deterministic check, not an
+LLM role — no `start`/`wait` needed), and only ever runs commands the user
+already confirmed into `project.json`.
+
+- **If the gate fails** (`ok: false`): send the failing step's
+  `output_tail` straight back to the developer as this round's fix list —
+  don't dispatch the tester or code-reviewer this round. This still counts
+  as a round toward `loop.max_rounds`. Record the gate result under this
+  round's entry in `state.json.rounds[]` (a `gate` field alongside `runs`).
+- **If the gate passes, or nothing is configured** (`steps: []`): proceed to
+  the tester and code-reviewer below. Tell the tester which gate steps
+  already passed (e.g. "lint and typecheck already passed — focus on
+  acceptance criteria and new tests, not re-running the whole suite").
 
 ### Round 1: always give the reviewer a diff
 

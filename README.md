@@ -49,9 +49,10 @@ then install `crewbench` from the `PiCode` marketplace in `/plugins`.
 | `/crewbench:status [task-id]` | Recent tasks, or one task's phase/lineup/rounds/running runs. Read-only |
 | `/crewbench:resume [task-id]` | Resume an interrupted task from its saved state, without re-asking the lineup |
 | `/crewbench:doctor` | Check that every CLI in the lineup is installed, reachable and logged in from this host. Read-only |
+| `/crewbench:profile [show\|refresh\|edit <change>]` | Show, (re)detect, or edit the project profile (`.crewbench/project.json`/`project.md`) |
 
 In Codex, invoke the skills by name (`$new-task`, `$test`, `$review`,
-`$design`, `$team`, `$status`, `$resume`, `$doctor`).
+`$design`, `$team`, `$status`, `$resume`, `$doctor`, `$profile`).
 
 `test`, `review`, and `design` only report — they never change your code. Each
 offers to hand its results to `/crewbench:new-task` if you want something
@@ -69,16 +70,27 @@ The Team Lead will:
    instead). Asks first if your tree is dirty, and about running an
    install command in the fresh worktree.
 5. Hand implementation to the developer.
-6. Run the tester and code reviewer in parallel on the changed files.
-7. Send one combined fix list back to the developer if the tester fails or
+6. Run the deterministic gate (`format_check`/`lint`/`typecheck`/
+   `test_changed` from `.crewbench/project.json`, whichever are
+   configured). A failing step goes straight back to the developer as that
+   round's fix list — no tester/reviewer run that round.
+7. Once the gate passes (or nothing is configured), run the tester and
+   code reviewer in parallel on the changed files, telling the tester which
+   gate steps already passed.
+8. Send one combined fix list back to the developer if the tester fails or
    the reviewer raises an issue at or above `loop.fix_threshold` (default
    `major`), up to `loop.max_rounds` (default 3). Later rounds review only
    the delta and re-check the previous round's issues/failures; stuck items
    (unresolved two rounds running) stop the loop early. Below-threshold
    issues are listed as optional follow-ups instead of triggering a round.
-8. Report back in plain language. In worktree mode, ask how to bring the
+9. Report back in plain language. In worktree mode, ask how to bring the
    commit back (merge, cherry-pick, leave the branch, or nothing yet)
    before offering to remove the worktree.
+
+The first `new-task` in a project with no `.crewbench/project.json` runs
+`bin/crewbench_profile.py detect` and asks you to confirm the result once
+before delegating anything — see `/crewbench:profile` to show, refresh or
+edit it any time after that.
 
 ## Team lineup
 

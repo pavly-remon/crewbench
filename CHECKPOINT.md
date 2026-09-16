@@ -38,7 +38,7 @@ need it for local test runs; CI installs it).
 | 4 Task identity/state/status/resume | done | feat: Phase 4 task identity, state, status and resume |
 | 5 Git worktree isolation | done | feat: Phase 5 git worktree isolation |
 | 6 Cross-CLI interoperability | done | feat: Phase 6 cross-CLI interoperability |
-| 7 Project profile + gate | pending | |
+| 7 Project profile + gate | done | feat: Phase 7 project profile and deterministic gate |
 | 8 Less ceremony | pending | |
 | 9 Usage/timing report | pending | |
 | 10 Maintenance/structure | pending | |
@@ -401,3 +401,84 @@ Code), so several checks below are real, not simulated.
   running `scripts/matrix_smoke.py` for real; confirming `codex login
   status`'s failure-case exit code; confirming copilot's actual plugin
   install layout.
+
+### Phase 7
+
+- **`bin/crewbench_profile.py`** existed as untracked work-in-progress from
+  before this session's context reset (its `detect`/`agy-rules`
+  subcommands, per-ecosystem detectors for node/python/go/Makefile). Found
+  and fixed a real bug while reviewing it before building on it:
+  `detect_python()`'s pytest-detection line was `any(...) or "pytest" in
+  path.read_text() if has_pyproject else False` — Python parses `A or B if
+  C else D` as `(A or B) if C else D`, not `A or (B if C else D)`, so (a)
+  pytest detection was entirely gated on `has_pyproject` even though
+  `pytest.ini`/`conftest.py` are independent signals, and (b) `B`
+  (`pyproject.toml.read_text()`) was evaluated unconditionally before the
+  ternary resolved, crashing with `FileNotFoundError` whenever only
+  `requirements*.txt` existed. Fixed by computing both conditions as named
+  booleans first. Regression-tested in `tests/test_profile.py`.
+- **New `schemas/project.json`**: documents `.crewbench/project.json`'s
+  shape (loose, `additionalProperties: true`, same rationale as
+  `task-state.json` — it goes through a human-confirmation step, not the
+  strict role-schema contract).
+- **New `bin/crewbench_gate.py`** (stdlib): `--cwd --task-dir --round
+  [--project-json] [--timeout]`. Reads `commands` from `project.json`
+  itself (default `<cwd>/.crewbench/project.json`) rather than taking them
+  as a CLI argument — the file is committed, so it's already present in a
+  worktree checked out from a commit where it exists. Runs configured
+  steps in order (`format_check`, `lint`, `typecheck`, then
+  `test_changed`/`test`), **stopping at the first failing step** — the
+  prompt didn't specify fail-fast vs. run-all; chose fail-fast since a
+  failing lint/typecheck step's output is usually what the next step would
+  fail on too, and the developer only needs one fix list per round
+  (**deviation**, noted for the final report). Reuses
+  `crewbench_dispatch`'s `_terminate_pid_group`/`_hard_kill_pid_group`/
+  `GRACEFUL_KILL_TIMEOUT` for the same SIGTERM-then-SIGKILL process-group
+  kill on a per-step timeout (default 600s), same import pattern
+  `crewbench_state.py` already used. Output tail capped at 200 lines.
+  Manually smoke-tested: pass/fail steps, stop-at-first-failure, and a
+  real timeout-kills-the-sleeping-child case (`ps` confirmed no orphan)
+  before writing the equivalent pytest tests.
+- **`lib/dispatch.md`**: fixed two stale "(Phase 6, committable)" labels on
+  `project.json`/`project.md` in §0's layout diagram (this repo's own
+  phase numbering always called it Phase 7 — see this file's own Status
+  table); added a "Project profile" subsection to §0 (first-run detection
+  + confirm flow, what feeds the gate, agy-rules are suggestions-only) and
+  a "Deterministic gate" subsection to §6 (before the round-1 reviewer
+  content, since the gate runs before tester/reviewer within a round).
+  Deliberately did **not** renumber dispatch.md's top-level sections to
+  fit these in as their own numbered sections — both fit naturally as
+  subsections of existing §0/§6, and Phase 5's precedent (a real
+  renumber, since worktree isolation didn't fit existing sections) showed
+  how much cross-reference churn a renumber costs; grepped for
+  `dispatch.md §` afterward to confirm no reference needed updating.
+- **`schemas/task-state.json`**: added optional `gate` field to
+  `rounds[]` items (the round's `crewbench_gate.py` result, or `null`).
+- **`skills/new-task/SKILL.md`**: "Before you start" now triggers
+  first-run project-profile detection; inserted a new step 5 (run the
+  gate; on failure, fix list back to the developer, no tester/reviewer
+  this round) between the old steps 4 (developer) and 5 (tester/reviewer),
+  renumbering 5–9 to 6–10.
+- **New `skills/profile/SKILL.md`** (`/crewbench:profile
+  [show|refresh|edit <change>]`, `disable-model-invocation: true`):
+  show reads project.json/project.md; refresh runs `detect`, shows the
+  proposal next to what's there, confirms once, then writes (plus agy
+  allow-rule suggestions — shown only, never written to
+  `~/.gemini/antigravity-cli/settings.json`); edit applies a plain-language
+  change after confirmation. Never writes without confirmation, matching
+  team/status's style.
+- Synced all three manifests' `description` to mention `:profile` (kept
+  `check_manifests.py` green); README's command table, `new-task` workflow
+  list (added the gate as its own step) and the "first new-task with no
+  project.json" note updated.
+- Tests: `tests/test_profile.py` (node/python/go detection including the
+  pytest-detection regression above, an empty-dir "valid confirmed shape"
+  case, `agy_rules_for_commands`' prefix/dedup behavior) and
+  `tests/test_gate.py` (no-commands-configured, ordered execution,
+  `test_changed` preferred over `test`, stop-at-first-failure, output-tail
+  capture, timeout kill — skipped on Windows like the existing
+  process-group tests, `--project-json` override). 142/142 passing.
+- **Deliberately not done in this phase** (Final Verification): running
+  the gate against a real project's real lint/test commands (only
+  synthetic `python3 -c ...` steps were exercised); confirming
+  `crewbench_profile.py detect`'s output against a real large monorepo.
