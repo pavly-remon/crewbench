@@ -108,3 +108,16 @@ from 2.x" section before your next task.
   section marks that a non-UTF-8 default locale (the common case on
   Windows) can't decode, which silently crashed the whole dispatch
   process before it could print anything.
+- Writing a role's prompt to a child's stdin no longer crashes the whole
+  run if the child exits (or just closes stdin) before reading it all —
+  confirmed live on Windows, where this raises `BrokenPipeError`
+  immediately rather than tolerating it.
+- `crewbench_env.py`'s `check-model`/`list_models()` (and, indirectly,
+  `/crewbench:team`'s model-freshness check) now also goes through the
+  same Windows `.py`-launch fix as the main dispatch path — it was
+  missed in the first pass at that fix.
+- `crewbench_gate.py`'s command splitting now always uses `shlex.split(
+  ..., posix=True)` — confirmed live on Windows that `posix=False` keeps
+  the literal quote characters in each token, so a quoted gate command's
+  quotes were passed straight through as part of the argument instead of
+  being stripped, silently changing what actually ran.

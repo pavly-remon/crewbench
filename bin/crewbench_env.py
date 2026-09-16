@@ -46,6 +46,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 KNOWN_HOSTS = ("claude", "codex", "agy", "copilot")
 
+
+def cli_argv_prefix(cli_path):
+    """The argv prefix that actually launches `cli_path`. A single-element
+    passthrough for every real, installed CLI (always directly executable)
+    in production. Only matters for CREWBENCH_CLI_OVERRIDE_<CLI> (tests):
+    on Windows, a bare `.py` path isn't directly executable via subprocess
+    (no shell=True, no file-association lookup the way double-clicking or
+    `cmd.exe` would do it — confirmed live: `[WinError 193] %1 is not a
+    valid Win32 application`), so it's launched through the current Python
+    interpreter instead. Shared by crewbench_dispatch.py (the role-CLI
+    spawn and doctor's checks) and this module's own list_models()."""
+    if os.name == "nt" and cli_path.lower().endswith(".py"):
+        return [sys.executable, cli_path]
+    return [cli_path]
+
 # Real, per-host crewbench plugin-cache locations, confirmed by installing
 # crewbench under all four CLIs on one development machine (agy's cache has
 # no version subdirectory; claude/codex do). copilot's is a best-effort
@@ -170,8 +185,8 @@ def list_models(cli, cli_path):
     if cli not in MODEL_LIST_COMMANDS:
         return None, f"no model-listing command is known for {cli} (see MODEL_LIST_COMMANDS)"
     try:
-        r = subprocess.run([cli_path, *MODEL_LIST_COMMANDS[cli]],
-                            capture_output=True, text=True, timeout=20)
+        r = subprocess.run(cli_argv_prefix(cli_path) + MODEL_LIST_COMMANDS[cli],
+                            capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace")
     except (OSError, subprocess.SubprocessError) as exc:
         return None, str(exc)
     if r.returncode != 0:

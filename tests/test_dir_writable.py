@@ -17,6 +17,11 @@ def test_deeply_nested_nonexistent_dir_still_resolves_to_writable_ancestor(dispa
 
 def test_nonexistent_dir_under_a_read_only_ancestor_is_not_writable(dispatch, tmp_path):
     import os
+
+    import pytest
+    if os.name == "nt":
+        pytest.skip("chmod doesn't restrict directory writability on Windows "
+                     "(confirmed live on Windows CI: os.access still reports W_OK)")
     ro_parent = tmp_path / "read-only-parent"
     ro_parent.mkdir()
     os.chmod(ro_parent, 0o500)

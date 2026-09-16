@@ -47,7 +47,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from crewbench_env import CONFIG_DIRS  # noqa: E402
+from crewbench_env import CONFIG_DIRS, cli_argv_prefix  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -130,21 +130,6 @@ def resolve_cli_path(cli):
     path), otherwise whatever's on PATH."""
     override = os.environ.get(f"CREWBENCH_CLI_OVERRIDE_{cli.upper()}")
     return override or shutil.which(cli)
-
-
-def cli_argv_prefix(cli_path):
-    """The argv prefix that actually launches `cli_path`. A single-element
-    passthrough for every real, installed CLI (always directly executable)
-    in production. Only matters for CREWBENCH_CLI_OVERRIDE_<CLI> (tests):
-    on Windows, a bare `.py` path isn't directly executable via
-    subprocess (no shell=True, no file-association lookup the way
-    double-clicking or `cmd.exe` would do it), so it's launched through
-    the current Python interpreter instead — found running this repo's
-    own test suite for real on Windows CI, where every override-based
-    test failed with empty stdout (the process never actually started)."""
-    if os.name == "nt" and cli_path.lower().endswith(".py"):
-        return [sys.executable, cli_path]
-    return [cli_path]
 
 
 def strip_frontmatter(text):
@@ -1230,8 +1215,18 @@ def main(argv=None):
         proc = spawn(cmd, stdin)
         update_status(runs_dir, run, {"state": "running", "pid": proc.pid})
         if stdin:
-            proc.stdin.write(stdin)
-            proc.stdin.close()
+            # The child may exit (or simply close its stdin) before reading
+            # all of this, especially a fast-failing one -- confirmed live
+            # on Windows CI, where writing to an already-closed pipe raises
+            # BrokenPipeError immediately rather than tolerating it the way
+            # POSIX generally does. Not our failure to report: whatever the
+            # child did or didn't read, parse_output()/validate() below are
+            # what actually decide if the run succeeded.
+            try:
+                proc.stdin.write(stdin)
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
 
         def kill():
             timed_out.set()

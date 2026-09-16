@@ -70,12 +70,23 @@ def steps_to_run(commands):
 
 
 def _split(command):
+    # Always posix=True: confirmed live on Windows CI that posix=False
+    # keeps the literal quote characters in each token (shlex's non-posix
+    # mode is for re-lexing shell syntax, not stripping quotes), so a
+    # command like `python -c "import sys; sys.exit(1)"` got its quotes
+    # passed straight through to Python as part of the token -- which
+    # parses as a harmless string-literal statement instead of the
+    # intended code, silently "succeeding" with exit 0. posix=True
+    # strips quotes correctly on every platform.
     # VERIFY: on Windows, npm/npx/yarn etc. are usually .cmd shims that need
     # shell semantics subprocess.Popen(shell=False) doesn't provide; not
     # exercised on a real Windows machine, same precedent as other
     # POSIX-first, Windows-best-effort code in this repo (e.g. the lock
-    # helper in crewbench_dispatch.py's _lock_file/_unlock_file).
-    return shlex.split(command, posix=(os.name != "nt"))
+    # helper in crewbench_dispatch.py's _lock_file/_unlock_file). Also
+    # unverified: how posix=True's backslash-escape handling interacts
+    # with a Windows path containing backslashes inside a configured
+    # command (e.g. `python C:\scripts\lint.py`).
+    return shlex.split(command, posix=True)
 
 
 def run_step(name, command, cwd, timeout):
