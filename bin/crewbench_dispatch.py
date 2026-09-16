@@ -23,8 +23,11 @@ While the role works, a readable live log is written to <run>.log (watch it
 with `tail -f`) and <task-dir>/runs/status.json (or the handoff's directory,
 pre-Phase-4) tracks every run. When done, prints the envelope as JSON on
 stdout and writes it to <run>.result.json (raw output in <run>.raw.txt). The
-envelope includes the child's session id and a command to reopen it. Exit
-code is 0 when the role returned a valid result, 1 otherwise.
+envelope includes the child's session id, a command to reopen it, and a
+`usage` field with whatever timing/token/cost data that CLI actually
+exposed (fields are null where the CLI doesn't report them; missing usage
+never fails a run). Exit code is 0 when the role returned a valid result,
+1 otherwise.
 """
 
 import argparse
@@ -538,6 +541,59 @@ def parse_output(cli, stream, stdout, last_message_file):
     return extract_json(stdout), [], None
 
 
+# Best-effort token-count scan of plain-text CLI output, for CLIs (codex,
+# copilot) that don't expose usage through a structured event today. VERIFY:
+# no confirmed "tokens used" footer was found in `codex exec --help` or
+# `copilot --help` as of writing; this stays null rather than guessing when
+# nothing matches.
+USAGE_TEXT_PATTERNS = [
+    re.compile(r"tokens?\s*used[:\s]+([\d,]+)", re.I),
+    re.compile(r"total\s*tokens[:\s]+([\d,]+)", re.I),
+]
+
+
+def _usage_from_text(text):
+    for pattern in USAGE_TEXT_PATTERNS:
+        match = pattern.search(text or "")
+        if match:
+            try:
+                return int(match.group(1).replace(",", ""))
+            except ValueError:
+                continue
+    return None
+
+
+def extract_usage(cli, stream, stdout, duration_s):
+    """Whatever usage/cost data this run's CLI actually exposed — every
+    field but `duration_s` may be null; a run's ok/error never depends on
+    this being complete (never fails a run over missing usage)."""
+    usage = {"duration_s": duration_s, "input_tokens": None, "output_tokens": None,
+             "total_tokens": None, "cost_usd": None, "num_turns": None}
+    final = stream.final if isinstance(stream.final, dict) else {}
+    if cli == "claude":
+        # Confirmed shape: Claude Code's documented stream-json terminal
+        # `result` event (`usage`, `total_cost_usd`, `num_turns`).
+        raw = final.get("usage") if isinstance(final.get("usage"), dict) else {}
+        usage["input_tokens"] = raw.get("input_tokens")
+        usage["output_tokens"] = raw.get("output_tokens")
+        if isinstance(usage["input_tokens"], int) and isinstance(usage["output_tokens"], int):
+            usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+        usage["cost_usd"] = final.get("total_cost_usd")
+        usage["num_turns"] = final.get("num_turns")
+    elif cli == "agy":
+        # VERIFY: agy's result-event usage field names aren't confirmed
+        # from --help or live output; read a plausible `usage` sub-object
+        # if agy ever sends one, but never require it.
+        raw = final.get("usage") if isinstance(final.get("usage"), dict) else {}
+        usage["input_tokens"] = raw.get("input_tokens", raw.get("prompt_tokens"))
+        usage["output_tokens"] = raw.get("output_tokens", raw.get("completion_tokens"))
+        usage["total_tokens"] = raw.get("total_tokens")
+        usage["cost_usd"] = final.get("cost_usd", final.get("cost"))
+    elif cli in ("codex", "copilot"):
+        usage["total_tokens"] = _usage_from_text(stdout)
+    return usage
+
+
 _JSON_TYPES = {
     "string": str, "boolean": bool, "array": list, "object": dict, "null": type(None),
 }
@@ -985,7 +1041,7 @@ def main(argv=None):
     log_path = runs_dir / f"{run}.log"
     envelope = {"role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort,
                 "skip_permissions": args.skip_permissions and args.role not in READ_ONLY,
-                "ok": False, "exit_code": None, "duration_s": None, "result": None,
+                "ok": False, "exit_code": None, "duration_s": None, "result": None, "usage": None,
                 "permission_denials": [], "error": None, "session_id": None, "resume_command": None,
                 "result_file": str(out_path), "log_file": str(log_path), "raw_output_file": str(raw_path)}
 
@@ -1158,6 +1214,7 @@ def main(argv=None):
         envelope["exit_code"] = code
         envelope["session_id"] = stream.session_id
         envelope["resume_command"] = resume_command(args.cli, stream.session_id)
+        envelope["usage"] = extract_usage(args.cli, stream, stdout, envelope["duration_s"])
         raw_path.write_text(f"$ {cmd[0]} ...\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n")
         result, denials, error = parse_output(args.cli, stream, stdout, last_message)
         if stream.denied_commands:

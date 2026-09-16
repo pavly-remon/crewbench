@@ -277,6 +277,20 @@ the foreground and blocked on — this avoids depending on your own CLI's
 shell-tool timeout or its background-job behavior, which vary by host. The
 Team Lead can also `crewbench_dispatch.py cancel` a run mid-flight.
 
+### Usage and timing
+
+Every run's envelope carries a `usage` field with whatever timing/token/
+cost data that CLI actually exposes — always wall-clock duration; tokens,
+cost, and turn count when the CLI reports them (`null` otherwise; a run
+never fails just because usage data is missing). The final report and
+`/crewbench:status` both end with one line per role and a total:
+
+```
+developer · agy gemini-3.8-flash · 2 runs · 6m12s
+tester · host (sonnet) · 1 run · 1m40s · $0.09 · 8.1k tokens
+total: 3 runs · 7m52s
+```
+
 ### Sandboxes and CLI health
 
 A role CLI started from inside your own CLI's sandbox inherits it — it can

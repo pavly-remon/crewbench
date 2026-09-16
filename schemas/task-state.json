@@ -51,7 +51,7 @@
     },
     "usage": {
       "type": "object",
-      "description": "Per-role aggregate: runs, total duration, tokens (if known), model, CLI. See lib/dispatch.md's usage section."
+      "description": "Keyed by role name. Each value: { runs, duration_s, tokens, cost_usd, cli, model } — tokens/cost_usd stay null until a run actually reports them. See lib/dispatch.md §4's 'Usage and timing' section for the per-run aggregation rule and §7's 'Usage summary' for how it's reported."
     },
     "notes": { "type": "array", "items": { "type": "string" } }
   },

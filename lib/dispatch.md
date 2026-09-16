@@ -429,6 +429,7 @@ run the script from if omitted.
      "role": "developer", "cli": "agy", "model": "gemini-3.8-flash", "effort": "medium",
      "ok": true, "exit_code": 0, "duration_s": 41.2,
      "result": { "status": "done", "summary": "...", "files_changed": [], "assumptions": [], "questions": [], "blocked": [] },
+     "usage": { "duration_s": 41.2, "input_tokens": null, "output_tokens": null, "total_tokens": null, "cost_usd": null, "num_turns": null },
      "permission_denials": [], "error": null, "warnings": [], "notes": [],
      "session_id": "1c16c942-...", "resume_command": "agy --conversation 1c16c942-...",
      "result_file": "...", "log_file": "...", "raw_output_file": "..."
@@ -479,6 +480,39 @@ run the script from if omitted.
    the user once — don't change their settings yourself and don't undo
    anything on their behalf. `notes` (e.g. "remote-tracking refs updated
    (likely git fetch)") are informational only — no action needed.
+
+### Usage and timing
+
+`usage` records whatever timing/token/cost data that run's CLI actually
+exposed — `duration_s` (wall-clock, same value as the envelope's top-level
+`duration_s`) is always present; `input_tokens`, `output_tokens`,
+`total_tokens`, `cost_usd` and `num_turns` are `null` whenever that CLI or
+run didn't report them. A run's `ok`/`error` never depends on `usage` being
+complete — missing usage is not a failure.
+
+Confirmed shape: claude's `--output-format stream-json` terminal `result`
+event's documented `usage`/`total_cost_usd`/`num_turns` fields. `VERIFY`
+(best-effort, not confirmed live for this feature): agy's equivalent
+`usage` sub-object field names, and a plain text scan of codex/copilot's
+stdout for a "tokens used" style line — neither CLI's headless output is
+documented to expose usage as of writing, so both commonly stay `null` in
+practice.
+
+After each run finishes, fold its `usage` into `state.json.usage.<role>`
+(§0's field reference) — `get` the current value, add to it, `set` it
+back:
+
+- `runs`: increment by 1.
+- `duration_s`: add this run's `usage.duration_s`.
+- `tokens`: add this run's `usage.total_tokens` (or `input_tokens` +
+  `output_tokens` when only those are known); leave `null` if this role
+  has never reported any tokens yet, don't treat a null run as a zero.
+- `cost_usd`: same addition rule as `tokens`.
+- `cli` / `model`: overwrite with this run's values (the summary line only
+  needs the latest, not a history).
+
+Do this after every run, not just at the end, so a stopped or failed task
+still has a partial usage summary for `/crewbench:status`.
 
 ### Safety
 
@@ -810,3 +844,24 @@ report as "optional follow-ups" instead.
 
 When summarizing results to the user, mention which CLI/model did the work
 only when it isn't the default lineup, or when something failed.
+
+### Usage summary
+
+End every final report (`new-task`, `test`, `review`, `design`) with one
+compact line per role that actually ran, from `state.json.usage` (see §4's
+"Usage and timing"), then a total:
+
+```
+developer · agy gemini-3.8-flash · 2 runs · 6m12s
+tester · host (sonnet) · 1 run · 1m40s
+code-reviewer · host (opus) · 1 run · 2m05s
+total: 4 runs · 9m57s
+```
+
+Format `duration_s` as `MmSSs` (drop the minutes when under one). Append
+` · $0.18`-style cost and/or ` · 18.2k tokens` after the duration only when
+that role's aggregated `cost_usd`/`tokens` is known (not `null`) — omit
+either or both when unknown, never print `$null` or a zero that was never
+actually reported. Omit a role with zero runs entirely. This usage line is
+the only place token/cost numbers appear — keep the plain-language summary
+above it free of them.

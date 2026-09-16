@@ -9,7 +9,10 @@ shape follows what `crewbench_dispatch.py`'s parsers already expect (see
 - `claude_stream.jsonl` — a `claude --output-format stream-json` transcript:
   `system/init`, an `assistant` text block, an `assistant` tool_use block, a
   `user` tool_result error block, then the terminal `result` event with
-  `structured_output`.
+  `structured_output` plus `duration_ms`/`duration_api_ms`/`num_turns`/
+  `total_cost_usd`/`usage` (Phase 9's usage/timing fields) — this shape
+  follows Claude Code's documented `stream-json` result event, not a fresh
+  live capture from this session.
 - `agy_stream.jsonl` — an `agy --output-format stream-json` transcript: an
   `init` event, a successful `step_update` tool event, a failed one with a
   "permission check failed" message (exercises denied-command capture), then

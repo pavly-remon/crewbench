@@ -36,6 +36,9 @@ placeholder, the root is the directory two levels above this SKILL.md.
    - Log paths and, for finished runs, the `resume_command` from each
      run's `.result.json`.
    - Any `notes` recorded on the task.
+   - The usage summary from `state.json.usage`, in the same one-line-per-
+     role-plus-total format as dispatch.md §7's "Usage summary" (omit
+     roles with zero runs; omit cost/tokens where they're `null`).
 
 3. `--cleanup` (with or without a task id): list finished tasks (`phase`
    in done/stopped/failed) that still have a worktree at

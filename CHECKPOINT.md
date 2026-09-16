@@ -40,7 +40,7 @@ need it for local test runs; CI installs it).
 | 6 Cross-CLI interoperability | done | feat: Phase 6 cross-CLI interoperability |
 | 7 Project profile + gate | done | feat: Phase 7 project profile and deterministic gate |
 | 8 Less ceremony | done | feat: Phase 8 less ceremony for daily use |
-| 9 Usage/timing report | pending | |
+| 9 Usage/timing report | done | feat: Phase 9 usage and timing report |
 | 10 Maintenance/structure | pending | |
 | 11 Optional integrations | pending | |
 | 12 Docs and release | pending | |
@@ -537,3 +537,65 @@ Lead itself does on `$ARGUMENTS` text.
   this phase's content is instructions for the Team Lead to follow, not
   code with a unit-testable surface, so it's covered by the Final
   Verification walkthrough (final-verification item 4) rather than pytest.
+
+### Phase 9
+
+- **`bin/crewbench_dispatch.py`** gained `extract_usage(cli, stream,
+  stdout, duration_s)` and a new `envelope["usage"]` field, populated
+  right after `duration_s`/`session_id`/`resume_command` (same point in
+  `main()`), never blocking `finish()` if anything's missing — worst case
+  every field but `duration_s` stays `null`. Confirmed shape for
+  **claude**: Claude Code's documented `stream-json` terminal `result`
+  event's `usage`/`total_cost_usd`/`num_turns` fields (this session didn't
+  spend a real prompt to re-capture one live — same per-phase cost policy
+  as every prior phase — but the field names are the ones Claude Code's
+  own docs specify, not a guess). **VERIFY** (genuinely unconfirmed, no
+  live or documented sample found): **agy**'s equivalent `usage`
+  sub-object field names — read defensively if agy ever sends one, `null`
+  otherwise; **codex**/**copilot** — checked `codex exec --help` for a
+  usage-reporting flag/footer and found none documented (there *is* a
+  real, confirmed `--json` events flag on `codex exec`, but wiring it in
+  would mean parsing a whole new event stream shape for codex, well
+  beyond "record any token/usage fields found in current output" — left
+  as a follow-up, noted below), so both fall back to a best-effort
+  regex scan of plain stdout for a "tokens used"/"total tokens" line,
+  landing on `null` when nothing matches (which will be the common case
+  today).
+- Extended `tests/fixtures/claude_stream.jsonl`'s terminal `result` event
+  with `duration_ms`/`duration_api_ms`/`num_turns`/`total_cost_usd`/
+  `usage` (documented as still-synthetic, not a fresh live capture, in
+  `tests/fixtures/README.md`) so `test_usage.py` has a real fixture to
+  extract from rather than hand-built `Stream.final` dicts everywhere.
+- **`lib/dispatch.md`**: envelope JSON example (§4) gained the `usage`
+  field; new "Usage and timing" subsection right after it (confirmed vs.
+  VERIFY status per CLI, the null-is-fine contract, and the exact
+  get-then-add-then-set aggregation rule into `state.json.usage.<role>`
+  — no new `crewbench_state.py` subcommand needed, since `get`/`set`
+  already suffice for "read the current sum, add to it, write it back").
+  §7 "Reporting" gained a "Usage summary" subsection with the exact
+  one-line-per-role-plus-total format from the phase prompt. Kept every
+  section at its existing number (subsections again, same
+  non-renumbering approach as Phases 7 and 8).
+- `schemas/task-state.json`'s `usage` field description tightened to the
+  concrete per-role shape (`runs`, `duration_s`, `tokens`, `cost_usd`,
+  `cli`, `model`) and points at the new dispatch.md sections by name
+  instead of the old vague "see lib/dispatch.md's usage section" (which
+  didn't exist until now).
+- `skills/status/SKILL.md` step 2 shows the same usage summary.
+  `README.md` gained a short "Usage and timing" subsection mirroring it.
+- Tests: `tests/test_usage.py` (claude fixture extraction incl. the
+  cost/num_turns/token-sum fields, agy null-when-absent and
+  read-if-present, codex/copilot text-scan hit and miss cases). Also ran
+  a real end-to-end smoke test with the existing `quick_success.py` fake
+  CLI (`CREWBENCH_CLI_OVERRIDE_CLAUDE`) confirming a run with no usage
+  data in its fixture still finishes `ok: true` with an all-null-except-
+  duration `usage` object — the "never fail on missing usage" contract,
+  exercised for real, not just asserted in a unit test. 149/149 passing.
+- **Deliberately not done in this phase** (Final Verification, and
+  flagged as a real follow-up rather than just deferred): spending a real
+  prompt against each of the four installed CLIs to capture their actual
+  terminal event/output and confirm or correct the VERIFY items above —
+  especially codex's `--json` event stream, which would need its own
+  small design pass (a new event-parsing path alongside the existing
+  last-message-file one) rather than a one-line fix if it turns out to be
+  the right source for codex's usage data.
