@@ -1,3 +1,5 @@
+<img width="160" height="160" alt="CrewBench Logo-selection" src="https://github.com/user-attachments/assets/4d202aef-4bc6-48dd-bfb3-8e3406449146" />
+
 # crewbench
 
 A plugin for Claude Code, GitHub Copilot CLI, Antigravity CLI (`agy`) and
