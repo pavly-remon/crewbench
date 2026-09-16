@@ -1,4 +1,5 @@
-<img width="160" height="160" alt="CrewBench Logo-selection" src="https://github.com/user-attachments/assets/4d202aef-4bc6-48dd-bfb3-8e3406449146" />
+<img width="880" height="880" alt="CrewBench Logo-selection" src="https://github.com/user-attachments/assets/792e01b5-8351-43ba-9c1d-06d1a4870c1c" />
+
 
 # crewbench
 
