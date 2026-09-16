@@ -21,26 +21,40 @@ the host — see `lib/dispatch.md` §3). This is a 4 x 4 matrix of **host** x
 ## Matrix
 
 Development machine for this pass: macOS (darwin), Python 3.9+ available,
-all four CLIs installed and logged in. Dated 2026-09-15. Versions: `claude`
-2.1.273, `codex-cli` 0.154.0, `agy` 1.2.3, GitHub Copilot CLI 1.0.83.
+all four CLIs installed and logged in. Dated 2026-09-16 (Final
+Verification pass; `doctor`-only checks below dated 2026-09-15). Versions:
+`claude` 2.1.273, `codex-cli` 0.154.0, `agy` 1.2.3, GitHub Copilot CLI
+1.0.83.
 
 | Host \\ role CLI | claude | codex | agy | copilot |
 |---|---|---|---|---|
-| **Claude Code** | verified (real) — `doctor` ran live and passed; this is also the CLI every automated test in this repo runs under | verified (real) — `doctor` ran live and passed | verified (real) — `doctor` ran live and passed | verified (real) — `doctor` ran live and passed |
+| **Claude Code** | verified (real) — real headless `code-reviewer` dispatch against a throwaway repo, valid envelope, correct verdict; this is also the CLI every automated test in this repo runs under | verified (real) — same real dispatch; found and fixed a real bug in the process (below) | verified (real) — same real dispatch; also the first live confirmation of agy's real usage-field shape (Phase 9) | verified (real) — same real dispatch |
 | **Codex** | verified (fake CLI only) | verified (fake CLI only) | verified (fake CLI only) | verified (fake CLI only) |
 | **agy** | verified (fake CLI only) | verified (fake CLI only) | verified (fake CLI only) | verified (fake CLI only) |
 | **Copilot CLI** | verified (fake CLI only) | verified (fake CLI only) | verified (fake CLI only) | verified (fake CLI only) |
 
 **What "verified (real)" actually covers on the Claude Code row:** a live
-`crewbench_dispatch.py doctor --cli <cli>` for all four CLIs, confirming
-each is installed, its config dir is writable, its API host is reachable,
-and it's logged in — see the real output captured during this pass in the
-Phase 6 checkpoint notes. It does **not** yet cover a full real headless
-role dispatch (an actual `claude -p`/`codex exec`/`agy -p`/`copilot -p`
-invocation with a real task) or a full `new-task` run with a mixed lineup —
-those cost real API/CLI usage across four providers and are deliberately
-deferred to this project's "Final verification" pass (see `CHECKPOINT.md`),
-same as every other phase's real-CLI smoke testing.
+`crewbench_dispatch.py doctor --cli <cli>` for all four CLIs (2026-09-15,
+Phase 6), confirming each is installed, its config dir is writable, its
+API host is reachable, and it's logged in; **and**, as of this Final
+Verification pass (2026-09-16), one real headless `code-reviewer` dispatch
+per role CLI against a tiny throwaway repo with a one-line bug (`return
+a - b` instead of `a + b`), confirming a valid, schema-passing envelope
+and a correct review verdict from all four. **Real bug found and fixed by
+this check**: codex's real API call rejected `schemas/code-reviewer.json`
+outright with a 400 (`'required' is required to be supplied and to be an
+array including every key in properties`) — OpenAI's structured-outputs
+strict mode, which `codex exec --output-schema` uses, requires every
+property to be in `required`, which our schemas intentionally don't do for
+genuinely optional fields (`previous_issues`, tester's `screenshots`).
+Fixed with `codex_strict_schema()` (a codex-only transformed copy of the
+schema: every property added to `required`, optional ones get `null`
+unioned into their type) plus `normalize_optional_nulls()` (treats an
+explicit optional-field `null` codex now sends back the same as an
+omitted key, for `validate()` and every other CLI). Re-ran live after the
+fix: `ok: true`. This did **not** cover a full mixed-lineup `new-task` run
+(worktree pre-flight, gate, parallel tester+reviewer, fix loop, commit) —
+that's still deferred, noted below.
 
 **Every other row is untested with a live host switch.** This development
 session always runs as the Claude Code host — there was no way to actually

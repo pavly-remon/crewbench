@@ -31,6 +31,7 @@ never fails a run). Exit code is 0 when the role returned a valid result,
 """
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -209,6 +210,47 @@ def build_prompt(role, cli, handoff, schema, skip=False):
     ])
 
 
+def codex_strict_schema(schema):
+    """Codex's `--output-schema` is passed straight through to OpenAI's
+    structured-outputs "strict" mode, which requires every key in an
+    object's `properties` to also appear in that object's `required`
+    (confirmed live: a schema with an optional top-level property, e.g.
+    code-reviewer's `previous_issues`, gets rejected with a 400
+    "'required' ... including every key in properties" error before the
+    model even runs). Our own schemas/*.json intentionally leave some
+    properties out of `required` (they're genuinely optional — omitted or
+    empty when not applicable — and `validate()`/every other CLI treats
+    them that way), so this returns a *separate*, codex-only transformed
+    copy rather than editing the canonical schema: every property is
+    added to `required`, and any property that wasn't already required
+    gets `null` unioned into its `type` so the model can still supply
+    nothing for it in effect (the existing `line: ["integer", "null"]`
+    style elsewhere in these schemas is the same pattern, just applied
+    here to every optional key instead of by hand)."""
+    schema = copy.deepcopy(schema)
+
+    def walk(node):
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "object" and isinstance(node.get("properties"), dict):
+            props = node["properties"]
+            already_required = set(node.get("required") or [])
+            for key, subschema in props.items():
+                if key not in already_required and isinstance(subschema, dict):
+                    t = subschema.get("type")
+                    if isinstance(t, list) and "null" not in t:
+                        subschema["type"] = t + ["null"]
+                    elif isinstance(t, str) and t != "null":
+                        subschema["type"] = [t, "null"]
+                walk(subschema)
+            node["required"] = list(props.keys())
+        elif node.get("type") == "array" and isinstance(node.get("items"), dict):
+            walk(node["items"])
+
+    walk(schema)
+    return schema
+
+
 def _prompt_pointer(prompt_file):
     """Short text for CLIs whose -p/--prompt takes the prompt as an argv value
     (no documented stdin mode: agy and Copilot, per `--help` as of writing —
@@ -262,9 +304,16 @@ def build_command(args, prompt, prompt_file, schema_path, tmp, conversation=None
         return cmd + [f"-p={_prompt_pointer(prompt_file)}"], None, None
     if args.cli == "codex":
         last = Path(tmp) / "last-message.txt"
+        # OpenAI structured-outputs strict mode (confirmed live) rejects our
+        # canonical schema files as-is whenever they have an optional
+        # top-level property (e.g. code-reviewer's previous_issues, tester's
+        # screenshots) -- codex gets its own transformed copy instead of the
+        # canonical file. See codex_strict_schema()'s docstring.
+        strict_schema_path = Path(tmp) / "output-schema.json"
+        strict_schema_path.write_text(json.dumps(codex_strict_schema(json.loads(schema_path.read_text()))))
         cmd = ["codex", "exec", "-m", model,
                "-s", "read-only" if role in READ_ONLY else ("danger-full-access" if skip else "workspace-write"),
-               "--output-schema", str(schema_path), "-o", str(last)]
+               "--output-schema", str(strict_schema_path), "-o", str(last)]
         if has_effort:
             cmd += ["-c", f"model_reasoning_effort={effort}"]
         return cmd + ["-"], prompt, last
@@ -581,14 +630,21 @@ def extract_usage(cli, stream, stdout, duration_s):
         usage["cost_usd"] = final.get("total_cost_usd")
         usage["num_turns"] = final.get("num_turns")
     elif cli == "agy":
-        # VERIFY: agy's result-event usage field names aren't confirmed
-        # from --help or live output; read a plausible `usage` sub-object
-        # if agy ever sends one, but never require it.
+        # Confirmed live (a real headless code-reviewer dispatch during
+        # Final Verification): agy's terminal result event really does
+        # carry `usage: {input_tokens, output_tokens, total_tokens,
+        # thinking_tokens, cache_read_tokens}` and a top-level `num_turns`
+        # -- this was a VERIFY guess before that run; the fallback keys
+        # (prompt_tokens/completion_tokens, cost_usd/cost) stay defensive
+        # since only the confirmed names were actually observed. No cost
+        # field was present in that same real response, so cost_usd stays
+        # a VERIFY guess.
         raw = final.get("usage") if isinstance(final.get("usage"), dict) else {}
         usage["input_tokens"] = raw.get("input_tokens", raw.get("prompt_tokens"))
         usage["output_tokens"] = raw.get("output_tokens", raw.get("completion_tokens"))
         usage["total_tokens"] = raw.get("total_tokens")
         usage["cost_usd"] = final.get("cost_usd", final.get("cost"))
+        usage["num_turns"] = final.get("num_turns")
     elif cli in ("codex", "copilot"):
         usage["total_tokens"] = _usage_from_text(stdout)
     return usage
@@ -642,6 +698,24 @@ def validate_schema(value, schema, path=""):
             if err:
                 return err
     return None
+
+
+def normalize_optional_nulls(result, schema):
+    """Drop top-level keys whose value is `null` when that key isn't in the
+    schema's `required` list. Confirmed live: under OpenAI's structured-
+    outputs strict mode, codex must supply every property from its
+    (codex-only, see codex_strict_schema()) transformed schema, so an
+    optional field it has nothing to report for comes back as an explicit
+    `null` rather than simply missing -- e.g. round 1's `previous_issues`.
+    Our canonical schemas define that field's *value*, when present, as an
+    array, so validate() would otherwise reject the null. Treating an
+    explicit optional-field null the same as "omitted" keeps every CLI's
+    result the same shape for both validate() and the Team Lead's merge,
+    and is a no-op for any CLI that simply omits the key instead."""
+    if not isinstance(result, dict) or not isinstance(schema, dict):
+        return result
+    required = set(schema.get("required") or [])
+    return {k: v for k, v in result.items() if not (v is None and k not in required)}
 
 
 def validate(result, schema):
@@ -1217,6 +1291,7 @@ def main(argv=None):
         envelope["usage"] = extract_usage(args.cli, stream, stdout, envelope["duration_s"])
         raw_path.write_text(f"$ {cmd[0]} ...\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n")
         result, denials, error = parse_output(args.cli, stream, stdout, last_message)
+        result = normalize_optional_nulls(result, schema)
         if stream.denied_commands:
             denials = [{"action": "command", "command": c} for c in dict.fromkeys(stream.denied_commands)]
         log.write(f"[{now()}] exit {code} after {envelope['duration_s']}s\n")

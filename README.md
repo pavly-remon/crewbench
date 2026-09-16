@@ -116,6 +116,47 @@ exists, it just shows the table and proceeds. Set `confirm_lineup` to
 `always` (ask every time) or `never` (never ask) in `/crewbench:team` if
 you want different behavior.
 
+## Project profile
+
+`.crewbench/project.json` (machine-readable) and `project.md` (short,
+free-form conventions) tell every role your project's lint/test/build
+commands and shape instead of making each one rediscover configs. The
+first `new-task` in a project without one runs detection and asks you to
+confirm it once; `/crewbench:profile [show|refresh|edit <change>]` shows,
+re-detects, or edits it any time after that.
+
+```json
+{
+  "package_manager": "npm",
+  "install": "npm ci",
+  "commands": {
+    "lint": "npm run lint", "typecheck": "npm run typecheck",
+    "test": "npm run test", "test_changed": null,
+    "build": "npm run build", "format_check": null
+  },
+  "test_patterns": ["*.test.ts"],
+  "source_dirs": ["src"],
+  "languages": ["typescript"],
+  "frameworks": ["vitest", "eslint"],
+  "agy_allow_rules": ["command(npm run)"],
+  "confirmed": true
+}
+```
+
+`commands` feeds the deterministic gate directly (below); `agy_allow_rules`
+are suggested-only snippets for your own `~/.gemini/antigravity-cli/
+settings.json` — crewbench shows them, never writes them. Nothing here is
+ever saved without you confirming it first.
+
+### Deterministic gate
+
+Before the LLM tester runs, `new-task` runs whichever of `format_check` /
+`lint` / `typecheck` / `test_changed` (or `test`) is configured, stopping
+at the first failing step and sending its output straight back to the
+developer — no tester/reviewer round spent on a problem a linter would
+have caught. Passing (or nothing configured) moves on to the tester and
+reviewer as usual, with the tester told which gate steps already passed.
+
 ## Team lineup
 
 Default lineup — cheaper model for building, stronger model for checking,
@@ -213,13 +254,41 @@ role never stops for approval: Claude `bypassPermissions`, agy
 command on your machine; set it to `safe` in `.crewbench/team.json` or via
 `/crewbench:team` if that's not what you want.
 
+### Git safety and worktree isolation
+
+`new-task` isolates each task in its own git worktree by default
+(`.crewbench/wt/<task-id>`, branch `crew/<task-id>` — see the workflow
+above and `workspace.mode` below to opt out). `test`, `review` and
+`design` always work in your current checkout, since they never change
+code.
+
+Before and after every role's run, crewbench snapshots HEAD, branch,
+remote refs, the stash list, and a content hash of every dirty
+(modified/added/untracked) path, and warns you — never undoes anything
+automatically — if a role:
+
+- moved HEAD, switched branch, or changed the stash list (`git stash`);
+- reverted or deleted files that were uncommitted *before* that round
+  started — the case that matters most in a fix loop, where "dirty
+  before" is the developer's own still-unapproved work from an earlier
+  round (a stray `git checkout -- .` or `git reset --hard` would
+  otherwise wipe it silently);
+- is the read-only `code-reviewer` and the working tree changed at all;
+- is `tester` and touched a file that doesn't look like a test.
+
+A `git fetch` that only moves remote-tracking refs (not your local
+history) is reported as an informational note, not a scary "history
+changed" warning; an actual push is called out by name when it can be
+confirmed. See `lib/dispatch.md`'s "Commits" section for the exact rules.
+
 ### Commits
 
 Crew roles never commit or push — it's in their instructions, not enforced
 by permission rules. Only the Team Lead commits, after the tester and
-reviewer approve and you confirm; pushing asks you separately. If a role
-changes git history anyway, its result carries a warning and the Team Lead
-tells you before doing anything else.
+reviewer approve and you confirm; pushing asks you separately, and neither
+confirmation is skippable — not by `--yes`, not by `confirm_lineup: never`.
+If a role changes git history anyway, its result carries a warning (see
+above) and the Team Lead tells you before doing anything else.
 
 **Launching `skip` runs from Claude Code:** auto mode blocks starting an
 agent with permission checks skipped. Approve the dispatch when prompted
@@ -334,6 +403,27 @@ installed or written to without asking first:
   state the spec lists, saved under
   `.crewbench/tasks/<task-id>/screenshots/` and listed in the final
   report. Playwright itself is never installed automatically.
+
+## Upgrading from 2.x
+
+`.crewbench/team.json` keeps working exactly as before — nothing to
+change there. Two things did change:
+
+- **Run artifacts moved.** 2.x wrote everything to `.crewbench/runs/`;
+  3.x gives every task its own `.crewbench/tasks/<task-id>/runs/` folder
+  with a `state.json` (see `/crewbench:status`). Nothing reads the old
+  `.crewbench/runs/` path anymore — if you have scripts pointed at it,
+  update them.
+- **`new-task` now isolates in a git worktree by default.** If you want
+  the old "work directly in my checkout" behavior back, set
+  `"workspace": { "mode": "in-place" }` in `.crewbench/team.json` (or
+  pass `--in-place` per task). `test`, `review` and `design` are
+  unaffected — they always stayed in-place.
+
+Everything else (Jira input, the deterministic gate, usage reporting,
+`--yes`/flags, `/crewbench:profile`) is new and additive — you don't need
+to configure anything to keep your old workflow working. See
+[`CHANGELOG.md`](CHANGELOG.md) for the full list.
 
 ## Layout
 

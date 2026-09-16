@@ -569,13 +569,17 @@ exposed — `duration_s` (wall-clock, same value as the envelope's top-level
 run didn't report them. A run's `ok`/`error` never depends on `usage` being
 complete — missing usage is not a failure.
 
-Confirmed shape: claude's `--output-format stream-json` terminal `result`
-event's documented `usage`/`total_cost_usd`/`num_turns` fields. `VERIFY`
-(best-effort, not confirmed live for this feature): agy's equivalent
-`usage` sub-object field names, and a plain text scan of codex/copilot's
-stdout for a "tokens used" style line — neither CLI's headless output is
-documented to expose usage as of writing, so both commonly stay `null` in
-practice.
+Confirmed shape, both via real headless dispatches during Final
+Verification: claude's `--output-format stream-json` terminal `result`
+event's `usage`/`total_cost_usd`/`num_turns` fields, and agy's equivalent
+terminal `result` event's `usage: {input_tokens, output_tokens,
+total_tokens, ...}` plus a top-level `num_turns` — no `cost`/`cost_usd`
+field was present in that same real agy response, so `cost_usd` stays a
+`VERIFY` guess for agy specifically. `VERIFY` (best-effort, not confirmed
+live): a plain text scan of codex/copilot's stdout for a "tokens used"
+style line — neither CLI's headless output was observed to expose usage
+in the real dispatches run for this release, so both stay `null` in
+practice today.
 
 After each run finishes, fold its `usage` into `state.json.usage.<role>`
 (§0's field reference) — `get` the current value, add to it, `set` it
