@@ -95,3 +95,9 @@ from 2.x" section before your next task.
   yet on this machine — found on a fresh CI run — it now also accepts a
   directory that doesn't exist yet but has a writable existing ancestor
   (config dirs are typically created lazily on first login).
+- `CREWBENCH_CLI_OVERRIDE_<CLI>` (test-only, injects a fake CLI script)
+  no longer fails to launch on Windows — found running this repo's own
+  test suite for real on Windows CI — a bare `.py` path isn't directly
+  executable there without `shell=True`; it's now launched through the
+  current Python interpreter on Windows specifically. Never affects a
+  real installed CLI in production.

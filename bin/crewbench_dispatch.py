@@ -132,6 +132,21 @@ def resolve_cli_path(cli):
     return override or shutil.which(cli)
 
 
+def cli_argv_prefix(cli_path):
+    """The argv prefix that actually launches `cli_path`. A single-element
+    passthrough for every real, installed CLI (always directly executable)
+    in production. Only matters for CREWBENCH_CLI_OVERRIDE_<CLI> (tests):
+    on Windows, a bare `.py` path isn't directly executable via
+    subprocess (no shell=True, no file-association lookup the way
+    double-clicking or `cmd.exe` would do it), so it's launched through
+    the current Python interpreter instead — found running this repo's
+    own test suite for real on Windows CI, where every override-based
+    test failed with empty stdout (the process never actually started)."""
+    if os.name == "nt" and cli_path.lower().endswith(".py"):
+        return [sys.executable, cli_path]
+    return [cli_path]
+
+
 def strip_frontmatter(text):
     if text.startswith("---"):
         end = text.find("\n---", 3)
@@ -889,15 +904,16 @@ def _auth_check(cli, cli_path):
     spending a real prompt."""
     try:
         if cli == "claude":
-            r = subprocess.run([cli_path, "auth", "status", "--json"],
+            r = subprocess.run(cli_argv_prefix(cli_path) + ["auth", "status", "--json"],
                                 capture_output=True, text=True, timeout=15)
             data = json.loads(r.stdout or "{}")
             return bool(data.get("loggedIn")), (data.get("email") or r.stdout.strip() or r.stderr.strip())
         if cli == "codex":
-            r = subprocess.run([cli_path, "login", "status"], capture_output=True, text=True, timeout=15)
+            r = subprocess.run(cli_argv_prefix(cli_path) + ["login", "status"],
+                                capture_output=True, text=True, timeout=15)
             return r.returncode == 0, (r.stdout or r.stderr).strip()
         if cli == "agy":
-            r = subprocess.run([cli_path, "models"], capture_output=True, text=True, timeout=20)
+            r = subprocess.run(cli_argv_prefix(cli_path) + ["models"], capture_output=True, text=True, timeout=20)
             ok = r.returncode == 0 and bool(r.stdout.strip())
             detail = (r.stdout or r.stderr).strip().splitlines()
             return ok, (detail[0] if detail else "no output")
@@ -954,7 +970,7 @@ def cmd_doctor(argv):
         sys.exit(1)
     report["installed"] = True
     try:
-        v = subprocess.run([cli_path, "--version"], capture_output=True, text=True, timeout=10)
+        v = subprocess.run(cli_argv_prefix(cli_path) + ["--version"], capture_output=True, text=True, timeout=10)
         report["version"] = (v.stdout or v.stderr).strip()
     except (OSError, subprocess.SubprocessError) as exc:
         report["errors"].append(f"could not read {args.cli}'s version: {exc}")
@@ -1247,7 +1263,7 @@ def main(argv=None):
     with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1) as log:
         cmd, stdin, last_message = build_command(args, prompt, prompt_path, schema_path, tmp,
                                                  timeout_s=deadline - time.time())
-        cmd[0] = cli_path
+        cmd[0:1] = cli_argv_prefix(cli_path)
         try:
             check_argv_size(cmd)
         except ValueError as exc:
@@ -1290,7 +1306,7 @@ def main(argv=None):
             cmd, stdin, _ = build_command(args, follow_up, resume_prompt_path, schema_path, tmp,
                                           conversation=stream.session_id,
                                           timeout_s=deadline - time.time())
-            cmd[0] = cli_path
+            cmd[0:1] = cli_argv_prefix(cli_path)
             try:
                 check_argv_size(cmd)
             except ValueError as exc:
