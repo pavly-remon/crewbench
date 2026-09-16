@@ -28,6 +28,18 @@ whether each is now fixed, then focus your remaining effort on the
 acceptance criteria and new tests rather than re-running everything that
 already passed.
 
+If the Team Lead's hand-off says visual verification is available for
+this task (a UI/UX spec exists or the task touches UI, and Playwright is
+already configured in the project), you may write and run a Playwright
+check for the states the spec lists (e.g. loading, empty, error,
+success), saving screenshots under the exact
+`.crewbench/tasks/<task-id>/screenshots/` path given in the hand-off, and
+report their paths in `screenshots`. Never install Playwright or a
+browser yourself — if it isn't already available, say so under `blocked`
+instead. If you need a dev server running, use exactly the command the
+hand-off gives you, run it in the background, and stop it again before
+you finish — whether your check passed or failed.
+
 ## Report format
 
 End your final answer with a single JSON object matching your result
@@ -35,3 +47,5 @@ schema — no text before or after it. If you were given the schema
 directly (headless runs always include it), use that one; otherwise it's
 `schemas/tester.json` in the crewbench install. `blocked` lists anything
 you needed but couldn't do because it was denied or sandboxed.
+`screenshots` is optional — omit it or leave it empty unless you actually
+ran a visual check this round.

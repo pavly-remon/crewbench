@@ -42,7 +42,7 @@ need it for local test runs; CI installs it).
 | 8 Less ceremony | done | feat: Phase 8 less ceremony for daily use |
 | 9 Usage/timing report | done | feat: Phase 9 usage and timing report |
 | 10 Maintenance/structure | done | feat: Phase 10 maintenance and structure |
-| 11 Optional integrations | pending | |
+| 11 Optional integrations | done | feat: Phase 11 optional integrations |
 | 12 Docs and release | pending | |
 
 ## Notes / deviations / VERIFY items (running list)
@@ -680,3 +680,52 @@ Lead itself does on `$ARGUMENTS` text.
   status as every earlier phase — nothing in this phase's wording change
   altered the actual resolution mechanism, so there was nothing new to
   re-test for real).
+
+### Phase 11
+
+Both items entirely prose/schema — the actual capability (an Atlassian
+tool being present in a session; a project having Playwright configured)
+is runtime/host-dependent and can't be scripted around, so there's no new
+`bin/` code beyond one schema field and one `crewbench_state.py` field.
+
+- **11.1 Jira**: `new-task/SKILL.md` gained a new step 1 (renumbering
+  2-10 to 2-11 throughout, including every internal "go to step N"
+  cross-reference): regex-match the first argument against
+  `^[A-Z][A-Z0-9]+-\d+$`, check for an available Atlassian/Jira tool in
+  the current session (this is inherently something only the Team Lead
+  itself can determine — it's asking "do I, right now, have such a tool
+  connected", the same way this very session already has a real
+  `mcp__claude_ai_Atlassian_Rovo__*` tool set available; no script can
+  answer that from outside), fetch-and-scope or ask-the-user-to-paste,
+  and store the key. `lib/dispatch.md` §0 gained a new "Optional: Jira as
+  task input (new-task only)" subsection as the canonical version of the
+  same instructions (the skill file points at it rather than repeating
+  it in full, consistent with Phase 10's de-duplication). §5's worktree
+  pre-flight step 4 gained the `<jira-key>-<slug>` naming variant for the
+  worktree path and branch. `schemas/task-state.json` and
+  `crewbench_state.py` (`cmd_new`'s `jira_key` field, `--jira-key` arg)
+  updated to match; **never** writes back to Jira on its own — stated
+  explicitly in both the skill and dispatch.md, same phrasing style as
+  the repo's other "never do X without an explicit ask" rules.
+- **11.2 Visual verification**: `schemas/tester.json` gained an optional
+  `screenshots[]` array (not added to `required` — verified with a new
+  `test_tester_schema_screenshots_is_optional` case that a result without
+  it still validates). `agents/tester.md` gained instructions for when
+  it's allowed to write/run a Playwright check (never install Playwright
+  or a browser itself; use the exact dev-server command it's given; stop
+  the server afterward regardless of pass/fail). `lib/dispatch.md` §6
+  gained a "Visual verification (opt-in)" subsection spelling out the
+  two preconditions (UI/UX spec or UI-touching task, AND `playwright`
+  already in `project.json`'s `frameworks`) the Team Lead checks before
+  offering it — `new-task/SKILL.md`'s tester-dispatch step points at it.
+  The final-report step now lists any `screenshots[]` paths.
+- Tests: extended `tests/test_state_helper.py` (`jira_key` default/set),
+  `tests/test_validate_schema.py` (tester schema's `screenshots` is
+  genuinely optional, and a result carrying it still validates).
+  162/162 passing.
+- **Deliberately not done in this phase**: actually exercising the Jira
+  fetch or the Playwright screenshot capture end-to-end — both need a
+  real connected tool/project this repo's own dev environment doesn't
+  have (crewbench's own repo has no Jira project and isn't a UI
+  project), so this is inherently something only a real user's project
+  can exercise, not something Final Verification can add here either.

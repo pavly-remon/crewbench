@@ -12,6 +12,7 @@ Usage:
 
   crewbench_state.py new --task-dir <dir> --id <id> --command <cmd> --title <title>
                           [--base-commit <sha>] [--branch <name>]
+                          [--design-spec-file <path>] [--jira-key <key>]
       -> creates state.json with the initial fields (phase: scoping)
 
   crewbench_state.py get --task-dir <dir> [--key <dotted.key>]
@@ -153,6 +154,7 @@ def cmd_new(args):
         "base_commit": args.base_commit,
         "branch": args.branch,
         "worktree": None,
+        "jira_key": args.jira_key,
         "host_override": None,
         "doctor": {},
         "acceptance_criteria": [],
@@ -212,6 +214,7 @@ def main():
     s.add_argument("--base-commit", default=None)
     s.add_argument("--branch", default=None)
     s.add_argument("--design-spec-file", default=None)
+    s.add_argument("--jira-key", default=None)
     s.set_defaults(func=cmd_new)
 
     s = sub.add_parser("get")

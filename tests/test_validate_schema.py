@@ -84,3 +84,19 @@ def test_validate_boolean_is_not_integer(dispatch):
               "required": ["n"], "additionalProperties": False}
     err = dispatch.validate({"n": True}, schema)
     assert err is not None and "n must be of type integer" in err
+
+
+def test_tester_schema_screenshots_is_optional(dispatch):
+    schema = json.loads((dispatch.ROOT / "schemas" / "tester.json").read_text())
+    assert "screenshots" not in schema["required"]
+    result = {"verdict": "pass", "summary": "ok", "tests_run": [], "tests_added": [],
+              "failures": [], "blocked": []}
+    assert dispatch.validate(result, schema) is None
+
+
+def test_tester_schema_accepts_screenshots_list(dispatch):
+    schema = json.loads((dispatch.ROOT / "schemas" / "tester.json").read_text())
+    result = {"verdict": "pass", "summary": "ok", "tests_run": [], "tests_added": [],
+              "failures": [], "blocked": [],
+              "screenshots": [".crewbench/tasks/t1/screenshots/empty.png"]}
+    assert dispatch.validate(result, schema) is None

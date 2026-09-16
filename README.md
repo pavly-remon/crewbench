@@ -315,6 +315,26 @@ The full protocol is in [`lib/dispatch.md`](lib/dispatch.md).
 
 Role briefs live in [`agents/`](agents/) and are shared by every CLI.
 
+## Optional integrations
+
+Both opt-in, off unless their precondition is actually met — never
+installed or written to without asking first:
+
+- **Jira ticket as input**: `/crewbench:new-task PROJ-123 [extra notes]`
+  — if the first argument looks like a Jira key and an Atlassian/Jira
+  tool is available in your host CLI's session, the ticket's summary,
+  description, acceptance criteria and subtasks become the task's scope,
+  and the worktree/branch/commit message pick up the key. No such tool
+  found? You're asked to paste the ticket instead. crewbench never
+  writes back to Jira (no comments, no transitions) unless you
+  explicitly ask it to.
+- **Visual verification**: when a task has a UI/UX spec (or clearly
+  touches UI) and the project already has Playwright configured, the
+  tester may write and run a Playwright check capturing a screenshot per
+  state the spec lists, saved under
+  `.crewbench/tasks/<task-id>/screenshots/` and listed in the final
+  report. Playwright itself is never installed automatically.
+
 ## Layout
 
 | Path | Used by |

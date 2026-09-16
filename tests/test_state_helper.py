@@ -31,7 +31,16 @@ def test_new_creates_state_with_expected_defaults(tmp_path):
     assert state["phase"] == "scoping"
     assert state["round"] == 0
     assert state["rounds"] == []
+    assert state["jira_key"] is None
     assert (task_dir / "state.json").exists()
+
+
+def test_new_stores_jira_key_when_given(tmp_path):
+    task_dir = tmp_path / ".crewbench" / "tasks" / "20260101-0001-y"
+    state = run_state("new", "--task-dir", str(task_dir), "--id", "20260101-0001-y",
+                       "--command", "new-task", "--title", "Y", "--jira-key", "PROJ-123",
+                       cwd=tmp_path)
+    assert state["jira_key"] == "PROJ-123"
 
 
 def test_set_and_get_nested_key(tmp_path):

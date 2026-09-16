@@ -86,7 +86,9 @@ folder before anything else happens:
 2. Create the state file:
    `python3 <root>/bin/crewbench_state.py new --task-dir
    .crewbench/tasks/<task-id> --id <task-id> --command <new-task|test|review|design>
-   --title "<short title>"`. This also upserts `.crewbench/index.json`.
+   --title "<short title>"` (add `--jira-key <key>` when `new-task`'s
+   first argument matched a Jira key, per its own skill — see "Optional:
+   Jira as task input" below). This also upserts `.crewbench/index.json`.
 3. Ensure `.crewbench/tasks/` and `.crewbench/wt/` are in
    `.git/info/exclude` (append them if missing; leave `team.json`,
    `project.json`, `project.md`, `index.json` out of that ignore list —
@@ -107,6 +109,27 @@ shape (a `command` of `test`/`review`/`design`) but never loop past one
 round and stay `in-place` — no `base_commit`/`branch`/`worktree` fields to
 maintain beyond what `review`'s own workflow already gathers (the branch
 and base it's comparing).
+
+### Optional: Jira as task input (new-task only)
+
+If `new-task`'s first argument (after flag-stripping, §1) matches
+`^[A-Z][A-Z0-9]+-\d+$` (e.g. `PROJ-123`), it's a Jira key, not free text.
+Check whether an Atlassian/Jira tool is available in your current
+session (a host CLI's own connected tools, not anything crewbench
+installs). If one is: fetch that issue's summary, description,
+acceptance criteria and linked subtasks and use them as the initial
+scope — anything after the key in the arguments is extra notes on top,
+and normal scoping questions (§2's "Align with the user" doesn't apply
+here, this is `new-task`'s own step 2 — ask if the ticket itself is
+underspecified) still apply. If no such tool is available, say so and
+ask the user to paste the relevant ticket content instead of guessing.
+
+Save the key to `state.json.jira_key` either way (`null` when there
+isn't one). It renames the worktree/branch (§5's pre-flight) and is
+suggested — never assumed — in the commit message. **Never write back to
+Jira** — no comments, no transitions, no field edits — unless the user
+explicitly asks for that specific write, and say what you're about to
+send before sending it.
 
 ### Project profile
 
@@ -510,7 +533,7 @@ run the script from if omitted.
      `files_changed`, `assumptions`, `questions`, `blocked`
    - tester: `verdict` (pass / fail / error), `summary`, `tests_run`,
      `tests_added`, `failures[]` (test, file, expected, actual, reason),
-     `blocked`
+     `blocked`, `screenshots[]` (optional — see §6's "Visual verification")
    - code-reviewer: `verdict` (approve / changes_requested), `summary`,
      `issues[]` (id, file, line, severity, category, change),
      `previous_issues[]` (id, status: resolved/still_present, note — only
@@ -755,8 +778,12 @@ This is the default for `new-task` (`workspace.mode: worktree`, §1). `test`,
    themselves first, or use `in-place` for this task instead. Never stash
    or commit on the user's behalf.
 4. Create the worktree: `git worktree add .crewbench/wt/<task-id> -b
-   crew/<task-id> <base_commit>`. Save the worktree's absolute path to
-   `state.json.worktree` and the branch name to `state.json.branch`.
+   crew/<task-id> <base_commit>`. If `state.json.jira_key` is set (§0),
+   use `<jira-key>-<slug>` in place of `<task-id>` in both the worktree
+   path and branch name (e.g. `.crewbench/wt/PROJ-123-fix-login`, branch
+   `crew/PROJ-123-fix-login`) — same mechanics, just a name a human
+   recognizes. Save the worktree's absolute path to `state.json.worktree`
+   and the branch name to `state.json.branch`.
 5. **Environment setup** — a fresh worktree has no `node_modules`, no
    `.env*`, no build caches, so a frontend (or similar) project will break
    without this step:
@@ -895,6 +922,30 @@ report as "optional follow-ups" instead.
   (same `test` + `file`) fails two rounds in a row, stop early even if
   under `max_rounds`. Report it as stuck: the exact item, and what the
   developer already tried against it.
+
+### Visual verification (opt-in)
+
+When dispatching the tester, offer this — never assume it — only if
+**both** hold: (a) a UI/UX spec exists for this task or the task visibly
+touches UI, and (b) `.crewbench/project.json`'s `frameworks` already
+includes `playwright` (§0's "Project profile" — never install it or a
+browser yourself, ask first if it isn't already there and the user wants
+it added). If both hold, tell the tester in the hand-off:
+
+- It may write and run a Playwright check loading the affected page or
+  component and capturing a screenshot for each state the spec lists
+  (e.g. loading, empty, error, success), saved under exactly
+  `.crewbench/tasks/<task-id>/screenshots/`.
+- If a dev server needs to be running, give it the exact start command
+  from `project.json`'s `commands` (or ask the user which one, if none is
+  configured), have it run the server in the background inside the
+  worktree, and stop it again once done — whether the check passed or
+  failed.
+
+The tester's result carries any screenshot paths in `screenshots[]`
+(optional — omitted or empty when not applicable). List the paths in your
+report when present; don't treat a missing/empty `screenshots[]` as a
+problem.
 
 ## 7. Reporting
 

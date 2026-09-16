@@ -20,6 +20,10 @@
     "base_commit": { "type": ["string", "null"] },
     "branch": { "type": ["string", "null"] },
     "worktree": { "type": ["string", "null"], "description": "Absolute path, or null in in-place mode." },
+    "jira_key": {
+      "type": ["string", "null"],
+      "description": "Set when new-task's first argument matched a Jira key (e.g. PROJ-123, see lib/dispatch.md §0's 'Task folder and state'); null otherwise. crewbench never writes back to Jira on its own."
+    },
     "host_override": {
       "type": ["string", "null"],
       "description": "Set only when crewbench_env.py whoami couldn't determine the host CLI and the user was asked once (see lib/dispatch.md 'Host detection and plugin root'); null otherwise."
