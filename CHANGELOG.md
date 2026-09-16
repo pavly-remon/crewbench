@@ -116,8 +116,12 @@ from 2.x" section before your next task.
   `/crewbench:team`'s model-freshness check) now also goes through the
   same Windows `.py`-launch fix as the main dispatch path — it was
   missed in the first pass at that fix.
-- `crewbench_gate.py`'s command splitting now always uses `shlex.split(
-  ..., posix=True)` — confirmed live on Windows that `posix=False` keeps
-  the literal quote characters in each token, so a quoted gate command's
-  quotes were passed straight through as part of the argument instead of
-  being stripped, silently changing what actually ran.
+- `crewbench_gate.py`'s command splitting picks the right `shlex` mode
+  now instead of just one of the two available trade-offs — confirmed
+  live on Windows: `posix=False` keeps a quoted command's literal quote
+  characters as part of one argument (so `python -c "import sys;
+  sys.exit(1)"` ran as a harmless string-literal statement instead of
+  the intended code, silently "succeeding"), but `posix=True` mangles a
+  Windows backslash path by treating each backslash as an escape
+  character. Now always tokenizes with `posix=False`, then manually
+  strips one matching pair of quote characters from each token.

@@ -70,23 +70,27 @@ def steps_to_run(commands):
 
 
 def _split(command):
-    # Always posix=True: confirmed live on Windows CI that posix=False
-    # keeps the literal quote characters in each token (shlex's non-posix
-    # mode is for re-lexing shell syntax, not stripping quotes), so a
-    # command like `python -c "import sys; sys.exit(1)"` got its quotes
-    # passed straight through to Python as part of the token -- which
-    # parses as a harmless string-literal statement instead of the
-    # intended code, silently "succeeding" with exit 0. posix=True
-    # strips quotes correctly on every platform.
+    # Two confirmed-live problems, both from picking one shlex posix mode
+    # for the whole platform: posix=True treats backslash as an escape
+    # character, mangling a Windows path (`C:\Users\...\python.exe`
+    # collapses to `C:Users...python.exe`); posix=False preserves
+    # backslashes correctly but also keeps the literal quote characters
+    # around a quoted token (its job is re-lexing shell syntax, not
+    # stripping quotes) -- so a quoted gate command's quotes got passed
+    # straight through as part of one argument, e.g. `python -c "import
+    # sys; sys.exit(1)"` ran as a harmless string-literal statement
+    # instead of the intended code, silently "succeeding" with exit 0.
+    # Fix: always tokenize with posix=False (keeps backslashes literal on
+    # every platform), then manually strip one matching pair of quote
+    # characters from each token -- gets both right everywhere.
     # VERIFY: on Windows, npm/npx/yarn etc. are usually .cmd shims that need
     # shell semantics subprocess.Popen(shell=False) doesn't provide; not
     # exercised on a real Windows machine, same precedent as other
     # POSIX-first, Windows-best-effort code in this repo (e.g. the lock
-    # helper in crewbench_dispatch.py's _lock_file/_unlock_file). Also
-    # unverified: how posix=True's backslash-escape handling interacts
-    # with a Windows path containing backslashes inside a configured
-    # command (e.g. `python C:\scripts\lint.py`).
-    return shlex.split(command, posix=True)
+    # helper in crewbench_dispatch.py's _lock_file/_unlock_file).
+    tokens = shlex.split(command, posix=False)
+    return [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'") else t
+            for t in tokens]
 
 
 def run_step(name, command, cwd, timeout):

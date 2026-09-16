@@ -116,3 +116,20 @@ def test_project_json_override_path(tmp_path):
 def test_steps_to_run_skips_unconfigured():
     steps = crewbench_gate.steps_to_run({"lint": "eslint .", "typecheck": None, "test": None})
     assert steps == [("lint", "eslint .")]
+
+
+def test_split_strips_quotes_around_a_token():
+    # Regression: shlex.split(cmd, posix=True) strips quotes correctly but
+    # mangles a Windows backslash path; posix=False preserves backslashes
+    # but keeps the quote characters. _split() must get both right.
+    tokens = crewbench_gate._split('python -c "import sys; sys.exit(1)"')
+    assert tokens == ["python", "-c", "import sys; sys.exit(1)"]
+
+
+def test_split_preserves_backslashes_in_an_unquoted_windows_path():
+    tokens = crewbench_gate._split(r"C:\hostedtoolcache\windows\Python\3.12.10\x64\python.exe -c 1")
+    assert tokens[0] == r"C:\hostedtoolcache\windows\Python\3.12.10\x64\python.exe"
+
+
+def test_split_handles_plain_unquoted_command():
+    assert crewbench_gate._split("pytest -q --maxfail=1") == ["pytest", "-q", "--maxfail=1"]
