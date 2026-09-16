@@ -676,7 +676,7 @@ def _unlock_file(handle):
 
 
 def update_status(runs_dir, run, fields):
-    """Merge fields into .crewbench/runs/status.json under this run's name."""
+    """Merge fields into <runs_dir>/status.json under this run's name."""
     path = runs_dir / "status.json"
     with open(runs_dir / ".status.lock", "w") as lock:
         _lock_file(lock)

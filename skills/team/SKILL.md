@@ -14,7 +14,9 @@ Requested change: $ARGUMENTS
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
-Read `<root>/lib/dispatch.md`, sections 1 and 2, for the lineup format.
+Read `<root>/lib/dispatch.md`'s §1 and §2 for the lineup format (this skill
+doesn't delegate, so the rest of its "Before you start (every skill)"
+section doesn't apply here).
 
 ## Workflow
 
@@ -39,10 +41,27 @@ Read `<root>/lib/dispatch.md`, sections 1 and 2, for the lineup format.
    integer, `loop.fix_threshold` is one of blocker/major/minor,
    `workspace.mode` is `worktree` or `in-place`, `confirm_lineup` is
    always/when_unsaved/never. For any non-host CLI,
-   check it's installed with `command -v` and warn if it isn't. For agy,
-   check the effort exists for that model (`agy models`) and show the
-   closest one. Accept plain-language changes too — "stop after 5 rounds",
-   "only re-fix on blockers", "work in-place, no worktrees".
+   check it's installed with `command -v` and warn if it isn't. Accept
+   plain-language changes too — "stop after 5 rounds", "only re-fix on
+   blockers", "work in-place, no worktrees".
+
+   **Model name freshness:** for each resolved model, run `python3
+   <root>/bin/crewbench_env.py check-model --cli <cli> --model <model>`.
+   When `checked` is `true` and `found` is `false`, tell the user the
+   model isn't in that CLI's current list, show `closest`, and offer to
+   override `tiers.<cli>` in `.crewbench/team.json` with the closest match
+   (only on yes). When `checked` is `false` (`claude`, `codex` and
+   `copilot` — no model-listing command was found for any of the three as
+   of writing, `agy models` is the only one that exists), skip silently;
+   don't claim a model was verified when it wasn't.
+
+   **Copilot `safe` tester:** if the lineup has `tester` on `copilot`
+   headlessly with `permissions: safe`, warn that Copilot denies shell in
+   `safe` mode, so a headless Copilot tester can't run tests at all — it
+   can only report what it would have run. Suggest `permissions: skip`,
+   a different CLI for `tester`, or relying on the Phase 7 gate
+   (`.crewbench/project.json`'s commands) to actually run tests
+   deterministically instead.
 
    If the lineup mixes a native-route role (Claude Code or Copilot on
    host) with `workspace.mode: worktree`, mention the trade-off from

@@ -8,6 +8,31 @@ Antigravity CLI (`agy`), or Codex CLI.
 `<root>` below is the crewbench install directory (the one containing
 `agents/`, `bin/`, `config/`, `lib/` and `schemas/`).
 
+## Before you start (every skill)
+
+Every crewbench skill's own "Before you start" section should be just this,
+plus whatever's specific to that one skill:
+
+> crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a
+> literal placeholder, the root is the directory two levels above this
+> SKILL.md. Read `<root>/lib/dispatch.md`'s "Before you start (every
+> skill)" section and follow it.
+
+That's this section. From here:
+
+- **Resolving `<root>` anywhere else** (not just to find this file) — see
+  "Host detection and plugin root" right below for the fuller order (env
+  var, path-relative-to-SKILL.md, known per-host install locations).
+- **If this skill delegates to a crew role** — `new-task`, `test`,
+  `review`, `design` (not `team`, `status`, `resume`, `doctor`, `profile`,
+  which never delegate): read the rest of this file and follow it for
+  every hand-off in that skill; "Delegate to `<role>`" always means
+  "dispatch per this protocol". Also set up the task folder per §0 before
+  anything else in that skill.
+- **Empty arguments** — if a skill's `$ARGUMENTS` line comes back empty or
+  still shows an unexpanded placeholder, use the text the user actually
+  typed when invoking the skill instead of the literal line.
+
 ## Host detection and plugin root
 
 Before anything else, know which CLI you (the Team Lead) are actually
@@ -201,6 +226,27 @@ ask about them again. They only affect this one invocation: nothing here
 gets written to `.crewbench/team.json` unless the user separately says to
 save it (§2).
 
+### Model name freshness
+
+Tier defaults (`tiers[<cli>][cheap|strong]` in `config/defaults.json`) and
+anything a user names directly can drift out of date as CLIs retire or
+rename models. `/crewbench:team` checks every resolved model with:
+
+```
+python3 <root>/bin/crewbench_env.py check-model --cli <cli> --model <model>
+```
+
+`{"checked": true, "found": false, "closest": [...]}` means that model
+isn't in the CLI's current list — tell the user, show `closest`, and
+offer to override `tiers.<cli>` in `.crewbench/team.json` on yes.
+`{"checked": false}` means this CLI has no discovered model-listing
+command — as of writing that's `claude`, `codex` and `copilot`; only agy's
+`agy models` was confirmed. Skip the check silently for those three; never
+claim a model was verified when it wasn't. This check only runs from
+`/crewbench:team`, not from a task skill's own lineup-alignment (§2) or
+every round — it's about keeping the saved/default lineup itself current,
+not a per-task gate.
+
 ## 2. Align with the user
 
 Before delegating anything, show the lineup for the roles this skill will
@@ -239,6 +285,16 @@ rounds", "work in-place this time".
 
 If the user named the lineup already in their request, skip the question
 and just show the table you'll use.
+
+**Copilot `safe` tester:** if the resolved lineup has `tester` on
+`copilot` headlessly with `permissions: safe`, warn before proceeding —
+Copilot denies shell in `safe` mode (§4's Safety table), so a headless
+`safe` Copilot tester cannot run tests at all, only report what it would
+have run. Suggest `permissions: skip`, a different CLI for `tester`, or
+relying on §6's deterministic gate to actually run tests. This is the
+same check `/crewbench:team` runs on its own; do it here too since a task
+skill's own lineup-alignment step is where this combination is actually
+picked, not just when explicitly editing the saved lineup.
 
 ## 3. Pick the dispatch route
 

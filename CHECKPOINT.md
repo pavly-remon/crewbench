@@ -41,7 +41,7 @@ need it for local test runs; CI installs it).
 | 7 Project profile + gate | done | feat: Phase 7 project profile and deterministic gate |
 | 8 Less ceremony | done | feat: Phase 8 less ceremony for daily use |
 | 9 Usage/timing report | done | feat: Phase 9 usage and timing report |
-| 10 Maintenance/structure | pending | |
+| 10 Maintenance/structure | done | feat: Phase 10 maintenance and structure |
 | 11 Optional integrations | pending | |
 | 12 Docs and release | pending | |
 
@@ -599,3 +599,84 @@ Lead itself does on `$ARGUMENTS` text.
   small design pass (a new event-parsing path alongside the existing
   last-message-file one) rather than a one-line fix if it turns out to be
   the right source for codex's usage data.
+
+### Phase 10
+
+- **Skill boilerplate de-duplication**: `lib/dispatch.md` gained a
+  "Before you start (every skill)" section right after the intro (before
+  "Host detection and plugin root"), stating the exact one-line pointer
+  every skill's own "Before you start" should reduce to, plus the shared
+  rules it covers (delegating skills read the rest of dispatch.md and set
+  up the task folder per §0; every skill treats an unexpanded
+  `${CLAUDE_PLUGIN_ROOT}` placeholder or empty `$ARGUMENTS` the same way).
+  `new-task`/`test`/`review`/`design` shrank from repeating ~10 lines of
+  identical protocol/task-folder/empty-args text to one pointer sentence
+  plus only what's actually skill-specific (flags, project-profile
+  bootstrap). `team`/`resume` got lighter consistency touch-ups (they
+  don't delegate or don't need the task-folder step, so they keep their
+  own shorter root-resolution line — that line is the one piece that
+  genuinely can't be centralized further, since a skill needs it just to
+  *find* dispatch.md in the first place). `status`/`doctor`/`profile` had
+  nothing to de-duplicate (already minimal) and were left as-is. Grepped
+  for the old repeated phrasing (`dispatch.md and follow it for every
+  hand-off below`, `Set up the task folder per dispatch.md §0`) afterward
+  — zero matches left outside this checkpoint.
+- **New `scripts/bump_version.py <new-version>`**: updates all three
+  manifests' `version` in place (preserves key order/other fields —
+  verified via a diff against the pre-bump file with `version` excluded),
+  validates `MAJOR.MINOR.PATCH`, then runs the existing
+  `check_manifests.py` as a sanity check. Smoke-tested in a scratch copy
+  of the real manifests before writing `tests/test_bump_version.py`.
+- **Model name freshness — real finding, not just plumbing**: added
+  `crewbench_env.py check-model --cli <cli> --model <model>` (parses
+  `agy models`' tab-separated output; prefix-matches first for a
+  "closest" suggestion, e.g. `gemini-3.8-flash` -> its `-high`/`-medium`/
+  `-low` variants, falling back to `difflib.get_close_matches`). Checked
+  `claude --help`'s full command list, `codex --help`'s full command
+  list, and `copilot help commands`/`copilot providers --help` for a
+  model-listing equivalent — found **none** for any of the three, which
+  **corrects this file's own Phase-1-era assumption** ("Phase 9
+  [reordered to Phase 10] model-freshness check is claude/agy only") —
+  claude has no such command either; only agy's is real. Ran the real
+  `agy models` call on this machine (cheap, no-cost metadata call, same
+  category as Phase 6's `doctor` checks) and found a genuine, currently-
+  true discrepancy worth flagging to the user rather than silently
+  fixing: **`config/defaults.json`'s shipped `tiers.agy` values
+  (`gemini-3.8-flash`, `gemini-3.1-pro`) are not in agy's current
+  `agy models` catalog verbatim** — only effort-suffixed variants
+  (`gemini-3.8-flash-high/medium/low`, `gemini-3.1-pro-high/low`) are
+  listed. Did **not** change the shipped defaults over this alone: `agy`
+  still takes model and `--effort` as two separate flags, so the bare
+  tier names may still be accepted server-side even though they're not
+  literal catalog entries — confirming that one way or the other needs a
+  real dispatch call, which this phase's cost policy defers to Final
+  Verification. Wired into `/crewbench:team` step 2 (agy only; the other
+  three come back `checked: false` and are skipped, not silently
+  claimed-checked).
+- **Copilot `safe` tester warning**: added to `/crewbench:team` step 2
+  and to dispatch.md §2 "Align with the user" (so it fires during any
+  task skill's own lineup alignment, not only when explicitly editing
+  the saved lineup via `/crewbench:team`) — Copilot denies shell in
+  `safe` mode per the existing Safety table, so a headless `safe`
+  Copilot tester can't run tests; suggests `skip`, another CLI, or the
+  Phase 7 gate.
+- New `CHANGELOG.md` with the v3.0.0 entry (breaking/layout changes,
+  everything added across phases 1-10, and the correctness fixes from
+  Phase 1) — will get topped up, not rewritten, once Phases 11-12 land.
+- Fixed a real stale-docstring bug found while grepping for old v2 paths
+  per the Final Verification checklist's own instruction (item 6):
+  `update_status()`'s docstring still said `.crewbench/runs/status.json`
+  (the pre-Phase-4 layout) instead of the actual `<runs_dir>/status.json`
+  it's always taken as a parameter since Phase 4.
+- Tests: `tests/test_bump_version.py` (bump/preserve-fields/reject-bad-
+  version/no-args), `tests/test_model_freshness.py` (list/check against
+  a fake CLI, prefix-vs-fuzzy closest-match preference, "no listing
+  command" is a non-failure, not just a null result). 159/159 passing.
+- **Deliberately not done in this phase** (Final Verification): actually
+  confirming whether agy's bare tier-default model names still work via
+  a real dispatch call (flagged above, not silently assumed either way);
+  re-verifying the root-resolution fallback against a real non-Claude
+  host (still `partial`/simulated-only per `docs/compatibility.md`, same
+  status as every earlier phase — nothing in this phase's wording change
+  altered the actual resolution mechanism, so there was nothing new to
+  re-test for real).

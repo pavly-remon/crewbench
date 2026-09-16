@@ -18,26 +18,16 @@ Task: $ARGUMENTS
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
-Read `<root>/lib/dispatch.md` and follow it for every hand-off below: build
-the lineup, align it with the user, then dispatch each role natively or
-through another CLI as it describes. "Delegate to <role>" below always means
-"dispatch per that protocol".
-
-Set up the task folder per dispatch.md §0 before anything else: compute the
-task id, create `.crewbench/tasks/<task-id>/state.json`, and make sure
-`.crewbench/tasks/` and `.crewbench/wt/` are in `.git/info/exclude`. Update
-`state.json`'s `phase` as you move through the steps below. Also per §0's
-"Project profile": if `.crewbench/project.json` doesn't exist yet, run
-detection and get it confirmed once before delegating anything.
+Read `<root>/lib/dispatch.md`'s "Before you start (every skill)" section
+and follow it — this delegates (§0's task folder setup applies), so also
+per §0's "Project profile": if `.crewbench/project.json` doesn't exist
+yet, run detection and get it confirmed once before delegating anything.
 
 Before treating the rest of the arguments line as the task text, pull out
 any flags per dispatch.md §1's "Flags in $ARGUMENTS" (`--yes`, `--design`,
 `--in-place`, `--rounds N`, `--dev <cli[:model]>`, `--review
 <cli[:model]>`) and apply them as this task's own lineup/loop/workspace
 overrides — the rest of the line is the task description.
-
-If the arguments line above is empty or still shows a placeholder, use the
-text the user gave when invoking this skill.
 
 ## Workflow
 

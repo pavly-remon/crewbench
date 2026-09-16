@@ -24,9 +24,21 @@ without a non-stdlib dependency, so detection there relies on steps 1-2 only
 If nothing matches, host is "unknown" and the caller (the Team Lead) should
 ask the user once and record `host_override` in the task's state.json rather
 than guessing every time (see lib/dispatch.md "Host detection").
+
+Usage:
+  python3 <root>/bin/crewbench_env.py check-model --cli <cli> --model <model>
+      -> { "cli", "model", "checked", "found", "closest": [...],
+           "available": [...], "error" }
+      Only "agy" has a discovered model-listing command (`agy models`) as
+      of writing -- checked `claude --help`, `codex --help` and `copilot
+      help commands` and found no equivalent for any of the three, so
+      "checked" is false and "error" explains why for those CLIs (see
+      lib/dispatch.md's "Model name freshness" section).
 """
+import difflib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -145,10 +157,71 @@ def whoami():
     }
 
 
+# Model-listing command per CLI, argv after the CLI's own path. VERIFY:
+# only agy's was confirmed (`agy models`, real output inspected on this
+# machine); `claude --help`, `codex --help` and `copilot help commands`
+# were all checked and show no equivalent -- corrects an earlier
+# assumption (see CHECKPOINT.md) that claude had one too.
+MODEL_LIST_COMMANDS = {"agy": ["models"]}
+
+
+def list_models(cli, cli_path):
+    """(model_ids, error). model_ids is None (with error set) when this CLI
+    has no known model-listing command or the call itself failed."""
+    if cli not in MODEL_LIST_COMMANDS:
+        return None, f"no model-listing command is known for {cli} (see MODEL_LIST_COMMANDS)"
+    try:
+        r = subprocess.run([cli_path, *MODEL_LIST_COMMANDS[cli]],
+                            capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    if r.returncode != 0:
+        return None, (r.stderr or r.stdout).strip() or f"{cli} models exited {r.returncode}"
+    ids = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line or line.lower().startswith("fetching"):
+            continue  # agy prints a "Fetching available models..." progress line first
+        ids.append(line.split("\t", 1)[0].strip())
+    return ids, None
+
+
+def check_model(cli, cli_path, model):
+    """Whether `model` is a real id this CLI currently lists, plus the
+    closest available ids when it isn't -- never fails the caller; a CLI
+    with no listing command just comes back `checked: false`."""
+    available, error = list_models(cli, cli_path)
+    if available is None:
+        return {"cli": cli, "model": model, "checked": False, "found": None,
+                "closest": [], "available": [], "error": error}
+    found = model in available
+    closest = []
+    if not found:
+        # A tier default like "gemini-3.8-flash" is often a bare prefix of
+        # the CLI's real, effort-suffixed ids ("gemini-3.8-flash-medium");
+        # prefer that relationship over generic string-similarity matching.
+        closest = [m for m in available if m.startswith(model + "-")][:3]
+        if not closest:
+            closest = difflib.get_close_matches(model, available, n=3, cutoff=0.4)
+    return {"cli": cli, "model": model, "checked": True, "found": found,
+            "closest": closest, "available": available, "error": None}
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] != "whoami":
-        raise SystemExit("usage: crewbench_env.py whoami")
-    print(json.dumps(whoami(), indent=2))
+    if len(sys.argv) >= 2 and sys.argv[1] == "whoami":
+        print(json.dumps(whoami(), indent=2))
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "check-model":
+        args = sys.argv[2:]
+        try:
+            cli = args[args.index("--cli") + 1]
+            model = args[args.index("--model") + 1]
+        except (ValueError, IndexError):
+            raise SystemExit("usage: crewbench_env.py check-model --cli <cli> --model <model>")
+        cli_path = shutil.which(cli) or cli
+        print(json.dumps(check_model(cli, cli_path, model), indent=2))
+        return
+    raise SystemExit("usage: crewbench_env.py whoami | check-model --cli <cli> --model <model>")
 
 
 if __name__ == "__main__":

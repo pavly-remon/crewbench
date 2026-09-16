@@ -18,22 +18,12 @@ Arguments: $ARGUMENTS
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
-Read `<root>/lib/dispatch.md` and follow it for every hand-off below: build
-the lineup, align it with the user, then dispatch each role natively or
-through another CLI as it describes. "Delegate to <role>" below always means
-"dispatch per that protocol".
-
-Set up the task folder per dispatch.md §0 before anything else: compute the
-task id, create `.crewbench/tasks/<task-id>/state.json`, and make sure
-`.crewbench/tasks/` and `.crewbench/wt/` are in `.git/info/exclude`. Update
-`state.json`'s `phase` as you move through the steps below.
+Read `<root>/lib/dispatch.md`'s "Before you start (every skill)" section
+and follow it — this delegates, so §0's task folder setup applies.
 
 Strip `--yes` (see dispatch.md §1's "Flags in $ARGUMENTS") from the
 arguments before parsing branch names from what's left — it skips the
 lineup-confirmation question (§2), nothing else.
-
-If the arguments line above is empty or still shows a placeholder, use the
-text the user gave when invoking this skill.
 
 ## Workflow
 
