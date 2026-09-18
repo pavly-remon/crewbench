@@ -2,36 +2,110 @@
   "type": "object",
   "description": "One .crewbench/project.json. Proposed by bin/crewbench_profile.py detect; written only after the user confirms it via /crewbench:profile (or the first new-task in a project without one) — see lib/dispatch.md §0's 'Project profile' section. Loose like task-state.json: additionalProperties stays true since this file already goes through a human-confirmation step rather than the strict role-schema contract.",
   "properties": {
-    "package_manager": { "type": ["string", "null"], "description": "e.g. npm, pnpm, yarn, bun, pip, poetry, uv, go" },
-    "install": { "type": ["string", "null"], "description": "Command to install dependencies from a clean checkout, e.g. `npm ci`." },
+    "package_manager": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "install": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "commands": {
       "type": "object",
-      "description": "Each a string command or null when not configured/detected. Read directly by bin/crewbench_gate.py.",
       "properties": {
-        "lint": { "type": ["string", "null"] },
-        "typecheck": { "type": ["string", "null"] },
-        "test": { "type": ["string", "null"] },
-        "test_changed": { "type": ["string", "null"] },
-        "build": { "type": ["string", "null"] },
-        "format_check": { "type": ["string", "null"] }
+        "lint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "typecheck": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "test": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "test_changed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "build": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "format_check": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "additionalProperties": false
     },
-    "test_patterns": { "type": "array", "items": { "type": "string" } },
-    "source_dirs": { "type": "array", "items": { "type": "string" } },
-    "languages": { "type": "array", "items": { "type": "string" } },
-    "frameworks": { "type": "array", "items": { "type": "string" } },
+    "test_patterns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_dirs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "frameworks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "agy_allow_rules": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Suggested-only command(...) allow rules for ~/.gemini/antigravity-cli/settings.json, generated from commands by crewbench_profile.py agy-rules. crewbench never edits that file itself."
+      "items": {
+        "type": "string"
+      }
     },
-    "detected_at": { "type": ["string", "null"] },
-    "confirmed": { "type": "boolean", "description": "true once the user has confirmed or corrected the detected proposal at least once." }
+    "detected_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "confirmed": {
+      "type": "boolean"
+    }
   },
   "required": [
-    "package_manager", "install", "commands", "test_patterns", "source_dirs",
-    "languages", "frameworks", "agy_allow_rules", "confirmed"
+    "package_manager",
+    "install",
+    "commands",
+    "test_patterns",
+    "source_dirs",
+    "languages",
+    "frameworks",
+    "agy_allow_rules",
+    "confirmed"
   ],
   "additionalProperties": true
 }

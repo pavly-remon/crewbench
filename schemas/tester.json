@@ -59,7 +59,6 @@
     },
     "blocked": {
       "type": "array",
-      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none.",
       "items": {
         "type": "object",
         "properties": {
@@ -75,11 +74,12 @@
           "reason"
         ],
         "additionalProperties": false
-      }
+      },
+      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none."
     },
     "screenshots": {
-      "type": "array",
       "description": "Optional. Paths under .crewbench/tasks/<task-id>/screenshots/ from an opt-in Playwright visual check (see lib/dispatch.md's 'Visual verification'). Omit or leave empty when not applicable.",
+      "type": "array",
       "items": {
         "type": "string"
       }

@@ -395,4 +395,80 @@ changes").
 
 ## Milestone log
 
-(Notes appended here after each milestone completes.)
+### Milestone 1 — done (2026-09-19)
+
+- Installed Node 24.21.0 via `fnm` (`fnm install 24 && fnm default 24`),
+  enabled Corepack (pnpm 12.4.2). `app/.node-version` pins `24` for the
+  workspace.
+- Scaffolded `app/` as a pnpm workspace: root `package.json`
+  (`packageManager` pin, `engines.node >=24`), `pnpm-workspace.yaml`
+  (with `allowBuilds.esbuild: true` for vitest's esbuild dependency —
+  pnpm 12 now blocks postinstall scripts by default and this was the one
+  legitimate one needed), `tsconfig.base.json` (ES2023, `nodenext`,
+  strict + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`,
+  `composite: true` for `tsc -b` project references).
+- `packages/contract`: zod v4 schemas for every file in
+  `docs/app/contract/README.md`'s inventory — `team.json` (no Python-side
+  JSON Schema existed; ported from `config/defaults.json`'s shape and
+  `lib/dispatch.md` §1), `project.json`, `state.json` (including the new
+  `spec_file` field per the resolved open question 3, and
+  `schema_version` as optional-meaning-legacy-0), `index.json` entries,
+  `status.json` entries (no Python schema file either — ported from
+  `update_status()`'s actual usage sites), the dispatch envelope, all
+  four role results (with `.describe()` calls preserving the original
+  schemas' field descriptions), the `events.jsonl` discriminated union
+  (11 event types from `docs/app/contract/events.md`), and the new
+  `task-spec` schema.
+- Ported `codex_strict_schema()`/`normalize_optional_nulls()` field-for-
+  field into `codex-strict.ts`, operating on plain JSON-Schema objects
+  (not zod schemas — codex's `--output-schema` takes a JSON Schema file).
+  `test/codex-strict.test.ts` ports every case from
+  `tests/test_codex_strict_schema.py` against the same fixture files (the
+  real root `schemas/*.json`), not reimplemented fixtures.
+- `scripts/generate-json-schema.ts`: `z.toJSONSchema()` each schema,
+  writes to the existing root `schemas/*.json` (not a copy under `app/`).
+  **Caught and fixed a real correctness bug before it shipped**: zod
+  represents a nullable integer union (`z.union([z.number().int(),
+  z.null()])` — used by `issues[].line`, gate `exit_code`, envelope
+  `num_turns`) as `anyOf: [{type, minimum, maximum}, {type: "null"}]`,
+  not the `type: [T, "null"]` array form the hand-written schemas use.
+  `crewbench_dispatch.py`'s hand-rolled `validate_schema()` only reads
+  `schema.get("type")` — it has no `anyOf` support — so an uncollapsed
+  `anyOf` silently made that field's type check a no-op, accepting *any*
+  value instead of rejecting a non-integer, non-null one. Verified the
+  failure mode live (`validate()` accepted `"line": "not-a-number"`
+  before the fix, correctly rejected it after) before writing the fix.
+  Added `json-schema-postprocess.ts`'s `collapseNullableAnyOf()`
+  (extracted from the script into the package proper so it's directly
+  testable) plus 5 regression tests, one of which reproduces the exact
+  bug shape from a bare zod schema (not just the fixed output) so a
+  future zod upgrade that changes this behavior would be caught. Also
+  normalizes `additionalProperties: {}` (zod's `z.unknown()`/`z.record()`
+  output) to the boolean `true` the hand-written files use — functionally
+  identical to Python's validator either way, but matches convention.
+  Regenerating is idempotent (confirmed: running it twice produces no
+  further diff) and the full Python suite (212 tests) still passes
+  against the regenerated files.
+- The four role-result schemas' regenerated diff is now purely cosmetic
+  (description-key reordering only); `task-state.json`/`project.json`'s
+  diffs are real (the new fields, reformatted). Neither file is ever fed
+  through Python's `validate_schema()` (confirmed by grep — only
+  `schemas/<role>.json` is), so their JSON Schema is documentation-grade,
+  not executable-validation-grade, and the one remaining `anyOf` there
+  (`rounds[].gate`, a full-object nullable union `collapseNullableAnyOf`
+  correctly declines to flatten) is harmless.
+- Added `.github/workflows/ci-node.yml` as a **separate** workflow file
+  from the existing Python `ci.yml` (open question 4, resolved): a
+  3-OS `test` job (build + test + typecheck) and a `check-schemas` job
+  that fails if regenerating drifts from the committed `schemas/*.json`.
+- Full verification before commit: `pnpm -r typecheck`, `pnpm -r build`,
+  `pnpm -r test` (25 TS tests) all green; `python3 -m pytest tests/`
+  (212 tests) green against the regenerated schema files;
+  `pnpm check:schemas` correctly detects drift (confirmed by running it
+  against the pre-commit working tree, where it correctly failed showing
+  the real diff, then confirmed clean once the regenerated files matched).
+- Open question 1 (TypeScript 7 risk): no friction hit yet — `tsc -b`,
+  `vitest`, and `tsx` all worked against TS 7.0.2 without issue in this
+  milestone. Continuing with it; will flag here if that changes.
+
+(Milestones 2–7's notes appended here as each one completes.)

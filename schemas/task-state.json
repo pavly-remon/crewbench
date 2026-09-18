@@ -3,70 +3,270 @@
   "description": "One .crewbench/tasks/<task-id>/state.json. Written and read by bin/crewbench_state.py; see lib/dispatch.md's state.json section for the field-by-field protocol (when the Team Lead updates each one).",
   "properties": {
     "schema_version": {
-      "type": "integer",
-      "description": "Contract version of this state.json. Missing means version 0 (legacy, written before this field existed) -- readers must handle that. Current version: 1."
+      "type": "integer"
     },
-    "id": { "type": "string", "description": "YYYYMMDD-HHMM-<up to 5 word kebab slug>-<4 hex> (the hex suffix guards against same-minute id collisions; older ids without it are still valid)" },
-    "command": { "type": "string", "enum": ["new-task", "test", "review", "design"] },
-    "title": { "type": "string" },
-    "created_at": { "type": "string" },
-    "updated_at": { "type": "string" },
+    "id": {
+      "type": "string"
+    },
+    "command": {
+      "type": "string",
+      "enum": [
+        "new-task",
+        "test",
+        "review",
+        "design"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    },
     "phase": {
       "type": "string",
-      "enum": ["scoping", "design", "implementing", "verifying", "fixing",
-               "awaiting_commit", "done", "stopped", "failed"]
+      "enum": [
+        "scoping",
+        "design",
+        "implementing",
+        "verifying",
+        "fixing",
+        "awaiting_commit",
+        "done",
+        "stopped",
+        "failed"
+      ]
     },
-    "round": { "type": "integer" },
+    "round": {
+      "type": "integer"
+    },
     "lineup": {
       "type": "object",
-      "description": "The resolved, user-agreed lineup for this task (see lib/dispatch.md §1)."
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": true
     },
-    "base_commit": { "type": ["string", "null"] },
-    "branch": { "type": ["string", "null"] },
-    "worktree": { "type": ["string", "null"], "description": "Absolute path, or null in in-place mode." },
+    "base_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "worktree": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "jira_key": {
-      "type": ["string", "null"],
-      "description": "Set when new-task's first argument matched a Jira key (e.g. PROJ-123, see lib/dispatch.md §0's 'Task folder and state'); null otherwise. crewbench never writes back to Jira on its own."
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "host_override": {
-      "type": ["string", "null"],
-      "description": "Set only when crewbench_env.py whoami couldn't determine the host CLI and the user was asked once (see lib/dispatch.md 'Host detection and plugin root'); null otherwise."
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "doctor": {
       "type": "object",
-      "description": "Cached crewbench_dispatch.py doctor results for this task's session, keyed by CLI name, so a non-host CLI in the lineup isn't re-checked every round (see lib/dispatch.md's Sandboxes and doctor section)."
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": true
     },
-    "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
-    "design_spec_file": { "type": ["string", "null"] },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "design_spec_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "spec_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "rounds": {
       "type": "array",
-      "description": "One entry per fix-loop round.",
       "items": {
         "type": "object",
         "properties": {
-          "round": { "type": "integer" },
-          "runs": { "type": "array", "items": { "type": "string" } },
-          "gate": {
-            "type": ["object", "null"],
-            "description": "bin/crewbench_gate.py's result for this round, when the gate ran (see lib/dispatch.md §6's 'Deterministic gate'). null when nothing was configured or the round had no gate step."
+          "round": {
+            "type": "integer"
           },
-          "verdicts": { "type": "object" },
-          "open_issue_ids": { "type": "array", "items": { "type": "string" } },
-          "snapshot_ref": { "type": ["string", "null"] }
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gate": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "command": {
+                          "type": "string"
+                        },
+                        "exit_code": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "duration_s": {
+                          "type": "number"
+                        },
+                        "timed_out": {
+                          "type": "boolean"
+                        },
+                        "output_tail": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "command",
+                        "exit_code",
+                        "duration_s",
+                        "timed_out",
+                        "output_tail"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "ok",
+                  "steps"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verdicts": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": true
+          },
+          "open_issue_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "snapshot_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
-        "required": ["round", "runs"]
+        "required": [
+          "round",
+          "runs"
+        ],
+        "additionalProperties": true
       }
     },
     "usage": {
       "type": "object",
-      "description": "Keyed by role name. Each value: { runs, duration_s, tokens, cost_usd, cli, model } — tokens/cost_usd stay null until a run actually reports them. See lib/dispatch.md §4's 'Usage and timing' section for the per-run aggregation rule and §7's 'Usage summary' for how it's reported."
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "integer"
+          },
+          "duration_s": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "tokens": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cli": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
     },
-    "notes": { "type": "array", "items": { "type": "string" } }
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
   },
   "required": [
-    "id", "command", "title", "created_at", "updated_at", "phase", "round",
-    "lineup", "base_commit", "branch", "worktree", "acceptance_criteria",
-    "design_spec_file", "rounds", "usage", "notes"
+    "id",
+    "command",
+    "title",
+    "created_at",
+    "updated_at",
+    "phase",
+    "round",
+    "lineup",
+    "base_commit",
+    "branch",
+    "worktree",
+    "acceptance_criteria",
+    "design_spec_file",
+    "rounds",
+    "usage",
+    "notes"
   ],
   "additionalProperties": true
 }

@@ -1,0 +1,7 @@
+packages:
+  - "packages/*"
+allowBuilds:
+  # esbuild is a direct dependency of vitest (used for TS transform), and
+  # its postinstall step just downloads/selects the right platform binary --
+  # a normal, expected build step for this well-known package.
+  esbuild: true
