@@ -471,4 +471,76 @@ changes").
   `vitest`, and `tsx` all worked against TS 7.0.2 without issue in this
   milestone. Continuing with it; will flag here if that changes.
 
-(Milestones 2–7's notes appended here as each one completes.)
+### Milestone 2 — done (2026-09-19)
+
+- New `packages/adapters` (depends on `@crewbench/contract`). **Deviation
+  from the target layout's literal file list, disclosed here rather than
+  silent**: instead of one file per CLI (`claude.ts`/`codex.ts`/`agy.ts`/
+  `copilot.ts`) each implementing a separate `CliAdapter`, every piece of
+  logic is a single function parametrized by `cli` (`buildCommand()`,
+  `Stream`, `extractUsage()`, `resumeCommand()`, `doctor()`) — mirroring
+  `crewbench_dispatch.py`'s own structure (one script branching on
+  `--cli`, not four near-identical scripts). A thin `createAdapter(cli)`
+  in `adapter.ts` assembles these into the `CliAdapter` object shape the
+  plan named, so milestone 4's runner still gets a clean per-CLI handle;
+  the underlying logic isn't duplicated four times. Chose this because
+  "port field-for-field" and "four separate files" pulled in opposite
+  directions here — fidelity to the actual source structure won.
+- Ported, field-for-field, every piece `lib/dispatch.md` §4 and
+  `crewbench_dispatch.py` describe: `childEnv()`/`HOST_ENV_PREFIXES`
+  (env.ts), `checkArgvSize()`/`MAX_ARGV_BYTES` (argv.ts), `extractJson()`/
+  `short()` (json-extract.ts, including the raw-decode-style scanner for
+  "last top-level JSON object in free text", since JS's `JSON.parse` has
+  no partial-parse mode like Python's `raw_decode`), `resumeCommand()`
+  (resume.ts, including the codex fix from Phase 0 milestone 4),
+  `classifySandboxError()` (sandbox.ts), `resolveCliPath()`/
+  `cliArgvPrefix()`/`CONFIG_DIRS` (cli-paths.ts), `LIMITS`/
+  `CLAUDE_TOOLS`/`agyCommandRules()`/`limitsFor()` (limits.ts),
+  `buildPrompt()`/`stripFrontmatter()`/`promptPointer()` (prompt.ts), the
+  full `Stream` class for all four CLIs plus `classifyLogEntry()`
+  (stream.ts), `extractUsage()` (usage.ts, including copilot's
+  `--usage-output-file` read and codex's real `turn.completed` usage from
+  Phase 0), `parseOutput()` (parse-output.ts), `buildCommand()` for all
+  four CLIs (build-command.ts), the doctor checks — network/auth/
+  config-dir-writable — and `checkModel()` from `crewbench_env.py`
+  (doctor.ts, model-check.ts).
+- `checkModel()`'s closest-match ranking uses a small Levenshtein-based
+  similarity function, not Python's `difflib.get_close_matches()` (no
+  direct equivalent in the stack without a new dependency) — same
+  purpose (best-effort fuzzy suggestions for a doctor-report hint,
+  nothing else depends on exact ranking), not byte-identical algorithm.
+  Documented inline; flagging here too since it's a real, if minor,
+  algorithmic deviation.
+- Golden tests reuse the **same fixture files** `tests/fixtures/` already
+  has (read via a relative path up to the repo root, not copied) for
+  every CLI's stream parser, `parse_output`, `extract_usage`, and the
+  `codex_last_message.json`/`copilot_stdout.txt` extraction cases — ported
+  one-to-one from `test_stream_parsers.py`/`test_usage.py`. `doctor()`'s
+  integration tests spawn the real `tests/fixtures/fake_clis/
+  fake_status_cli.py` fixture (same file the Python suite spawns), proving
+  the TS `doctor()` drives an external process identically, not just that
+  it parses fixture text. `agyCommandRules()`'s tests port
+  `test_agy_rules.py` exactly, using a `home` parameter override instead
+  of monkeypatching `Path.home()` (no direct TS equivalent of Python's
+  `monkeypatch.setattr`, so the function takes an optional override
+  param instead — a deliberate, tested seam rather than a global-state
+  workaround).
+- Caught one real bug while writing `doctor()`'s integration tests: the
+  fixture-file path was computed relative to `process.cwd()` (which is
+  wherever vitest happens to run from) instead of the test file's own
+  location, so it silently resolved to a nonexistent path and every
+  doctor-with-a-real-fake-CLI test failed with ENOENT. Fixed by switching
+  to `import.meta.url`-based resolution, matching every other test file
+  in this package.
+- Added a `tsconfig.test.json` per package (contract and adapters) so
+  `pnpm typecheck` actually type-checks test files too — `tsc -b`'s
+  `include: ["src"]` alone left every `test/*.ts` file completely
+  unchecked by the build; vitest's esbuild transform doesn't type-check
+  either. Wired into each package's `typecheck` script.
+- Full verification: `pnpm -r typecheck` (now covering tests too),
+  `pnpm -r build`, `pnpm -r test` (132 TS tests: 25 contract + 107
+  adapters) all green; the Python suite (212 tests) still green
+  (unaffected by this milestone — adapters is new code, not a port that
+  touches `bin/*.py`).
+
+(Milestones 3–7's notes appended here as each one completes.)
