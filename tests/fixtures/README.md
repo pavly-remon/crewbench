@@ -23,6 +23,12 @@ shape follows what `crewbench_dispatch.py`'s parsers already expect (see
   the other fixtures in this file.
 - `codex_last_message.json` — the JSON `codex exec --output-schema ... -o
   <file>` writes to its `-o` file: just the structured result object.
+- `codex_stream.jsonl` — a `codex exec --json` transcript: `thread.started`
+  (session id), an `agent_message` item, a `command_execution` item
+  (started then completed), another `agent_message`, and the terminal
+  `turn.completed` event with real token usage. Real, live-captured
+  (codex-cli 0.154.0, Phase 0 milestone 4), lightly trimmed — unlike most
+  of the other fixtures in this file, which are hand-written.
 - `copilot_stdout.txt` — plain-text Copilot CLI output with the JSON result
   embedded in a fenced ` ```json ` block, the shape `extract_json()` has to
   pull out of free text.
