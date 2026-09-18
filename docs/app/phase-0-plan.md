@@ -304,3 +304,49 @@ Read first: `docs/app/CONTEXT.md`, `bin/crewbench_state.py`,
   correctly ordered JSONL before writing the automated test — see the
   session transcript for the raw output.
 - Full suite: 205 passed, no regressions.
+
+### Milestone 4 — done (2026-09-19)
+
+Both CLIs were installed and logged in on this machine (`codex-cli
+0.154.0`, `GitHub Copilot CLI 1.0.83`), so this was a real investigation
+against real `--help` output and real live calls, not a guess — and the
+plan's "VERIFY, probably nothing" expectation turned out wrong for both.
+
+- **codex**: `codex exec --help` documents `--json` (JSONL event stream).
+  Confirmed live: `thread.started` (session id), `item.completed`/
+  `item.started` (`agent_message`/`command_execution`/`error` items),
+  `turn.completed` (real token usage), `turn.failed` (structured error).
+  Wired a `Stream._codex()` parser, added `--json` to codex's
+  `build_command()`, and switched `extract_usage()`'s codex branch from
+  the always-null text-scan guess to real `turn.completed` usage. The
+  existing `--output-schema`/`-o` file mechanism is unchanged and stays
+  the source of truth for the structured result; the stream only adds
+  live progress, the session id, and usage.
+  - Also fixed a real bug found while verifying `resume_command()` live:
+    `codex resume <id>` launches the interactive TUI, not the headless
+    exec path — the correct command is `codex exec resume <id>`. The code
+    had the wrong one since before this phase.
+- **copilot**: `copilot --help` documents both `--output-format json`
+  (a large, elaborate live-event schema — session/turn/model/tool
+  lifecycle) and `--usage-output-file <file>` (a JSON usage summary
+  written after the run). Wired only the latter — small, additive,
+  unambiguous shape (`lastCallInputTokens`/`lastCallOutputTokens`; the
+  cost-like `totalNanoAiu` field is an internal AI-unit credit metric, not
+  USD, so `cost_usd` stays `null`). Deliberately did **not** wire the live
+  JSONL event stream into `Stream`/`parse_output` this pass — copilot's
+  existing plain-text `-p` mode already produces a correct final result,
+  and that event schema is large enough to be its own follow-up rather
+  than something to fold into an already-large milestone. Documented as a
+  scoped-out follow-up, not a gap nobody noticed.
+- Both changes verified two ways: automated tests against real *captured*
+  live output (`tests/fixtures/codex_stream.jsonl`, new
+  `test_stream_parsers.py`/`test_usage.py`/`test_build_command.py` cases),
+  and — separately, manually, outside the test suite — two full real
+  dispatches through `crewbench_dispatch.py` itself against the live,
+  logged-in CLIs (one codex run hitting `turn.failed` on an
+  account-unsupported model name, one succeeding end-to-end with real
+  usage; one copilot run succeeding end-to-end with real usage). Findings
+  and exact confirmed shapes recorded in `docs/compatibility.md`'s new
+  "Structured events & usage investigation" section and in
+  `lib/dispatch.md`'s "Usage and timing" section.
+- Full suite: 212 passed, no regressions.

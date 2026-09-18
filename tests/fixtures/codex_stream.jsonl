@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a0b679-e908-70d1-8ab6-f1c95fc49c42"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"I'll check the current directory with `ls`."}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc ls","aggregated_output":"a.txt\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"a.txt\n\nDone."}}
+{"type":"turn.completed","usage":{"input_tokens":30712,"cached_input_tokens":26112,"cache_write_input_tokens":0,"output_tokens":77,"reasoning_output_tokens":0}}

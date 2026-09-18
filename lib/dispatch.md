@@ -571,17 +571,25 @@ exposed — `duration_s` (wall-clock, same value as the envelope's top-level
 run didn't report them. A run's `ok`/`error` never depends on `usage` being
 complete — missing usage is not a failure.
 
-Confirmed shape, both via real headless dispatches during Final
-Verification: claude's `--output-format stream-json` terminal `result`
-event's `usage`/`total_cost_usd`/`num_turns` fields, and agy's equivalent
-terminal `result` event's `usage: {input_tokens, output_tokens,
-total_tokens, ...}` plus a top-level `num_turns` — no `cost`/`cost_usd`
-field was present in that same real agy response, so `cost_usd` stays a
-`VERIFY` guess for agy specifically. `VERIFY` (best-effort, not confirmed
-live): a plain text scan of codex/copilot's stdout for a "tokens used"
-style line — neither CLI's headless output was observed to expose usage
-in the real dispatches run for this release, so both stay `null` in
-practice today.
+Confirmed shape, via real headless dispatches: claude's
+`--output-format stream-json` terminal `result` event's
+`usage`/`total_cost_usd`/`num_turns` fields; agy's equivalent terminal
+`result` event's `usage: {input_tokens, output_tokens, total_tokens,
+...}` plus a top-level `num_turns` (no `cost`/`cost_usd` field was present
+in that same real agy response, so `cost_usd` stays a `VERIFY` guess for
+agy specifically); codex's `--json` JSONL stream's terminal
+`turn.completed` event's `usage: {input_tokens, cached_input_tokens,
+cache_write_input_tokens, output_tokens, reasoning_output_tokens}` (no
+cost field either, and no `num_turns` — a dispatch is always one turn, but
+codex doesn't say so explicitly); and copilot's
+`--usage-output-file <path>`, a JSON file written after the run finishes
+with `lastCallInputTokens`/`lastCallOutputTokens` (this call, not a
+session total) and `totalNanoAiu` (an internal AI-unit credit metric, not
+USD — `cost_usd` stays `null` rather than a wrong conversion). copilot
+falls back to a best-effort text scan of stdout for a "tokens used" style
+line only if `--usage-output-file` is missing (e.g. an older copilot
+version without that flag) — no such line has ever actually been
+observed, so that fallback stays `null` in practice.
 
 After each run finishes, fold its `usage` into `state.json.usage.<role>`
 (§0's field reference) — `get` the current value, add to it, `set` it

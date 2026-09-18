@@ -84,6 +84,76 @@ practice until someone runs `scripts/matrix_smoke.py` from each host.
   is inferred from `copilot plugin --help`'s described layout, not
   confirmed against a real install (none existed on this machine).
 
+## Structured events & usage investigation (Phase 0, milestone 4)
+
+Investigated live on this machine, 2026-09-19: `codex-cli 0.154.0`,
+`GitHub Copilot CLI 1.0.83`. Both turned out to have real structured
+output — the phase plan's "VERIFY" guess (no such mode exists) was wrong
+for both.
+
+**codex**: `codex exec --help` documents `--json` ("Print events to stdout
+as JSONL"). Confirmed live against a real `codex exec --json` call:
+- `{"type": "thread.started", "thread_id": "<uuid>"}` — the session id
+  (used for `resume_command`; `codex resume <id>` launches the interactive
+  TUI, the headless equivalent confirmed live is `codex exec resume <id>` —
+  the code had the wrong one before this pass, now fixed).
+- `{"type": "item.completed"/"item.started", "item": {...}}` — `item.type`
+  seen live: `agent_message` (assistant text), `command_execution` (shell
+  tool call, with `command`/`exit_code`/`aggregated_output` once
+  completed), `error` (a codex-internal warning, e.g. a hook-config
+  clamp — not a tool failure).
+- `{"type": "turn.completed", "usage": {"input_tokens",
+  "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
+  "reasoning_output_tokens"}}` — real per-run token usage. No cost field
+  present; `cost_usd` stays `null` rather than guessed.
+- `{"type": "turn.failed", "error": {"message": ...}}` on failure (e.g. an
+  unsupported model name for the account's plan — hit live during this
+  investigation).
+- The existing `--output-schema <file> -o <file>` mechanism (unchanged)
+  remains the source of truth for the final structured `result` — the
+  same JSON also appears as the last `agent_message.text`, but the file is
+  more robust to log-parsing edge cases, so `parse_output()` still reads it
+  first and only falls back to `stream.final`'s `turn.failed` error when
+  the file wasn't written.
+- Wired into `Stream._codex()` and `extract_usage()`/`parse_output()`'s
+  codex branches; `--json` added to codex's `build_command()`. See
+  `docs/app/contract/events.md` and `tests/fixtures/codex_stream.jsonl`
+  (a real captured stream, lightly trimmed) for the parser's test coverage.
+- Verified with two full real dispatches through `crewbench_dispatch.py`
+  itself (not just the raw CLI) during this pass: one hitting
+  `turn.failed` (unsupported model), one succeeding end-to-end
+  (`code-reviewer` role, real structured `result`, real `usage:
+  {input_tokens: 33425, output_tokens: 343}`, correct `resume_command`).
+
+**copilot**: `copilot --help` documents `--output-format json` (JSONL
+events, a much larger and more elaborate schema than codex's — session/
+turn/model/tool lifecycle events) and, more directly useful,
+`--usage-output-file <file>`, which writes a JSON summary after the run
+finishes. Confirmed live: `{"lastCallInputTokens", "lastCallOutputTokens",
+"totalNanoAiu", "totalPremiumRequestCost", "modelMetrics": {...}, ...}`.
+- `lastCallInputTokens`/`lastCallOutputTokens` are this run's usage, not a
+  running session total — the right thing to fold into `state.json`'s
+  per-run usage aggregation. `totalNanoAiu` is an internal AI-unit credit
+  metric, not USD — `cost_usd` stays `null` rather than a wrong
+  conversion (`VERIFY` if copilot ever exposes an actual dollar figure).
+- Only `--usage-output-file` was wired in this pass (added to copilot's
+  `build_command()`, read back by `extract_usage()`), since it's a small,
+  additive, low-risk change with an unambiguous shape. The live
+  `--output-format json` event stream was inspected but **not** wired into
+  `Stream`/`parse_output` — copilot's `-p`/`-s` plain-text mode already
+  works for the final result, and the live-event schema is large enough
+  (session/turn/model/tool/message-delta lifecycle, not the compact
+  request/response shape codex and agy use) that parsing it properly is
+  its own chunk of work, better scoped as its own follow-up than folded
+  into this milestone. The best-effort text-scan fallback
+  (`_usage_from_text`) stays in place for both CLIs only as a
+  last-resort — for copilot, if `--usage-output-file` is ever missing (an
+  older version without the flag); for codex it's now fully unused (dead
+  as of this change, kept only because copilot still needs the function).
+- Verified with one full real dispatch through `crewbench_dispatch.py`:
+  `code-reviewer` role, real structured `result`, real `usage:
+  {input_tokens: 26709, output_tokens: 105}`.
+
 ## How to update this file
 
 Run `scripts/matrix_smoke.py` from each host you can access, with as many
