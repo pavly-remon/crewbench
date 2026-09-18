@@ -48,7 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from crewbench_env import CONFIG_DIRS, cli_argv_prefix  # noqa: E402
-from crewbench_fs import _lock_file, _unlock_file  # noqa: E402
+from crewbench_fs import SCHEMA_VERSION, _lock_file, _unlock_file, now_iso  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -992,7 +992,7 @@ def cmd_start(argv):
     with open(launcher_log, "w", encoding="utf-8") as lf:
         proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, **popen_kwargs)
-    update_status(runs_dir, run, {"state": "starting", "launcher_pid": proc.pid})
+    update_status(runs_dir, run, {"schema_version": SCHEMA_VERSION, "state": "starting", "launcher_pid": proc.pid})
     print(json.dumps({
         "run": run, "pid": proc.pid,
         "log_file": str(runs_dir / f"{run}.log"),
@@ -1052,7 +1052,7 @@ def cmd_cancel(argv):
         if pid:
             killed_any = kill_pid_group(pid) or killed_any
     update_status(runs_dir, args.run, {"state": "failed", "error": "cancelled by user",
-                                       "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S")})
+                                       "finished_at": now_iso()})
     print(json.dumps({"run": args.run, "cancelled": killed_any}, indent=2))
 
 
@@ -1110,7 +1110,8 @@ def main(argv=None):
     out_path = runs_dir / f"{run}.result.json"
     raw_path = runs_dir / f"{run}.raw.txt"
     log_path = runs_dir / f"{run}.log"
-    envelope = {"role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort,
+    envelope = {"schema_version": SCHEMA_VERSION,
+                "role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort,
                 "skip_permissions": args.skip_permissions and args.role not in READ_ONLY,
                 "ok": False, "exit_code": None, "duration_s": None, "result": None, "usage": None,
                 "permission_denials": [], "error": None, "session_id": None, "resume_command": None,
@@ -1119,7 +1120,7 @@ def main(argv=None):
     def finish():
         out_path.write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
         update_status(runs_dir, run, {"state": "done" if envelope["ok"] else "failed",
-                                      "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                      "finished_at": now_iso(),
                                       "session_id": envelope["session_id"],
                                       "resume_command": envelope["resume_command"],
                                       "error": envelope["error"]})
@@ -1246,9 +1247,10 @@ def main(argv=None):
         log.write(f"[{now()}] {args.role} on {args.cli} ({args.model}, effort {args.effort})\n")
         for warning in warnings:
             log.write(f"[{now()}] warning: {warning}\n")
-        update_status(runs_dir, run, {"role": args.role, "cli": args.cli, "model": args.model,
+        update_status(runs_dir, run, {"schema_version": SCHEMA_VERSION,
+                                      "role": args.role, "cli": args.cli, "model": args.model,
                                       "effort": args.effort, "state": "running",
-                                      "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                      "started_at": now_iso(),
                                       "log_file": str(log_path), "session_id": None})
         print(f"crewbench: {run} running on {args.cli} — live log: tail -f {log_path}",
               file=sys.stderr, flush=True)

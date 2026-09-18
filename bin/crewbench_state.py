@@ -8,7 +8,10 @@ at <root>/index.json (`<root>` is normally `.crewbench`).
 
 Usage:
   crewbench_state.py slug "task description"
-      -> prints a task id: YYYYMMDD-HHMM-<up-to-5-word-kebab-slug>
+      -> prints a task id: YYYYMMDD-HHMM-<up-to-5-word-kebab-slug>-<4 hex>
+         (the hex suffix only guards against two tasks started in the same
+         minute with a similar description; older ids without it still
+         work everywhere else in this script)
 
   crewbench_state.py new --task-dir <dir> --id <id> --command <cmd> --title <title>
                           [--base-commit <sha>] [--branch <name>]
@@ -30,16 +33,17 @@ Usage:
 import argparse
 import json
 import re
+import secrets
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from crewbench_fs import atomic_write_json, locked_read_modify_write, read_json_or_default  # noqa: E402
-
-
-def now_iso():
-    return time.strftime("%Y-%m-%dT%H:%M:%S")
+from crewbench_fs import (  # noqa: E402
+    SCHEMA_VERSION, atomic_write_json, locked_read_modify_write, now_iso, parse_legacy_or_utc,
+    read_json_or_default,
+)
 
 
 def make_slug(text, max_words=5):
@@ -48,7 +52,7 @@ def make_slug(text, max_words=5):
 
 
 def make_task_id(text):
-    return f"{time.strftime('%Y%m%d-%H%M')}-{make_slug(text)}"
+    return f"{time.strftime('%Y%m%d-%H%M')}-{make_slug(text)}-{secrets.token_hex(2)}"
 
 
 def _index_path(task_dir):
@@ -58,6 +62,7 @@ def _index_path(task_dir):
 
 def _index_entry(state):
     return {
+        "schema_version": state.get("schema_version", SCHEMA_VERSION),
         "id": state["id"], "command": state.get("command"), "title": state.get("title"),
         "phase": state.get("phase"), "round": state.get("round"),
         "updated_at": state.get("updated_at"),
@@ -164,6 +169,7 @@ def cmd_new(args):
 
     def build(existing):
         return {
+            "schema_version": SCHEMA_VERSION,
             "id": args.id,
             "command": args.command,
             "title": args.title,
@@ -228,7 +234,14 @@ def cmd_list(args):
         index = json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         index = {}
-    rows = sorted(index.values(), key=lambda r: r.get("updated_at") or "", reverse=True)
+    # Sort by parsed time (not the raw string) so old naive-local timestamps
+    # and new UTC ones compare correctly against each other; unparseable/
+    # missing timestamps sort last regardless of direction.
+    def sort_key(row):
+        parsed = parse_legacy_or_utc(row.get("updated_at"))
+        return parsed or datetime.min.replace(tzinfo=timezone.utc)
+
+    rows = sorted(index.values(), key=sort_key, reverse=True)
     print(json.dumps(rows, indent=2))
 
 

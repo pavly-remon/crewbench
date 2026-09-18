@@ -82,7 +82,9 @@ folder before anything else happens:
 ```
 
 1. Compute the task id: `python3 <root>/bin/crewbench_state.py slug "<task
-   text>"` → `YYYYMMDD-HHMM-<up-to-5-word-kebab-slug>`.
+   text>"` → `YYYYMMDD-HHMM-<up-to-5-word-kebab-slug>-<4 hex>` (the hex
+   suffix guards against two tasks started in the same minute with a
+   similar description; older ids without it still work everywhere).
 2. Create the state file:
    `python3 <root>/bin/crewbench_state.py new --task-dir
    .crewbench/tasks/<task-id> --id <task-id> --command <new-task|test|review|design>

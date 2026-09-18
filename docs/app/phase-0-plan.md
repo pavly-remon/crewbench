@@ -219,3 +219,37 @@ Read first: `docs/app/CONTEXT.md`, `bin/crewbench_state.py`,
 - Full suite: 188 passed (185 pre-existing + 3 new), no regressions.
 - Also fixed a stale comment in `crewbench_gate.py` pointing at the old
   `crewbench_dispatch.py` location of `_lock_file`/`_unlock_file`.
+
+### Milestone 2 — done (2026-09-19)
+
+- `crewbench_fs.py` gained `SCHEMA_VERSION = 1`, `now_iso()` (UTC ISO-8601
+  with an explicit `Z` offset), and `parse_legacy_or_utc()` (parses either
+  the new UTC format or the old naive-local one into a comparable
+  timezone-aware `datetime`, returning `None` for anything unparseable).
+- `crewbench_state.py`: dropped its own local `now_iso()` in favor of the
+  shared one; `make_task_id` now appends `-<4 hex>` via `secrets.token_hex(2)`;
+  `cmd_new`'s initial state and `_index_entry()` both carry
+  `schema_version`; `cmd_list`'s sort now parses timestamps instead of
+  comparing raw strings, so old naive-local and new UTC entries interleave
+  correctly and unparseable/missing timestamps sort last.
+- `crewbench_dispatch.py`: the three structured `time.strftime(...)`
+  timestamp sites (`cmd_start`, the `finish()` closure, and the
+  pre-run `update_status` call) now use `now_iso()`; each of those
+  `update_status` calls also carries `schema_version`. `now()` (the
+  human-facing `[HH:MM:SS]` log-line prefix) is intentionally untouched —
+  the phase prompt allows local time there.
+- `schemas/task-state.json` documents `schema_version` (optional, missing
+  means legacy version 0) and the new id shape.
+- `lib/dispatch.md` §0's id format updated to match.
+- Updated `tests/test_state_helper.py::test_make_slug_and_task_id` for the
+  new id shape (it previously asserted an exact `-hello-world` suffix,
+  which no longer holds now that a hex suffix follows it) and added a
+  same-minute-collision test next to it.
+- New `tests/test_schema_version_and_timestamps.py` (7 tests): UTC format
+  of `now_iso()`, new tasks carry `schema_version` in both `state.json` and
+  `index.json`, a hand-written legacy `state.json` (no `schema_version`,
+  naive timestamp) still reads *and* can still be `set` against without
+  crashing, `parse_legacy_or_utc()` on both formats plus `None`/garbage
+  input, `list`'s sort ordering across legacy/UTC/garbage timestamps, and
+  id non-collision.
+- Full suite: 195 passed, no regressions.

@@ -2,7 +2,11 @@
   "type": "object",
   "description": "One .crewbench/tasks/<task-id>/state.json. Written and read by bin/crewbench_state.py; see lib/dispatch.md's state.json section for the field-by-field protocol (when the Team Lead updates each one).",
   "properties": {
-    "id": { "type": "string", "description": "YYYYMMDD-HHMM-<up to 5 word kebab slug>" },
+    "schema_version": {
+      "type": "integer",
+      "description": "Contract version of this state.json. Missing means version 0 (legacy, written before this field existed) -- readers must handle that. Current version: 1."
+    },
+    "id": { "type": "string", "description": "YYYYMMDD-HHMM-<up to 5 word kebab slug>-<4 hex> (the hex suffix guards against same-minute id collisions; older ids without it are still valid)" },
     "command": { "type": "string", "enum": ["new-task", "test", "review", "design"] },
     "title": { "type": "string" },
     "created_at": { "type": "string" },

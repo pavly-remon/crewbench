@@ -8,7 +8,35 @@ the same time) never lose an update. This module is the single place that
 pattern lives, so neither script has to import from the other.
 """
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
+SCHEMA_VERSION = 1
+
+
+def now_iso():
+    """UTC ISO-8601 with an explicit offset, e.g. "2026-09-18T14:03:22Z".
+    Every structured timestamp written anywhere in `.crewbench/` uses this
+    (human-facing log-line prefixes may keep a short local-time format
+    instead -- see crewbench_dispatch.py's now())."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_legacy_or_utc(ts):
+    """Parse a timestamp written by either this UTC format or the old naive
+    local-time one ("%Y-%m-%dT%H:%M:%S", no offset) that earlier versions of
+    crewbench_state.py/crewbench_dispatch.py wrote. Returns a comparable,
+    timezone-aware datetime, treating a naive value as local time. Returns
+    None for anything unparseable (missing/malformed field) rather than
+    raising -- callers should treat that as "unknown", not fail the read."""
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        if ts.endswith("Z"):
+            return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S").astimezone()
+    except ValueError:
+        return None
 
 
 def _lock_file(handle):
