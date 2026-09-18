@@ -1,5 +1,51 @@
 # Changelog
 
+## v3.1.0
+
+Phase 0 of the crewbench-app build (see `docs/app/CONTEXT.md` and
+`docs/app/phase-0-plan.md`): hardens the `.crewbench/` on-disk format into
+a safe, versioned contract a future standalone app can rely on alongside
+the plugin, with no change to plugin workflow behavior. Full contract
+reference: `docs/app/contract/README.md`.
+
+### Added
+
+- **`events.jsonl`**: an append-only, per-task structured event log
+  (`task.created`, `task.phase_changed`, `task.round_started`,
+  `task.note_added`, `run.started`, `run.finished`, `run.message`,
+  `run.tool_call`, `run.tool_error`, `gate.finished`, `git.warning`) —
+  write-side only this release; nothing reads it back yet. Full catalog:
+  `docs/app/contract/events.md`.
+- **`schema_version`** on `state.json`, `index.json` entries,
+  `status.json` entries, and the dispatch result envelope (current: 1;
+  missing means legacy version 0).
+- **Real codex usage and live progress**: `codex exec --json`'s event
+  stream now feeds real per-run token usage and live tool-call/message
+  progress, instead of an always-null best-effort text scan.
+- **Real copilot usage**: `--usage-output-file` now feeds real per-call
+  token usage, instead of an always-null best-effort text scan.
+
+### Fixed
+
+- **Race-free `state.json`/`index.json` writes.** Concurrent updates to
+  the same task (most commonly a tester run and a reviewer run finishing
+  at the same moment) could previously lose one of the two updates; both
+  files now go through one locked read-modify-write.
+- **`codex exec resume <id>` was never reachable.** The envelope's
+  `resume_command` for codex was `codex resume <id>`, which opens the
+  interactive TUI, not the headless equivalent — it's now
+  `codex exec resume <id>`.
+
+### Changed
+
+- Task ids gain a 4-hex-char suffix
+  (`YYYYMMDD-HHMM-<slug>-<hex>`) to stop two same-minute, similarly-worded
+  tasks from colliding. Older ids without the suffix keep working
+  everywhere.
+- Every structured timestamp (`created_at`, `updated_at`, `started_at`,
+  `finished_at`) is now UTC ISO-8601 with an explicit `Z` offset instead
+  of naive local time. Readers still accept the old naive format.
+
 ## v3.0.0
 
 A large "make it practical for daily use" release. Every crewbench-owned

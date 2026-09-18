@@ -350,3 +350,49 @@ plan's "VERIFY, probably nothing" expectation turned out wrong for both.
   "Structured events & usage investigation" section and in
   `lib/dispatch.md`'s "Usage and timing" section.
 - Full suite: 212 passed, no regressions.
+
+### Milestone 5 — done (2026-09-19)
+
+- Wrote `docs/app/contract/README.md`: every file under `.crewbench/`
+  (`team.json`, `project.json`, `project.md`, `index.json`,
+  `state.json`, `events.jsonl`, `spec.json` (reserved for Phase 1),
+  `status.json`, the `<role>-r<round>.*` run-artifact family,
+  `gate-r<round>.*`), each with who writes it, who reads it, its schema
+  (or "no schema file" where none exists), and whether it's committed —
+  plus dedicated sections on the locking discipline (lock order,
+  per-task vs. shared locks), the task-id format, `schema_version`
+  semantics, timestamp format, and an explicit "what the app must
+  preserve" section tying back to `docs/app/CONTEXT.md`'s non-negotiable
+  principle 2.
+- Added a `## v3.1.0` entry to `CHANGELOG.md` (this repo keeps one entry
+  per meaningful release, not per commit — checked `v3.0.0`'s entry and
+  recent commit history before choosing a new minor version over folding
+  this into an unreleased patch note) covering: `events.jsonl`,
+  `schema_version`, real codex/copilot usage (Added); the state/index
+  race and the codex resume-command bug (Fixed); task ids and timestamps
+  (Changed).
+- Ran `python3 scripts/bump_version.py 3.1.0` — bumped `plugin.json`,
+  `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` together and
+  passed its own `check_manifests.py` sanity check.
+- Full suite: 212 passed, no regressions.
+
+## Phase 0: done
+
+All 5 milestones complete. Definition of done, checked against the
+original phase prompt:
+- Full pytest suite passes (212 tests, this machine's Python 3.9 — CI
+  covers 3.9/3.12 on Linux/macOS/Windows, not re-verified across that
+  full matrix in this session).
+- A real `/crewbench:new-task`-shaped flow was verified piecemeal via
+  direct script calls in this session (state/events/dispatch all
+  exercised live against real, logged-in CLIs — see milestones 3 and 4's
+  notes) rather than one literal `/crewbench:new-task` slash-command
+  run inside a host CLI; nothing found suggests that distinction matters,
+  but it's worth naming since the prompt asked for the slash command
+  specifically.
+- `docs/app/contract/README.md` and `events.md` fully describe what's on
+  disk.
+
+Ready for Phase 1 (headless TypeScript engine + CLI) whenever you want to
+start it — that phase begins the same way, with its own plan file for
+review before implementation.
