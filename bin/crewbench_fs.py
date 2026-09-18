@@ -102,3 +102,63 @@ def read_json_or_default(path, default):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
+
+
+EVENTS_FORMAT_VERSION = 1
+
+
+def _events_path(task_dir):
+    return Path(task_dir) / "events.jsonl"
+
+
+def _events_lock_path(task_dir):
+    return Path(task_dir) / ".events.lock"
+
+
+def _last_seq(events_path):
+    """The last line's `seq`, or 0 if the file is empty/missing/unreadable.
+    Reads the whole file rather than keeping a separate counter file --
+    one less thing that could desync from the log itself. Per-task event
+    logs are small (hundreds of lines, not millions), so this is cheap in
+    practice; documented in docs/app/contract/events.md as a known
+    O(events-so-far) cost per append."""
+    if not events_path.exists():
+        return 0
+    last_seq = 0
+    with open(events_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                last_seq = json.loads(line).get("seq", last_seq)
+            except ValueError:
+                continue  # a torn/partial last line from a crash mid-write; skip it, don't crash the reader
+    return last_seq
+
+
+def append_event(task_dir, event_type, data, run=None):
+    """Append one line to <task_dir>/events.jsonl: `{ "v": 1, "ts", "seq",
+    "type", "task_id", "run", "data" }`. Locks + reads the last seq under
+    one critical section, so concurrent writers (e.g. a tester and a
+    reviewer run finishing at once) never interleave partial lines or
+    duplicate seq. See docs/app/contract/events.md for the event catalog."""
+    task_dir = Path(task_dir)
+
+    def critical_section():
+        events_path = _events_path(task_dir)
+        event = {
+            "v": EVENTS_FORMAT_VERSION,
+            "ts": now_iso(),
+            "seq": _last_seq(events_path) + 1,
+            "type": event_type,
+            "task_id": task_dir.name,
+            "run": run,
+            "data": data,
+        }
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(events_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\n")
+        return event
+
+    return locked_read_modify_write(_events_lock_path(task_dir), critical_section)

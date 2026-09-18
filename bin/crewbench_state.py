@@ -41,8 +41,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from crewbench_fs import (  # noqa: E402
-    SCHEMA_VERSION, atomic_write_json, locked_read_modify_write, now_iso, parse_legacy_or_utc,
-    read_json_or_default,
+    SCHEMA_VERSION, append_event, atomic_write_json, locked_read_modify_write, now_iso,
+    parse_legacy_or_utc, read_json_or_default,
 )
 
 
@@ -192,6 +192,8 @@ def cmd_new(args):
         }
 
     state = mutate_state(task_dir, build)
+    append_event(task_dir, "task.created",
+                 {"command": args.command, "title": args.title, "jira_key": args.jira_key})
     print(json.dumps(state, indent=2))
 
 
@@ -203,14 +205,21 @@ def cmd_get(args):
 def cmd_set(args):
     task_dir = Path(args.task_dir)
     value = json.loads(args.value)
+    old = {}
 
     def mutate(state):
         if state is None:
             raise SystemExit(f"no state.json in {task_dir} — run `new` first")
+        if args.key in ("phase", "round"):
+            old["value"] = state.get(args.key)
         set_at(state, args.key, value)
         return state
 
     state = mutate_state(task_dir, mutate)
+    if args.key == "phase" and old.get("value") != value:
+        append_event(task_dir, "task.phase_changed", {"from": old.get("value"), "to": value})
+    elif args.key == "round" and old.get("value") != value:
+        append_event(task_dir, "task.round_started", {"round": value})
     print(json.dumps(state, indent=2))
 
 
@@ -225,6 +234,8 @@ def cmd_append(args):
         return state
 
     state = mutate_state(task_dir, mutate)
+    if args.key == "notes":
+        append_event(task_dir, "task.note_added", {"note": value})
     print(json.dumps(state, indent=2))
 
 

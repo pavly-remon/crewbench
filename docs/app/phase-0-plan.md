@@ -165,25 +165,25 @@ Read first: `docs/app/CONTEXT.md`, `bin/crewbench_state.py`,
 
 ## Open questions
 
-1. **Event emission for gate results.** `crewbench_gate.py` today just prints
-   a result the Team Lead folds into `state.json.rounds` by hand — should
-   `gate.finished` be emitted by the gate script itself (needs a task-dir
-   argument it doesn't currently take), or by `crewbench_state.py` when the
-   Team Lead's `set --key rounds...` includes a gate result? Leaning toward
-   the gate script taking an optional `--task-dir`/`--round` and emitting
-   directly, so the event fires even from a bare CLI run — but this is a
-   real interface change worth confirming before writing it.
+1. ~~Event emission for gate results.~~ **Resolved in milestone 3:**
+   `crewbench_gate.py` already takes `--task-dir`/`--round`, so no interface
+   change was needed — `run_gate()` calls `append_event()` itself right
+   after writing `gate-r<n>.result.json`.
 2. **Do old-format task ids (no hex suffix) need a migration, or just
    read-compatibility?** The phase prompt says "old ids must keep working
    everywhere" — read this plan as read-compatibility only, no rewrite of
    existing task directories. Confirm that's the intent.
-3. **`run.tool_call`/`run.tool_error` granularity.** The existing `Stream`
-   parser's job today is producing readable `.log` lines, not a typed event
-   per tool call. Emitting a structured event per tool call/message means
-   walking each CLI's existing text/stream-json parsing branch in `Stream`
-   and adding a return value alongside the log line, for all four CLIs — this
-   is the largest single chunk of new code in milestone 3. Flagging the size
-   now so it isn't a surprise mid-milestone.
+3. ~~`run.tool_call`/`run.tool_error` granularity.~~ **Resolved in milestone
+   3, smaller than feared:** rather than adding a second, typed parsing path
+   through each CLI's raw output, `classify_log_entry()` matches on the
+   fixed textual prefixes `Stream.feed()` already normalizes every CLI's
+   tool/message/error lines into (`"tool: "`, `"  error:"`, plain text) —
+   one ~10-line classifier covers all four CLIs, at the cost of `data.text`
+   being the same free-form string as the `.log` line rather than
+   structured fields (tool name, arguments). Documented as a known
+   limitation in `docs/app/contract/events.md`'s `run.tool_call` section —
+   a future phase wanting structured per-call fields would need to change
+   `Stream.feed()`'s return value itself, not just this classifier.
 
 ## Milestone log
 
@@ -253,3 +253,54 @@ Read first: `docs/app/CONTEXT.md`, `bin/crewbench_state.py`,
   input, `list`'s sort ordering across legacy/UTC/garbage timestamps, and
   id non-collision.
 - Full suite: 195 passed, no regressions.
+
+### Milestone 3 — done (2026-09-19)
+
+- `crewbench_fs.py` gained `append_event(task_dir, event_type, data,
+  run=None)`: locks `.events.lock`, computes the next `seq` by reading the
+  last line of `events.jsonl` (`_last_seq()`, tolerant of a torn last line
+  from a crash mid-write), appends one JSON line, releases. `EVENTS_FORMAT_VERSION
+  = 1` is the line shape's own `v` field, deliberately separate from
+  `schema_version` (which versions `state.json`/`index.json`/`status.json`/
+  the envelope, not the event log).
+- `crewbench_state.py` emits `task.created` (`new`), `task.phase_changed`
+  and `task.round_started` (`set`, only when the key is exactly `phase`/
+  `round` *and* the value actually changed — setting the same phase again
+  emits nothing), and `task.note_added` (`append --key notes`). Captures
+  the pre-mutation value inside the `mutate_state()` closure so the "did it
+  actually change" check sees the real old value, not a guess.
+- `crewbench_dispatch.py` emits `run.started` (right before spawning),
+  `run.finished` (in `finish()`, covering every exit path including
+  early-return errors like "CLI not installed"), `git.warning` (one event
+  per warning string from `git_changes()`), and `run.message`/
+  `run.tool_call`/`run.tool_error` for every line `Stream.feed()` produces
+  while the role's process runs — classified by
+  `classify_log_entry()` against `feed()`'s existing fixed textual
+  prefixes rather than a new per-CLI structured parser (see open question 3
+  below). All run-scoped events carry `run` (`<role>-r<round>`); task-scoped
+  and `gate.finished` events carry `run: null`.
+- `crewbench_gate.py`'s `run_gate()` emits `gate.finished` directly (it
+  already had `--task-dir`/`--round`, so no interface change was needed —
+  see open question 1 below), with the same `steps` array as its own result
+  JSON.
+- Wrote `docs/app/contract/events.md`: full catalog (line shape, every
+  event type's `data` shape and emission point), plus an explicit "not yet
+  emitted" section (no `round.verdict`/`issue.*` events yet — nothing reads
+  `events.jsonl` back this phase) and a legacy-tasks note (no file at all
+  for pre-Phase-0 tasks; readers must treat that as "no events", not an
+  error).
+- New `tests/test_events.py` (10 tests): every `crewbench_state.py`
+  emission point (including the "no event when the value didn't change"
+  and "no event for an unrelated key" negative cases), a concurrent-writer
+  test (16 threads each driving a real subprocess `append_event` call,
+  asserting gapless/monotonic/unique `seq` and no lost or interleaved
+  lines), `classify_log_entry()` unit tests for all three classifications
+  plus agy's inline-error form, `gate.finished` from a real
+  `crewbench_gate.py` subprocess run, and a full real dispatch (fake CLI)
+  asserting `run.started` first, `run.finished` last, and gapless `seq`
+  across the whole run.
+- Manually verified end-to-end (real subprocess `start`/`wait` against the
+  `quick_success.py` fake CLI) that `events.jsonl` reads back as valid,
+  correctly ordered JSONL before writing the automated test — see the
+  session transcript for the raw output.
+- Full suite: 205 passed, no regressions.

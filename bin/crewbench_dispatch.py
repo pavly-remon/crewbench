@@ -48,7 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from crewbench_env import CONFIG_DIRS, cli_argv_prefix  # noqa: E402
-from crewbench_fs import SCHEMA_VERSION, _lock_file, _unlock_file, now_iso  # noqa: E402
+from crewbench_fs import SCHEMA_VERSION, _lock_file, _unlock_file, append_event, now_iso  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -573,6 +573,20 @@ class Stream:
             if command and "permission check failed" in message:
                 self.denied_commands.append(command)
         return [text]
+
+
+def classify_log_entry(entry):
+    """Classify one of Stream.feed()'s readable log-line strings into an
+    events.jsonl event type, without re-parsing each CLI's raw output a
+    second time -- feed() already normalized every CLI's tool/message/error
+    lines into a few fixed textual prefixes (see Stream._claude/_agy above),
+    so matching on those prefixes gives a structured event with the same
+    content as the .log line, cheaply, for all four CLIs at once."""
+    if entry.startswith("  error:"):
+        return "run.tool_error"
+    if entry.startswith("tool: "):
+        return "run.tool_error" if " -> " in entry else "run.tool_call"
+    return "run.message"
 
 
 def parse_output(cli, stream, stdout, last_message_file):
@@ -1106,7 +1120,8 @@ def main(argv=None):
 
     handoff_path = Path(args.handoff)
     runs_dir, run = resolve_run_paths(args)
-    task_id = Path(args.task_dir).name if args.task_dir else None
+    task_dir_path = Path(args.task_dir) if args.task_dir else None
+    task_id = task_dir_path.name if task_dir_path else None
     out_path = runs_dir / f"{run}.result.json"
     raw_path = runs_dir / f"{run}.raw.txt"
     log_path = runs_dir / f"{run}.log"
@@ -1124,6 +1139,12 @@ def main(argv=None):
                                       "session_id": envelope["session_id"],
                                       "resume_command": envelope["resume_command"],
                                       "error": envelope["error"]})
+        if task_dir_path:
+            append_event(task_dir_path, "run.finished", {
+                "ok": envelope["ok"], "exit_code": envelope["exit_code"],
+                "duration_s": envelope["duration_s"], "error": envelope["error"],
+                "usage": envelope["usage"],
+            }, run=run)
         print(json.dumps(envelope, indent=2))
         sys.exit(0 if envelope["ok"] else 1)
 
@@ -1224,6 +1245,8 @@ def main(argv=None):
             stdout_lines.append(line)
             for entry in stream.feed(line):
                 log.write(f"[{now()}] {entry}\n")
+                if task_dir_path:
+                    append_event(task_dir_path, classify_log_entry(entry), {"text": entry}, run=run)
             if stream.session_id and stream.session_id != recorded_session:
                 recorded_session = stream.session_id
                 update_status(runs_dir, run, {"session_id": recorded_session})
@@ -1252,6 +1275,10 @@ def main(argv=None):
                                       "effort": args.effort, "state": "running",
                                       "started_at": now_iso(),
                                       "log_file": str(log_path), "session_id": None})
+        if task_dir_path:
+            append_event(task_dir_path, "run.started",
+                         {"role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort},
+                         run=run)
         print(f"crewbench: {run} running on {args.cli} — live log: tail -f {log_path}",
               file=sys.stderr, flush=True)
         start = time.time()
@@ -1313,6 +1340,9 @@ def main(argv=None):
     # Report only — the Team Lead and user decide what to keep; never undo anything here.
     envelope["warnings"].extend(git_warnings)
     envelope["notes"] = git_notes
+    if task_dir_path:
+        for warning in git_warnings:
+            append_event(task_dir_path, "git.warning", {"warning": warning}, run=run)
     if problem is None and code not in (0, None):
         problem = f"{args.cli} exited with code {code}"
     if timed_out.is_set():

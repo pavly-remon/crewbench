@@ -30,9 +30,12 @@ def test_make_slug_and_task_id():
 def test_make_task_id_is_collision_resistant_within_the_same_minute():
     # Two tasks started in the same minute with the same description used
     # to collide (id was just YYYYMMDD-HHMM-<slug>) and silently overwrite
-    # each other's task directory.
+    # each other's task directory. 4 hex chars = 65536 possibilities, so a
+    # handful of birthday-paradox collisions across 200 draws is expected
+    # and fine -- what this guards against is a broken/constant suffix
+    # (which would collapse everything to 1 unique id).
     ids = {crewbench_state.make_task_id("hello world") for _ in range(200)}
-    assert len(ids) == 200
+    assert len(ids) > 195
 
 
 def test_new_creates_state_with_expected_defaults(tmp_path):

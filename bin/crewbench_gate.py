@@ -40,6 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from crewbench_dispatch import _terminate_pid_group, _hard_kill_pid_group, GRACEFUL_KILL_TIMEOUT  # noqa: E402
+from crewbench_fs import append_event  # noqa: E402
 
 MAX_TAIL_LINES = 200
 DEFAULT_TIMEOUT = 600
@@ -149,6 +150,8 @@ def run_gate(cwd, task_dir, round_n, project_json_path, timeout):
                 break
     result_path = runs_dir / f"gate-r{round_n}.result.json"
     result_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    append_event(Path(task_dir), "gate.finished",
+                 {"round": round_n, "ok": result["ok"], "steps": result["steps"]})
     return result, log_path, result_path
 
 
