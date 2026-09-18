@@ -187,4 +187,35 @@ Read first: `docs/app/CONTEXT.md`, `bin/crewbench_state.py`,
 
 ## Milestone log
 
-(Notes appended here after each milestone completes.)
+### Milestone 1 — done (2026-09-19)
+
+- Added `bin/crewbench_fs.py`: `_lock_file`/`_unlock_file` (moved out of
+  `crewbench_dispatch.py` unchanged), `locked_read_modify_write`,
+  `atomic_write_json`, `read_json_or_default`.
+- `crewbench_dispatch.py` now imports the lock functions from
+  `crewbench_fs`; `update_status`'s behavior is unchanged.
+- `crewbench_state.py` rewritten around a single `mutate_state(task_dir,
+  mutate_fn)` used by `new`/`set`/`append`. It takes **two** nested locks,
+  not one: the per-task `.state.json.lock` (serializes concurrent writers on
+  the *same* task), then — still inside it — the shared `.index.json.lock`
+  under the `.crewbench` root (serializes concurrent writers on *different*
+  tasks that all touch the same `index.json`). Lock order is always
+  state-then-index, so no cross-task deadlock is possible.
+  - Caught during implementation: an initial version locked only the
+    per-task state lock and let `index.json`'s read-modify-write run
+    unlocked across tasks — safe for one task at a time but not across
+    tasks, since every task shares the same `index.json`. Added
+    `test_concurrent_writes_to_different_tasks_all_land_in_index` specifically
+    to catch this before it shipped; the two-lock fix makes it pass.
+- New `tests/test_fs_lock.py`, three tests, each spawning 12 real
+  `crewbench_state.py` subprocesses concurrently (via `ThreadPoolExecutor`
+  driving `subprocess.run`, so the OS-level `flock`/`msvcrt.locking` is
+  actually exercised, not an in-process mock):
+  1. concurrent `set` calls on 12 distinct keys of the same task — all land.
+  2. concurrent `append` calls on the same task's `notes` list — all land,
+     none duplicated.
+  3. concurrent `new` calls creating 12 different tasks under the same
+     root — all land in the shared `index.json`.
+- Full suite: 188 passed (185 pre-existing + 3 new), no regressions.
+- Also fixed a stale comment in `crewbench_gate.py` pointing at the old
+  `crewbench_dispatch.py` location of `_lock_file`/`_unlock_file`.

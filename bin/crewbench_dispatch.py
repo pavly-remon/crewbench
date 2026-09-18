@@ -48,6 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from crewbench_env import CONFIG_DIRS, cli_argv_prefix  # noqa: E402
+from crewbench_fs import _lock_file, _unlock_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -724,31 +725,6 @@ def validate(result, schema):
     if not isinstance(result, dict):
         return "result is not a JSON object"
     return validate_schema(result, schema, "")
-
-
-def _lock_file(handle):
-    """Take an exclusive lock on an open file handle. POSIX uses fcntl, Windows msvcrt.
-
-    Imported lazily so the module loads on platforms missing the other's lock module.
-    """
-    if os.name == "nt":
-        import msvcrt
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-    else:
-        import fcntl
-        fcntl.flock(handle, fcntl.LOCK_EX)
-
-
-def _unlock_file(handle):
-    if os.name == "nt":
-        import msvcrt
-        try:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
-    # POSIX: fcntl locks release automatically when the file descriptor closes.
 
 
 def update_status(runs_dir, run, fields):

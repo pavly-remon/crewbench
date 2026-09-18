@@ -87,7 +87,7 @@ def _split(command):
     # shell semantics subprocess.Popen(shell=False) doesn't provide; not
     # exercised on a real Windows machine, same precedent as other
     # POSIX-first, Windows-best-effort code in this repo (e.g. the lock
-    # helper in crewbench_dispatch.py's _lock_file/_unlock_file).
+    # helper in crewbench_fs.py's _lock_file/_unlock_file).
     tokens = shlex.split(command, posix=False)
     return [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'") else t
             for t in tokens]

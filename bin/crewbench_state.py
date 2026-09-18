@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from crewbench_dispatch import _lock_file, _unlock_file  # noqa: E402
+from crewbench_fs import atomic_write_json, locked_read_modify_write, read_json_or_default  # noqa: E402
 
 
 def now_iso():
@@ -51,40 +51,31 @@ def make_task_id(text):
     return f"{time.strftime('%Y%m%d-%H%M')}-{make_slug(text)}"
 
 
-def _atomic_write(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.parent / f".{path.name}.lock"
-    with open(lock_path, "w", encoding="utf-8") as lock:
-        _lock_file(lock)
-        try:
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-            tmp.replace(path)
-        finally:
-            _unlock_file(lock)
-
-
 def _index_path(task_dir):
     # <root>/tasks/<id> -> <root>/index.json
     return task_dir.parent.parent / "index.json"
 
 
-def _update_index(task_dir, state):
-    index_path = _index_path(task_dir)
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        index = {}
-    index[state["id"]] = {
+def _index_entry(state):
+    return {
         "id": state["id"], "command": state.get("command"), "title": state.get("title"),
         "phase": state.get("phase"), "round": state.get("round"),
         "updated_at": state.get("updated_at"),
     }
-    _atomic_write(index_path, index)
 
 
 def _state_path(task_dir):
     return task_dir / "state.json"
+
+
+def _state_lock_path(task_dir):
+    return task_dir / ".state.json.lock"
+
+
+def _index_lock_path(task_dir):
+    # One lock file per .crewbench root, shared by every task under it —
+    # index.json itself is shared, unlike state.json which is per-task.
+    return _index_path(task_dir).parent / ".index.json.lock"
 
 
 def load_state(task_dir):
@@ -94,10 +85,38 @@ def load_state(task_dir):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def save_state(task_dir, state):
-    state["updated_at"] = now_iso()
-    _atomic_write(_state_path(task_dir), state)
-    _update_index(task_dir, state)
+def mutate_state(task_dir, mutate_fn):
+    """Hold locks across load -> mutate -> save for both state.json and
+    index.json, so concurrent `set`/`append`/`new` calls never lose an
+    update to either file — whether they race on the *same* task (e.g. a
+    tester run and a reviewer run finishing at once, serialized by the
+    per-task state lock) or on *different* tasks under the same root
+    racing on the shared index.json (serialized by the index lock).
+    `mutate_fn(state_or_None) -> state` does the actual field change; it
+    receives None when state.json doesn't exist yet (the `new` case).
+
+    Lock order is always state-lock-then-index-lock, so two tasks can never
+    deadlock on each other (each task's state lock is a different file;
+    only the index lock is shared, and it's always acquired last)."""
+    def update_index_and_save(state):
+        def critical_section():
+            atomic_write_json(_state_path(task_dir), state)
+            index_path = _index_path(task_dir)
+            index = read_json_or_default(index_path, {})
+            index[state["id"]] = _index_entry(state)
+            atomic_write_json(index_path, index)
+            return state
+
+        return locked_read_modify_write(_index_lock_path(task_dir), critical_section)
+
+    def critical_section():
+        path = _state_path(task_dir)
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        state = mutate_fn(state)
+        state["updated_at"] = now_iso()
+        return update_index_and_save(state)
+
+    return locked_read_modify_write(_state_lock_path(task_dir), critical_section)
 
 
 def get_at(data, dotted):
@@ -142,28 +161,31 @@ def cmd_slug(args):
 
 def cmd_new(args):
     task_dir = Path(args.task_dir)
-    state = {
-        "id": args.id,
-        "command": args.command,
-        "title": args.title,
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "phase": "scoping",
-        "round": 0,
-        "lineup": {},
-        "base_commit": args.base_commit,
-        "branch": args.branch,
-        "worktree": None,
-        "jira_key": args.jira_key,
-        "host_override": None,
-        "doctor": {},
-        "acceptance_criteria": [],
-        "design_spec_file": args.design_spec_file,
-        "rounds": [],
-        "usage": {},
-        "notes": [],
-    }
-    save_state(task_dir, state)
+
+    def build(existing):
+        return {
+            "id": args.id,
+            "command": args.command,
+            "title": args.title,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "phase": "scoping",
+            "round": 0,
+            "lineup": {},
+            "base_commit": args.base_commit,
+            "branch": args.branch,
+            "worktree": None,
+            "jira_key": args.jira_key,
+            "host_override": None,
+            "doctor": {},
+            "acceptance_criteria": [],
+            "design_spec_file": args.design_spec_file,
+            "rounds": [],
+            "usage": {},
+            "notes": [],
+        }
+
+    state = mutate_state(task_dir, build)
     print(json.dumps(state, indent=2))
 
 
@@ -174,17 +196,29 @@ def cmd_get(args):
 
 def cmd_set(args):
     task_dir = Path(args.task_dir)
-    state = load_state(task_dir)
-    set_at(state, args.key, json.loads(args.value))
-    save_state(task_dir, state)
+    value = json.loads(args.value)
+
+    def mutate(state):
+        if state is None:
+            raise SystemExit(f"no state.json in {task_dir} — run `new` first")
+        set_at(state, args.key, value)
+        return state
+
+    state = mutate_state(task_dir, mutate)
     print(json.dumps(state, indent=2))
 
 
 def cmd_append(args):
     task_dir = Path(args.task_dir)
-    state = load_state(task_dir)
-    append_at(state, args.key, json.loads(args.value))
-    save_state(task_dir, state)
+    value = json.loads(args.value)
+
+    def mutate(state):
+        if state is None:
+            raise SystemExit(f"no state.json in {task_dir} — run `new` first")
+        append_at(state, args.key, value)
+        return state
+
+    state = mutate_state(task_dir, mutate)
     print(json.dumps(state, indent=2))
 
 
