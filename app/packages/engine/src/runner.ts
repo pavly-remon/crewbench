@@ -15,7 +15,7 @@ import {
   type Effort,
   type Permissions,
 } from "@crewbench/adapters";
-import { ROLE_RESULT_SCHEMAS, SCHEMA_VERSION, type RoleName } from "@crewbench/contract";
+import { normalizeOptionalNulls, ROLE_RESULT_SCHEMAS, SCHEMA_VERSION, type RoleName } from "@crewbench/contract";
 import { appendEvent, atomicWriteJson, lockedReadModifyWrite, nowIso, readJsonOrDefault } from "./contract-fs.js";
 import { gitChanges, gitState, type GitState } from "./git.js";
 import { killProcessGroup, terminateProcessGroup, hardKillProcessGroup, GRACEFUL_KILL_TIMEOUT_S } from "./process-kill.js";
@@ -216,14 +216,28 @@ export async function dispatchRole(params: DispatchParams): Promise<DispatchEnve
   envelope.resume_command = adapter.resumeCommand(stream.sessionId);
   envelope.usage = adapter.extractUsage(stream, stdout, durationS, extraOutputFile);
 
-  const { result, denials, error: parseError } = adapter.parseOutput(stream, stdout, extraOutputFile);
+  const parsed = adapter.parseOutput(stream, stdout, extraOutputFile);
+  // Ported from crewbench_dispatch.py main()'s `result =
+  // normalize_optional_nulls(result, schema)`: under OpenAI's structured-
+  // outputs strict mode, codex must supply every property from its
+  // strict-transformed schema (build-command.ts's codexStrictSchema()),
+  // so an optional field it has nothing to report for comes back as an
+  // explicit `null` rather than simply omitted (e.g. round 1's
+  // `previous_issues`, which the canonical schema defines as an array
+  // when present at all). Without this step, a real round-1 codex
+  // code-reviewer dispatch fails schema validation on `previous_issues:
+  // null` -- confirmed live against the real codex CLI during Phase 1
+  // milestone 7's end-to-end verification run, not caught by any fake-CLI
+  // fixture (none of them exercise codex's real null-for-optional-field
+  // behavior).
+  const result = normalizeOptionalNulls(parsed.result, schema as Record<string, unknown>);
   envelope.result = result;
-  envelope.permission_denials = denials;
+  envelope.permission_denials = parsed.denials;
 
   // Ported from crewbench_dispatch.py's `problem = error or validate(result, schema)`:
   // a result that parsed as JSON but doesn't match the role's schema is
   // still a failed run, not a silently-accepted malformed one.
-  const schemaError = parseError === null ? validateAgainstRoleSchema(role, result) : null;
+  const schemaError = parsed.error === null ? validateAgainstRoleSchema(role, result) : null;
 
   const gitAfter = await gitState(cwd);
   const { warnings: gitWarnings, notes: gitNotes } = gitChanges(role, gitBefore, gitAfter);
@@ -233,7 +247,7 @@ export async function dispatchRole(params: DispatchParams): Promise<DispatchEnve
     await appendEvent(taskDir, "git.warning", { warning }, run);
   }
 
-  let problem = parseError ?? schemaError;
+  let problem = parsed.error ?? schemaError;
   if (problem === null && code !== 0 && code !== null) {
     problem = `${cli} exited with code ${String(code)}`;
   }

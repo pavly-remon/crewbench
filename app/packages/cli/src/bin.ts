@@ -6,6 +6,7 @@ import { resumeCommand } from "./commands/resume.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { teamCommand } from "./commands/team.js";
 import { profileCommand } from "./commands/profile.js";
+import { closePrompt } from "./prompt.js";
 
 const USAGE = `crewbench -- run the crewbench workflow headlessly
 
@@ -53,7 +54,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exitCode = 1;
-});
+main()
+  .catch((err: unknown) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  })
+  .finally(() => closePrompt());

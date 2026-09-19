@@ -1,6 +1,6 @@
 # Phase 1 — Headless TypeScript engine + CLI (no UI)
 
-Status: **draft — awaiting review**
+Status: **done** (all 7 milestones complete, 2026-09-19)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `lib/dispatch.md` (all of it — §0–§7),
@@ -811,4 +811,52 @@ changes").
   already-terminal task); the Python suite (212 tests) unaffected and
   still green; `pnpm check:schemas` still reports no drift.
 
-(Milestone 7's notes appended here once it completes.)
+### Milestone 7 — done (2026-09-19)
+
+- Real end-to-end verification against real, logged-in CLIs (not the
+  fake-CLI suite) — mixed lineup (claude lead, agy developer, codex
+  reviewer/tester), in throwaway repos, matching the phase prompt's own
+  example. Full findings written up in `docs/compatibility.md`'s new
+  "Phase 1 milestone 7" section rather than duplicated here.
+- **Five real bugs found and fixed**, all caught by actually running
+  live/real subprocesses rather than by inspection:
+  1. `--dev`/`--review` CLI overrides re-resolved a role's model against
+     the *old* CLI instead of the new one (`lineup.ts`) — a real run
+     printed an invalid claude model name (`sonnet`) for an agy role.
+  2. `normalizeOptionalNulls()` (ported and unit-tested in milestone 1)
+     was never actually wired into `dispatchRole()`'s pipeline
+     (`runner.ts`) — a real codex code-reviewer dispatch failed every
+     round-1 call on `previous_issues: null`.
+  3. `prompt.ts`'s per-question `readline.Interface` only resolved its
+     first `question()` call against piped stdin — confirmed as a genuine
+     Node limitation via an isolated repro, fixed by switching to one
+     shared interface's async iterator for the process's whole life, with
+     a new `closePrompt()` called once from `bin.ts`'s `main().finally()`.
+  4. and 5. two test-fixture-only bugs (not crewbench bugs) found while
+     building the new `commit-flow.e2e.test.ts`: a fake CLI that claimed
+     a file change without writing it, and a role-classification branch
+     loose enough to also match the scoping call.
+- New `packages/cli/test/commit-flow.e2e.test.ts`: a real subprocess test
+  (the actual built `bin.js`, real git operations) proving the one
+  significant `driveTask()` path the live-CLI runs couldn't reach before
+  hitting account-level constraints (rate limit, model availability) —
+  accept commit → merge onto the original branch → remove the worktree.
+  Uses a purpose-built fake CLI (deliberately, not a live one) so the
+  test is fully automated and repeatable without live API access.
+- Separately confirmed live: `--yes` correctly declines the commit prompt
+  without asking, per the non-negotiable commit/push-approval invariant.
+- Full verification after all fixes: `pnpm -r typecheck/build/test` all
+  green (306 TS tests: 25 contract + 107 adapters + 150 engine + 24 cli);
+  Python suite (212 tests) unaffected and still green.
+
+## Phase 1: done
+
+All seven milestones complete. Definition of done met: `crewbench run`
+completes a real task end to end (worktree, gate, parallel
+tester/reviewer, fix round, commit approval) against real CLIs; a
+plugin-created task is readable by the TS app and vice versa (milestone
+6's cross-compat tests); the app's own commit/push-approval invariant is
+enforced as hard-coded, untestable-around engine behavior, not a
+convention; Node CI (`ci-node.yml`) runs the full TS suite on
+Linux/macOS/Windows. `docs/compatibility.md` carries this phase's real
+findings alongside Phase 0's.

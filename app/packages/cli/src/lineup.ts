@@ -77,11 +77,21 @@ export async function resolveLineup(
 
   const roleNames: RoleName[] = ["developer", "tester", "code-reviewer", "ui-ux"];
   const roles = {} as Record<RoleName, ResolvedRoleLineup>;
+  // Keep each role's tier-or-model *string* (e.g. "cheap", not the model
+  // name it resolved to) around for the override step below -- a
+  // --dev/--review override that names a CLI but not a model must
+  // re-resolve that same tier against the *new* CLI's own tiers, not
+  // reuse whatever model name the *old* CLI's tier happened to resolve
+  // to (a real bug caught live: `--dev agy` with no model kept
+  // Claude's "sonnet" as agy's model, which isn't a valid agy model at
+  // all).
+  const tierOrModelByRole = {} as Record<RoleName, string>;
   for (const role of roleNames) {
     const d = defaults.roles?.[role] ?? {};
     const t = team.roles?.[role] ?? {};
     const cli = resolveCli((t.cli ?? d.cli ?? "host") as Cli | "host", hostCli);
     const tierOrModel = t.model ?? d.model ?? "cheap";
+    tierOrModelByRole[role] = tierOrModel;
     const model = resolveModel(tierOrModel, cli, defaults, team);
     roles[role] = {
       cli,
@@ -92,18 +102,12 @@ export async function resolveLineup(
   }
 
   if (overrides.dev) {
-    roles.developer = {
-      ...roles.developer,
-      cli: overrides.dev.cli,
-      model: overrides.dev.model ?? roles.developer.model,
-    };
+    const model = overrides.dev.model ?? resolveModel(tierOrModelByRole.developer, overrides.dev.cli, defaults, team);
+    roles.developer = { ...roles.developer, cli: overrides.dev.cli, model };
   }
   if (overrides.review) {
-    roles["code-reviewer"] = {
-      ...roles["code-reviewer"],
-      cli: overrides.review.cli,
-      model: overrides.review.model ?? roles["code-reviewer"].model,
-    };
+    const model = overrides.review.model ?? resolveModel(tierOrModelByRole["code-reviewer"], overrides.review.cli, defaults, team);
+    roles["code-reviewer"] = { ...roles["code-reviewer"], cli: overrides.review.cli, model };
   }
 
   const loop: ResolvedLoop = {

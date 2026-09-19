@@ -71,9 +71,22 @@ describe("resolveLineup", () => {
     });
     expect(lineup.roles.developer).toEqual({ cli: "codex", model: "gpt-5.6-sol", effort: "medium", permissions: "skip" });
     expect(lineup.roles["code-reviewer"].cli).toBe("agy");
-    // --review without a model keeps the role's already-resolved model.
-    expect(lineup.roles["code-reviewer"].model).toBe("opus");
+    // Regression: --review without a model used to keep the *previous*
+    // CLI's already-resolved model name verbatim ("opus", a Claude model
+    // -- invalid for agy). It must instead re-resolve the role's tier
+    // ("strong") against the *new* CLI (agy)'s own tiers.
+    expect(lineup.roles["code-reviewer"].model).toBe("gemini-3.1-pro");
     expect(lineup.loop.maxRounds).toBe(7);
+  });
+
+  it("--dev with a CLI but no model re-resolves the tier for that CLI, not the previous CLI's resolved model", async () => {
+    const defaultsPath = await writeDefaults();
+    const projectRoot = await newProjectRoot();
+    // developer's default tier is "cheap"; on claude that's "sonnet" --
+    // switching --dev to agy with no model must resolve agy's "cheap"
+    // tier (gemini-3.8-flash), never keep "sonnet".
+    const lineup = await resolveLineup(defaultsPath, projectRoot, "claude", { dev: { cli: "agy" } });
+    expect(lineup.roles.developer).toEqual({ cli: "agy", model: "gemini-3.8-flash", effort: "medium", permissions: "skip" });
   });
 
   it("passes an exact model name through unchanged (not a cheap/strong tier)", async () => {

@@ -181,4 +181,55 @@ describe("dispatchRole: result schema validation", () => {
     expect(envelope.ok).toBe(true);
     expect(envelope.error).toBeNull();
   }, 20_000);
+
+  // Regression: caught live against the real codex CLI during Phase 1
+  // milestone 7's end-to-end verification run, not by any fixture --
+  // normalizeOptionalNulls() was ported and unit-tested in Phase 1
+  // milestone 1 but never actually wired into dispatchRole()'s pipeline.
+  // Under OpenAI's structured-outputs strict mode, codex must supply
+  // every property from its schema, so an optional field with nothing to
+  // report (round 1's `previous_issues`) comes back as an explicit
+  // `null` rather than omitted -- without normalizeOptionalNulls()
+  // stripping that null back out before validation, a real round-1
+  // code-reviewer dispatch failed with "previous_issues Invalid input:
+  // expected array, received null" on every single run.
+  it("strips an explicit null on an optional field before validating (the codex strict-mode shape)", async () => {
+    const repo = await gitRepo();
+    const fakeCliPath = await writeFakeCliWithNullOptionalField(repo);
+    process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = fakeCliPath;
+    const taskDir = join(repo, ".crewbench", "tasks", "t5");
+    const params: DispatchParams = {
+      role: "code-reviewer",
+      cli: "claude",
+      model: "m",
+      effort: "none",
+      permissions: "safe",
+      taskDir,
+      round: 1,
+      cwd: repo,
+      handoff: "Task: anything\n",
+      agentsDir: AGENTS_DIR,
+      schemaPath: join(REPO_ROOT, "schemas", "code-reviewer.json"),
+      timeoutS: 15,
+    };
+    const envelope = await dispatchRole(params);
+    expect(envelope.ok).toBe(true);
+    expect(envelope.error).toBeNull();
+    expect(envelope.result).not.toHaveProperty("previous_issues");
+  }, 20_000);
 });
+
+async function writeFakeCliWithNullOptionalField(dir: string): Promise<string> {
+  const path = join(dir, "fake-null-optional.cjs");
+  const script = `#!/usr/bin/env node
+console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "fake-null-opt", model: "m" }));
+console.log(JSON.stringify({
+  type: "result", subtype: "success", is_error: false, status: "SUCCESS",
+  structured_output: { verdict: "approve", summary: "ok", issues: [], previous_issues: null, blocked: [] },
+  permission_denials: [],
+}));
+`;
+  await writeFile(path, script, "utf-8");
+  await execFileAsync("chmod", ["+x", path]);
+  return path;
+}
