@@ -678,4 +678,81 @@ changes").
   tests: 25 contract + 107 adapters + 95 engine); the Python suite (212
   tests) unaffected and still green.
 
-(Milestones 5–7's notes appended here as each one completes.)
+### Milestone 5 — done (2026-09-19)
+
+- `approvals.ts`: `resolveApproval()` is the enforced backstop for
+  `docs/app/CONTEXT.md`'s non-negotiable principle 3 — passing `auto: true`
+  for `commit`/`push` always throws `AutoResolveForbiddenError`, regardless
+  of the decision given. `run.ts` never passes `auto: true` for either
+  kind (its `flags.yes` guard is written as `flags.yes ? false :
+  await confirm(...)`, i.e. `--yes` explicitly does *not* skip the commit
+  prompt), so the invariant holds structurally, not just by convention.
+- `summary.ts`: `formatDuration()`/`formatRoleLine()`/`usageSummary()`
+  reproduce `lib/dispatch.md` §7's example lines exactly (tested against
+  the literal `developer · agy gemini-3.8-flash · 2 runs · 6m12s` /
+  `total: 4 runs · 9m57s` example). `summarizeTask()` takes an injectable
+  `LlmSummarizer` and always has `deterministicSummary()` as a fallback —
+  tested for the no-callback, success, throw, and empty-string-reply
+  cases, so "a task's outcome is never unreported over an LLM-call
+  hiccup" is an actual tested property, not just a docstring claim.
+- `chat.ts` (adapters) + `chat-runner.ts` (engine): a plain conversational
+  turn per CLI (no role brief, no result schema), used by scoping and
+  available to a future `LlmSummarizer` implementation. No Python
+  precedent exists for this — flagged `VERIFY` in `chat.ts`'s docstring,
+  since the exact flag set for a *non-role* conversational call wasn't
+  separately re-verified against each CLI's live `--help` the way every
+  role-dispatch flag was in Phase 0/milestone 2.
+- `scoping.ts`: `startScoping()`/`continueScoping()` drive a session-
+  resuming conversation ending in a schema-valid `TaskSpec`
+  (`tryParseTaskSpec()` reuses the same extractJson-then-validate pattern
+  a role dispatch's result parsing uses). Tested against a real fake-CLI
+  subprocess (a small inline fixture script, not `tests/fixtures/`'s
+  existing ones, since none of those simulate a multi-turn conversation)
+  proving a real two-turn session-id-carrying round trip, not just that
+  `tryParseTaskSpec()` parses canned text.
+- `task-store.ts`: the TS counterpart of `crewbench_state.py`'s core
+  operations (`createTask`/`setField`/`appendField`/`listTasks`), same
+  `makeTaskId()` shape, same two-lock scheme as milestone 4's
+  `contract-fs.ts`. This is what milestone 6's cross-compat tests (create
+  with the app, read with the plugin, and back) will exercise directly.
+- **New `packages/cli`** (the `crewbench` bin): `run` drives the actual
+  engine loop end to end (scoping → lineup → worktree pre-flight →
+  `reduce`/`decide` fix loop → gate → parallel verification → commit
+  approval → integrate → cleanup → summary), `status`/`doctor`/`team
+  show`/`profile show|refresh` are real; `resume` is an honest stub this
+  milestone (reports last-known phase/round, states plainly that full
+  event-replay resume is milestone 6 — not faked as working). Root-finding
+  (`findRoot()`) and lineup resolution (`resolveLineup()`, the merge order
+  from `lib/dispatch.md` §1) are new modules specific to this package.
+- **Caught three real bugs before/while writing tests, not by inspection**:
+  (1) `dispatchRole()` never validated a parsed `result` against the
+  role's schema at all — Python's `problem = error or validate(result,
+  schema)` step was missing entirely, so a malformed or wrong-role result
+  was silently accepted as `ok: true`. Added `validateAgainstRoleSchema()`
+  and a dedicated positive/negative regression test pair. (2)
+  `lineup.ts`'s merge logic read `loop.maxRounds`/`fixThreshold`
+  (camelCase) while the real `config/defaults.json`/`team.json` file
+  format uses snake_case (`max_rounds`/`fix_threshold`) — a team.json
+  override for `max_rounds` was silently ignored and the hardcoded
+  default always won. Caught by a test that round-tripped a real-shaped
+  team.json file, not by re-reading the code. (3) `run.ts`'s verification
+  step only fell back to a safe default `TesterResult`/`ReviewerResult`
+  when `result` was `null` — but a schema-validation failure (bug #1's
+  fix) leaves `result` as the malformed object, not null, so casting it
+  directly would crash `combinedFixList()`'s `tester.failures.map(...)`
+  on `undefined`. Fixed to check `envelope.ok`, not `result`'s nullness,
+  before the manual smoke run confirmed a 3-round fix loop completes
+  cleanly instead of crashing.
+- Manually ran the full `run` command against a real subprocess (piped
+  stdin, `--yes`) before writing the automated end-to-end test, to see
+  the actual failure shape first-hand (this is exactly how bug #3 above
+  was found) — then captured that same scenario as
+  `run.e2e.test.ts`: a real built binary, a real worktree, real dispatch
+  against `tests/fixtures/fake_clis/quick_success.py`, asserting the
+  fix loop runs 1 round to a clean `stopped` outcome (with
+  `--rounds 1`) and that `state.json` on disk matches.
+- Full verification: `pnpm -r typecheck/build/test` all green (280 TS
+  tests: 25 contract + 107 adapters + 128 engine + 20 cli); the Python
+  suite (212 tests) unaffected and still green.
+
+(Milestones 6–7's notes appended here as each one completes.)

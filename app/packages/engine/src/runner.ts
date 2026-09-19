@@ -15,7 +15,7 @@ import {
   type Effort,
   type Permissions,
 } from "@crewbench/adapters";
-import { SCHEMA_VERSION, type RoleName } from "@crewbench/contract";
+import { ROLE_RESULT_SCHEMAS, SCHEMA_VERSION, type RoleName } from "@crewbench/contract";
 import { appendEvent, atomicWriteJson, lockedReadModifyWrite, nowIso, readJsonOrDefault } from "./contract-fs.js";
 import { gitChanges, gitState, type GitState } from "./git.js";
 import { killProcessGroup, terminateProcessGroup, hardKillProcessGroup, GRACEFUL_KILL_TIMEOUT_S } from "./process-kill.js";
@@ -220,6 +220,11 @@ export async function dispatchRole(params: DispatchParams): Promise<DispatchEnve
   envelope.result = result;
   envelope.permission_denials = denials;
 
+  // Ported from crewbench_dispatch.py's `problem = error or validate(result, schema)`:
+  // a result that parsed as JSON but doesn't match the role's schema is
+  // still a failed run, not a silently-accepted malformed one.
+  const schemaError = parseError === null ? validateAgainstRoleSchema(role, result) : null;
+
   const gitAfter = await gitState(cwd);
   const { warnings: gitWarnings, notes: gitNotes } = gitChanges(role, gitBefore, gitAfter);
   envelope.warnings.push(...gitWarnings);
@@ -228,7 +233,7 @@ export async function dispatchRole(params: DispatchParams): Promise<DispatchEnve
     await appendEvent(taskDir, "git.warning", { warning }, run);
   }
 
-  let problem = parseError;
+  let problem = parseError ?? schemaError;
   if (problem === null && code !== 0 && code !== null) {
     problem = `${cli} exited with code ${String(code)}`;
   }
@@ -244,6 +249,21 @@ export async function dispatchRole(params: DispatchParams): Promise<DispatchEnve
   envelope.ok = problem === null;
 
   return finish();
+}
+
+/** Ported from crewbench_dispatch.py's `validate(result, schema)`: null
+ * when `result` matches the role's canonical schema (schemas/<role>.json,
+ * i.e. this schema's TS twin from @crewbench/contract), else a short
+ * "<path> <problem>" string per failing field -- same shape validate()'s
+ * own error messages take, though zod's own issue formatting rather than
+ * a byte-identical reproduction of the Python validator's messages. */
+function validateAgainstRoleSchema(role: RoleName, result: unknown): string | null {
+  const schema = ROLE_RESULT_SCHEMAS[role];
+  const parsed = schema.safeParse(result);
+  if (parsed.success) return null;
+  return parsed.error.issues
+    .map((issue) => `${issue.path.length ? issue.path.join(".") : "result"} ${issue.message}`)
+    .join("; ");
 }
 
 function taskDirName(taskDir: string): string {

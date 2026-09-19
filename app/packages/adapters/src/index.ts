@@ -14,3 +14,4 @@ export * from "./build-command.js";
 export * from "./doctor.js";
 export * from "./model-check.js";
 export * from "./adapter.js";
+export * from "./chat.js";

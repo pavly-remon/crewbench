@@ -11,3 +11,8 @@ export * from "./profile.js";
 export * from "./git.js";
 export * from "./runner.js";
 export * from "./worktree.js";
+export * from "./approvals.js";
+export * from "./summary.js";
+export * from "./chat-runner.js";
+export * from "./scoping.js";
+export * from "./task-store.js";

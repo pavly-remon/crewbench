@@ -1,12 +1,10 @@
 {
-  "name": "@crewbench/engine",
+  "name": "crewbench",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": "./dist/index.js"
+  "bin": {
+    "crewbench": "./dist/bin.js"
   },
   "scripts": {
     "build": "tsc -b",
@@ -16,7 +14,7 @@
   "dependencies": {
     "@crewbench/adapters": "workspace:*",
     "@crewbench/contract": "workspace:*",
-    "zod": "4.6.5"
+    "@crewbench/engine": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.13.5",

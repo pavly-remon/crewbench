@@ -138,13 +138,47 @@ describe("dispatchVerification", () => {
     );
     // quick_success.py's fixture output is developer-shaped, so parsing it
     // against tester/code-reviewer's schemas is expected to report a
-    // schema mismatch -- the point of this test is that both runs
+    // schema mismatch (see the dedicated schema-validation test below for
+    // the positive case) -- the point of this test is that both runs
     // happened and wrote their own files, not that the fixture happens to
     // satisfy every role's schema.
     expect(tester.result).not.toBeNull();
     expect(reviewer.result).not.toBeNull();
+    expect(tester.ok).toBe(false);
+    expect(tester.error).toBeTruthy();
     const runsDir = join(taskDir, "runs");
     await expect(readFile(join(runsDir, "tester-r1.result.json"), "utf-8")).resolves.toBeTruthy();
     await expect(readFile(join(runsDir, "code-reviewer-r1.result.json"), "utf-8")).resolves.toBeTruthy();
+  }, 20_000);
+});
+
+describe("dispatchRole: result schema validation", () => {
+  // Regression coverage: Python's crewbench_dispatch.py rejects a result
+  // that doesn't match schemas/<role>.json (`problem = error or
+  // validate(result, schema)`) -- an earlier version of this port never
+  // ran that check, so any parseable-JSON result was silently accepted
+  // as ok:true regardless of shape. Confirmed above (schema mismatch ->
+  // ok:false); this confirms the matching case still reports ok:true.
+  it("a matching result validates and reports ok:true", async () => {
+    const repo = await gitRepo();
+    process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = QUICK_SUCCESS;
+    const taskDir = join(repo, ".crewbench", "tasks", "t4");
+    const params: DispatchParams = {
+      role: "developer", // quick_success.py's fixture IS developer-shaped
+      cli: "claude",
+      model: "m",
+      effort: "none",
+      permissions: "safe",
+      taskDir,
+      round: 1,
+      cwd: repo,
+      handoff: "Task: anything\n",
+      agentsDir: AGENTS_DIR,
+      schemaPath: join(REPO_ROOT, "schemas", "developer.json"),
+      timeoutS: 15,
+    };
+    const envelope = await dispatchRole(params);
+    expect(envelope.ok).toBe(true);
+    expect(envelope.error).toBeNull();
   }, 20_000);
 });
