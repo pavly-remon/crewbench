@@ -69,6 +69,39 @@ function sumNullable(a: number | null, b: number | null): number | null {
   return (a ?? 0) + (b ?? 0);
 }
 
+/** Every `git.warning` event this task has ever recorded, in order --
+ * `packages/engine`'s real git-safety-snapshot comparison (`gitChanges()`
+ * in `git.ts`, wired into `dispatchRole()`) already emits these to
+ * `events.jsonl`; this milestone is the first place anything actually
+ * reads them back for a person to see (the phase prompt's "Warnings
+ * banner: git safety warnings, surfaced prominently"). A full-file read,
+ * not the incremental tailer (`tail.ts`) -- task detail is loaded once
+ * per view, not continuously polled, so there's no offset to track. */
+async function collectGitWarnings(taskDir: string): Promise<string[]> {
+  const eventsPath = join(taskDir, "events.jsonl");
+  if (!existsSync(eventsPath)) return [];
+  let text: string;
+  try {
+    text = await readFile(eventsPath, "utf-8");
+  } catch {
+    return [];
+  }
+  const warnings: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const event = JSON.parse(trimmed) as { type?: string; data?: { warning?: string } };
+      if (event.type === "git.warning" && typeof event.data?.warning === "string") {
+        warnings.push(event.data.warning);
+      }
+    } catch {
+      continue; // a torn/partial last line -- same tolerance as tail.ts
+    }
+  }
+  return warnings;
+}
+
 /** Assembles `GET /api/tasks/:tid`'s response: `state.json` fields as-is,
  * `rounds`/`issues` from replaying the task's own recorded envelopes
  * through the exact engine `rehydrateState()` already uses for `crewbench
@@ -79,6 +112,7 @@ export async function buildTaskDetail(location: TaskLocation): Promise<ApiTaskDe
   const loop = await resolveLoopSettings(location.projectPath);
   const rehydrated = await rehydrateState(location.taskDir, loop);
   const usage = await aggregateUsage(location.taskDir);
+  const warnings = await collectGitWarnings(location.taskDir);
 
   const specPath = state.spec_file ? join(location.taskDir, state.spec_file) : null;
   const spec = specPath ? await readJsonSafe<unknown>(specPath) : null;
@@ -97,9 +131,17 @@ export async function buildTaskDetail(location: TaskLocation): Promise<ApiTaskDe
     updated_at: state.updated_at,
     stuck_reason: rehydrated.stuckReason,
     lineup: state.lineup,
-    rounds: rehydrated.rounds,
-    issues: rehydrated.issueRegistry,
+    // Cast, not a real type mismatch: packages/engine's RoundRecord/
+    // RegisteredIssue are plain TS interfaces without an index
+    // signature, while ApiRoundRecordSchema/ApiRegisteredIssueSchema's
+    // inferred types include one from their own .catchall()/nested
+    // schemas -- the actual field shapes match (mirrored on purpose, see
+    // ApiTaskDetailSchema's docstring), and ApiTaskDetailSchema.parse()
+    // at the route boundary is the real runtime guarantee either way.
+    rounds: rehydrated.rounds as ApiTaskDetail["rounds"],
+    issues: rehydrated.issueRegistry as ApiTaskDetail["issues"],
     usage,
     spec,
+    warnings,
   };
 }

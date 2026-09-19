@@ -1,14 +1,14 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useParams } from "@tanstack/react-router";
 import { Card } from "../components/card.js";
-import { useTaskDetail, useTaskEvents } from "../api/task-detail.js";
-
-interface RoundRecordLike {
-  round: number;
-  gate: { ok: boolean } | null;
-  tester: { verdict: string } | null;
-  reviewer: { verdict: string } | null;
-}
+import { RoundsTimeline } from "../components/rounds-timeline.js";
+import { IssuesTable } from "../components/issues-table.js";
+import { FailuresTable } from "../components/failures-table.js";
+import { DiffViewer } from "../components/diff-viewer.js";
+import { SpecTab } from "../components/spec-tab.js";
+import { ScreenshotsTab } from "../components/screenshots-tab.js";
+import { WarningsBanner } from "../components/warnings-banner.js";
+import { useTaskDetail, useTaskDiff, useTaskEvents } from "../api/task-detail.js";
 
 interface LaneEvent {
   seq: number;
@@ -60,27 +60,6 @@ function Header({ detail }: { detail: NonNullable<ReturnType<typeof useTaskDetai
   );
 }
 
-function RoundsTimeline({ rounds }: { rounds: unknown[] }) {
-  const typed = rounds as RoundRecordLike[];
-  if (typed.length === 0) {
-    return <p className="text-sm text-[var(--color-fg-muted)]">No completed rounds yet.</p>;
-  }
-  return (
-    <div className="flex flex-col gap-2">
-      {typed.map((round) => (
-        <Card key={round.round} className="flex items-center gap-4 text-sm">
-          <span className="font-medium">round {round.round}</span>
-          <span className={round.gate?.ok === false ? "text-red-500" : "text-[var(--color-fg-muted)]"}>
-            gate: {round.gate === null ? "skipped" : round.gate.ok ? "ok" : "failed"}
-          </span>
-          {round.tester && <span>tester: {round.tester.verdict}</span>}
-          {round.reviewer && <span>reviewer: {round.reviewer.verdict}</span>}
-        </Card>
-      ))}
-    </div>
-  );
-}
-
 function AgentLanes({ lanes }: { lanes: Record<string, LaneEvent[]> }) {
   const runs = Object.keys(lanes).sort();
   if (runs.length === 0) {
@@ -102,10 +81,40 @@ function AgentLanes({ lanes }: { lanes: Record<string, LaneEvent[]> }) {
   );
 }
 
+const TABS = ["Rounds & lanes", "Issues", "Failures", "Diff", "Spec", "Screenshots"] as const;
+type Tab = (typeof TABS)[number];
+
+function DiffTab({ taskId, round }: { taskId: string; round: number }) {
+  const [mode, setMode] = useState<"base" | number>("base");
+  const { data, isLoading } = useTaskDiff(taskId, mode);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-2 text-xs">
+        <button
+          onClick={() => setMode("base")}
+          className={mode === "base" ? "font-semibold text-[var(--color-accent)]" : "text-[var(--color-fg-muted)]"}
+        >
+          vs base
+        </button>
+        {round > 0 && (
+          <button
+            onClick={() => setMode(round)}
+            className={mode === round ? "font-semibold text-[var(--color-accent)]" : "text-[var(--color-fg-muted)]"}
+          >
+            round {round} delta
+          </button>
+        )}
+      </div>
+      {isLoading ? <p className="text-sm text-[var(--color-fg-muted)]">Loading diff…</p> : <DiffViewer diff={data?.diff ?? ""} />}
+    </div>
+  );
+}
+
 export function TaskDetailPage() {
   const { taskId } = useParams({ from: "/tasks/$taskId" });
   const { data: detail, isLoading, isError, error } = useTaskDetail(taskId);
   const [lanes, setLanes] = useState<Record<string, LaneEvent[]>>({});
+  const [tab, setTab] = useState<Tab>("Rounds & lanes");
 
   useTaskEvents(taskId, (event) => {
     if (!event.run) return;
@@ -117,23 +126,46 @@ export function TaskDetailPage() {
     });
   });
 
-  const rounds = useMemo(() => detail?.rounds ?? [], [detail]);
-
   if (isLoading) return <p className="text-sm text-[var(--color-fg-muted)]">Loading task…</p>;
   if (isError) return <p className="text-sm text-red-500">{error.message}</p>;
-  if (!detail) return null;
+  if (!detail || !taskId) return null;
+
+  const screenshots = detail.rounds.flatMap((r) => r.tester?.screenshots ?? []);
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-4">
       <Header detail={detail} />
-      <section>
-        <h2 className="mb-2 text-sm font-semibold">Rounds</h2>
-        <RoundsTimeline rounds={rounds} />
-      </section>
-      <section>
-        <h2 className="mb-2 text-sm font-semibold">Agent lanes</h2>
-        <AgentLanes lanes={lanes} />
-      </section>
+      <WarningsBanner warnings={detail.warnings} />
+
+      <div className="flex gap-4 border-b border-[var(--color-border)] text-sm">
+        {TABS.map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`-mb-px border-b-2 pb-2 ${t === tab ? "border-[var(--color-accent)] font-medium" : "border-transparent text-[var(--color-fg-muted)]"}`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === "Rounds & lanes" && (
+        <>
+          <section>
+            <h2 className="mb-2 text-sm font-semibold">Rounds</h2>
+            <RoundsTimeline rounds={detail.rounds} />
+          </section>
+          <section>
+            <h2 className="mb-2 text-sm font-semibold">Agent lanes</h2>
+            <AgentLanes lanes={lanes} />
+          </section>
+        </>
+      )}
+      {tab === "Issues" && <IssuesTable issues={detail.issues} />}
+      {tab === "Failures" && <FailuresTable rounds={detail.rounds} />}
+      {tab === "Diff" && <DiffTab taskId={taskId} round={detail.round} />}
+      {tab === "Spec" && <SpecTab spec={detail.spec} />}
+      {tab === "Screenshots" && <ScreenshotsTab taskId={taskId} screenshots={screenshots} />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 # Phase 2 — Daemon + read-only UI
 
-Status: **in progress** (reviewed and approved 2026-09-19; milestones 1-4 done)
+Status: **in progress** (reviewed and approved 2026-09-19; milestones 1-5 done)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md`'s milestone
@@ -568,5 +568,90 @@ plugin's behavior as spec, doesn't modify it" boundary as Phase 1.
   the flat-sleep flakiness that helper was built to fix.
 - Full verification: `pnpm -r typecheck/build/test` all green (325 TS
   tests: 25 contract + 107 adapters + 150 engine + 17 daemon + 2 ui + 24
+  cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
+  reports no drift.
+
+### Milestone 5 — done (2026-09-19)
+
+- `GET /api/tasks/:tid/diff?round=base|N` (`diff.ts` +
+  `routes/tasks.ts`): a real `git diff <base_commit>` against whichever
+  tree currently holds the task's changes (the worktree if still
+  present, the project's main checkout otherwise). **Real, disclosed
+  limitation found while implementing this, not assumed going in**:
+  reading `packages/engine`'s git module confirmed nothing snapshots git
+  state per round -- a developer's changes across rounds stay one
+  cumulative uncommitted diff in the working tree until the final
+  commit-approval step, so a true round-N-only delta isn't derivable
+  from git history as currently recorded. `round=base` and `round=N`
+  therefore return the identical diff; the response's own `mode` field
+  lets the UI label this honestly instead of implying a round-isolated
+  diff exists. Fixing this for real would mean the *engine* snapshotting
+  per round (e.g. `git stash create`), which is Phase 1 territory, out of
+  this read-only-UI phase's scope -- noted rather than silently worked
+  around.
+- `GET /api/tasks/:tid/screenshots/:file`: serves a real image from
+  `.crewbench/tasks/<task-id>/screenshots/`, the exact path the tester
+  role's own `screenshots[]` field (`schemas/tester.json`) already
+  points into. `basename()` on the param neutralizes path traversal;
+  only `.png`/`.jpg`/`.jpeg` are served, anything else refused.
+- `buildTaskDetail()` now also collects every `git.warning` event a task
+  has recorded, straight from `events.jsonl` -- these were already being
+  emitted by `packages/engine`'s real `gitChanges()` safety-snapshot
+  comparison (wired into `dispatchRole()` since Phase 1), just never
+  surfaced anywhere until this milestone's "Warnings banner" requirement
+  gave them a reason to be read back.
+- Tightened `ApiTaskDetailSchema`'s `rounds`/`issues` fields from
+  milestone 4's loosely-typed pass-through to real schemas
+  (`ApiRoundRecordSchema`, `ApiRegisteredIssueSchema`, and their nested
+  `ApiTesterResultSchema`/`ApiReviewerResultSchema`/`ApiTestFailureSchema`
+  /`ApiRawIssueSchema`) mirroring `packages/engine`'s own `types.ts`
+  field-for-field -- exactly the "milestone 5 is where this needs real
+  field-level guarantees" deferral milestone 4's plan entry flagged.
+- UI: task detail is now tabbed (Rounds & lanes / Issues / Failures /
+  Diff / Spec / Screenshots), plus an always-visible warnings banner.
+  **Design decision 6 resolved**: the diff viewer is a ~30-line
+  dependency-free component (`diff-viewer.tsx`, a monospace `<pre>` with
+  per-line +/- color coding) rather than `react-diff-view`/`diff2html` --
+  the daemon already returns a plain unified-diff string, and those
+  libraries' side-by-side/inline toggle UI isn't asked for this
+  milestone; not adding a dependency to get less than what a small
+  component already covers.
+- **Caught one real, easy-to-miss auth gap while building the
+  screenshots tab**: a plain `<img src="/api/tasks/.../screenshots/...">`
+  can't attach the `Authorization` header the route (correctly) requires
+  -- same class of problem `lib/api.ts`'s SSE reader already solved for
+  event streams, not previously hit for images. Fixed with a small
+  `useAuthedImage()` hook that fetches the bytes with the token attached
+  and hands the `<img>` a local `blob:` object URL instead, revoked on
+  unmount.
+- Component tests (Definition of Done's explicit requirement): rounds
+  timeline (`test/rounds-timeline.test.tsx` -- gate/tester/reviewer
+  verdict rendering, the null-gate "skipped" case, the empty state) and
+  issues table (`test/issues-table.test.tsx` -- per-issue fields, the
+  empty state).
+- **Real live end-to-end verification** (same standard as milestones
+  3-4): ran the actual built `crewbench ui` binary against a real git
+  repo with a real uncommitted change and a real (magic-bytes-valid) PNG
+  file, and `curl`'d the real daemon's `/diff`, `/screenshots/round1.png`,
+  and `/api/tasks/:tid` endpoints directly -- confirmed a real unified
+  diff came back for the real file change, the real PNG bytes came back
+  with `Content-Type: image/png`, and `spec`/`issues`/`warnings`/`rounds`
+  all serialized correctly for a fresh task with none of those yet. The
+  browser-extension tool remained unavailable this session, so the tabs'
+  own rendering wasn't visually confirmed -- same disclosed gap as
+  milestones 3-4.
+- **Daemon test flakiness note, not fully resolved**: milestone 4's
+  `fileParallelism: false` fix mitigates but does not fully eliminate the
+  "chokidar never fires its first event" issue -- one run immediately
+  following a full `pnpm -r build` (all 6 packages, including the UI's
+  own Vite build) still hit it once during this milestone's work,
+  though 10+ repeated standalone runs afterward were all clean. Recorded
+  honestly rather than claimed fixed: the remaining risk appears to be
+  general system I/O contention right after a heavy build step, not
+  vitest's own file-parallelism (already addressed), and the existing
+  poll-with-generous-timeout approach is the practical mitigation for
+  now.
+- Full verification: `pnpm -r typecheck/build/test` all green (336 TS
+  tests: 25 contract + 107 adapters + 150 engine + 23 daemon + 7 ui + 24
   cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
   reports no drift.

@@ -1,12 +1,20 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import type { ApiTaskDetail } from "@crewbench/contract";
+import type { ApiDiff, ApiTaskDetail } from "@crewbench/contract";
 import { apiFetch, openEventStream } from "../lib/api.js";
 
 export function useTaskDetail(taskId: string | undefined) {
   return useQuery({
     queryKey: ["tasks", taskId],
     queryFn: () => apiFetch<ApiTaskDetail>(`/api/tasks/${taskId}`),
+    enabled: Boolean(taskId),
+  });
+}
+
+export function useTaskDiff(taskId: string | undefined, round: number | "base") {
+  return useQuery({
+    queryKey: ["tasks", taskId, "diff", round],
+    queryFn: () => apiFetch<ApiDiff>(`/api/tasks/${taskId}/diff?round=${round}`),
     enabled: Boolean(taskId),
   });
 }

@@ -1,12 +1,24 @@
 import { existsSync } from "node:fs";
 import { open } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { ApiRunLogSchema, ApiTaskDetailSchema } from "@crewbench/contract";
+import { ApiDiffSchema, ApiRunLogSchema, ApiTaskDetailSchema } from "@crewbench/contract";
+import { loadState } from "@crewbench/engine";
 import type { DaemonWatcher } from "../watcher.js";
 import { buildTaskDetail } from "../task-detail.js";
+import { computeDiff } from "../diff.js";
 
 const MAX_LOG_READ_BYTES = 1_000_000;
+
+/** Content types this route will actually serve -- a screenshot is
+ * always one of these per the tester schema's own `screenshots[]` field
+ * (Playwright visual checks save PNG/JPEG); anything else is refused
+ * rather than guessed. */
+const IMAGE_CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+};
 
 export function registerTaskRoutes(app: FastifyInstance, watcher: DaemonWatcher): void {
   app.get<{ Params: { tid: string } }>("/api/tasks/:tid", async (request, reply) => {
@@ -60,4 +72,56 @@ export function registerTaskRoutes(app: FastifyInstance, watcher: DaemonWatcher)
       }
     },
   );
+
+  /** `GET /api/tasks/:tid/diff?round=N|base` -- see `computeDiff()`'s and
+   * `ApiDiffSchema`'s docstrings for the real, disclosed limitation that
+   * `round=N` and `round=base` currently return the identical diff (no
+   * round-scoped git snapshot exists to compute a true delta from). */
+  app.get<{ Params: { tid: string }; Querystring: { round?: string } }>("/api/tasks/:tid/diff", async (request, reply) => {
+    const location = watcher.resolveTask(request.params.tid);
+    if (!location) {
+      await reply.code(404).send({ error: `no such task: ${request.params.tid}` });
+      return;
+    }
+    const state = await loadState(location.taskDir);
+    const raw = request.query.round;
+    const round = raw && raw !== "base" ? Number(raw) : null;
+    const mode = round === null ? "base" : "round";
+    const diff = await computeDiff(location, state, round);
+    await reply.send(ApiDiffSchema.parse({ mode, round, diff }));
+  });
+
+  /** `GET /api/tasks/:tid/screenshots/:file` -- serves one visual-check
+   * image from `.crewbench/tasks/<task-id>/screenshots/`, the exact path
+   * a tester result's own `screenshots[]` entries point into (see
+   * `schemas/tester.json`'s field description). `basename()` on the
+   * param strips any path segments before joining, so `../../etc/passwd`
+   * -style traversal resolves to a single (nonexistent) filename inside
+   * the screenshots directory rather than escaping it. */
+  app.get<{ Params: { tid: string; file: string } }>("/api/tasks/:tid/screenshots/:file", async (request, reply) => {
+    const location = watcher.resolveTask(request.params.tid);
+    if (!location) {
+      await reply.code(404).send({ error: `no such task: ${request.params.tid}` });
+      return;
+    }
+    const file = basename(request.params.file);
+    const ext = file.slice(file.lastIndexOf(".")).toLowerCase();
+    const contentType = IMAGE_CONTENT_TYPES[ext];
+    if (!contentType) {
+      await reply.code(400).send({ error: "unsupported screenshot file type" });
+      return;
+    }
+    const filePath = join(location.taskDir, "screenshots", file);
+    if (!existsSync(filePath)) {
+      await reply.code(404).send({ error: `no such screenshot: ${file}` });
+      return;
+    }
+    const handle = await open(filePath, "r");
+    try {
+      const buffer = await handle.readFile();
+      await reply.header("Content-Type", contentType).send(buffer);
+    } finally {
+      await handle.close();
+    }
+  });
 }
