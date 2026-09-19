@@ -1,6 +1,6 @@
 # Phase 2 — Daemon + read-only UI
 
-Status: **in progress** (reviewed and approved 2026-09-19; milestones 1-3 done)
+Status: **in progress** (reviewed and approved 2026-09-19; milestones 1-4 done)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md`'s milestone
@@ -496,5 +496,77 @@ plugin's behavior as spec, doesn't modify it" boundary as Phase 1.
   populated-cards state and the empty state.
 - Full verification: `pnpm -r typecheck/build/test` all green (321 TS
   tests: 25 contract + 107 adapters + 150 engine + 13 daemon + 2 ui + 24
+  cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
+  reports no drift.
+
+### Milestone 4 — done (2026-09-19)
+
+- `GET /api/tasks/:tid` (`routes/tasks.ts` + `task-detail.ts`): assembles
+  state, rehydrated rounds/issues, and per-role usage. Rounds/issues
+  reuse `packages/engine`'s existing `rehydrateState()` (Phase 1
+  milestone 6) unchanged -- one source of truth for "what happened round
+  by round," not a second reconstruction. Usage is genuinely new this
+  milestone: sums every `runs/<role>-r<round>.result.json` envelope's own
+  `usage` field per role, picking up `drive.ts`'s Phase 1 comment
+  flagging per-role usage aggregation as "daemon/Phase-2 territory." A
+  `null` usage component makes the whole rollup `null` for that field,
+  never silently `0`.
+- New `packages/daemon/src/loop-settings.ts`: approximates the loop
+  settings (`max_rounds`/`fix_threshold`) a task's rounds ran under, by
+  reading the project's *current* `team.json` and falling back to the
+  same hardcoded defaults `packages/engine`'s `initialState()` already
+  uses. **Documented as a real, disclosed limitation, not solved**:
+  `state.json` never records what loop settings were actually in effect
+  at the time a given round ran, so a `team.json` edited since a task's
+  last round is silently invisible to this reader -- there is no way to
+  recover that after the fact from what's on disk today.
+- `GET /api/tasks/:tid/runs/:run/log?from=offset`: the same incremental
+  byte-offset contract `tail.ts`'s event tailer already established in
+  milestone 2, applied to a plain (non-JSONL) growing log file, capped at
+  1MB per read so a client far behind can't force an unbounded read.
+- UI: **Task detail** page (header with lineup chips, a rounds timeline,
+  and live agent lanes) plus a new `useTaskEvents()` hook
+  (`api/task-detail.ts`) that subscribes to the task's own SSE stream and
+  both invalidates the detail query (redraws header/rounds from a fresh
+  `GET`) and feeds live events straight into each lane's own scrolling
+  log, without waiting on a full refetch for the fast-moving per-run text
+  events (`run.message`/`run.tool_call`/`run.tool_error`) `GET
+  /api/events` deliberately filters out of the global board feed
+  (milestone 2) but that *do* belong inside a lane view. Task board cards
+  now link to `/tasks/$taskId`.
+- **Real live end-to-end verification, not just the automated suite**:
+  ran the actual built `crewbench ui` binary, registered a real project,
+  created a real task via `packages/engine`'s own `createTask()`, and
+  dispatched a real `developer` round against the same
+  `quick_success.py` fake-CLI fixture Phase 1's runner tests trust (via
+  `dispatchRole()`, a real subprocess) -- then `curl`'d the real running
+  daemon's `/api/tasks/:tid` and confirmed the response reflected that
+  real dispatch's actual `phase: "implementing"`, `round: 1`, and
+  `usage.developer` correctly aggregated from the one real run,
+  and confirmed `/runs/developer-r1/log` returned that run's real log
+  text. The browser-extension tool remained unavailable in this session,
+  so the UI's own rendering was not visually confirmed in a real
+  browser -- HTTP-level verification only, same disclosed gap as
+  milestone 3.
+- **Caught one real, reproducible test-flakiness bug** (not a one-off):
+  running the daemon package's test suite standalone, repeatedly,
+  isolated from any other workspace package's load, still intermittently
+  hit "watcher never learned about a task" across *all three* test files
+  in the package -- not just occasionally slow, sometimes never firing
+  within a 10-second budget. Root cause: vitest's default
+  file-parallelism means each test file's `beforeEach` starts its own
+  real chokidar-backed daemon concurrently with the others, and several
+  independent chokidar/fsevents watcher instances spinning up at once on
+  macOS was observed to sometimes silently drop a freshly created
+  watcher's first event entirely. Fixed with `fileParallelism: false` in
+  `packages/daemon/vitest.config.ts` (tests within one file already run
+  sequentially via `beforeEach`/`afterEach`) -- confirmed stable across
+  10+ repeated runs after the fix, both standalone and under `pnpm -r
+  test`'s full cross-package load. Also extracted the milestone 2 tests'
+  now-proven `waitForTaskKnown()` poll-instead-of-sleep helper into a
+  shared `test/helpers.ts` so milestone 4's new tests don't reintroduce
+  the flat-sleep flakiness that helper was built to fix.
+- Full verification: `pnpm -r typecheck/build/test` all green (325 TS
+  tests: 25 contract + 107 adapters + 150 engine + 17 daemon + 2 ui + 24
   cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
   reports no drift.

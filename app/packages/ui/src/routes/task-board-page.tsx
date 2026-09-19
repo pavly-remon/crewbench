@@ -1,4 +1,4 @@
-import { useParams } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import { TASK_PHASES, type ApiTaskSummary, type TaskPhase } from "@crewbench/contract";
 import { Card } from "../components/card.js";
 import { useProjectTasks } from "../api/projects.js";
@@ -30,13 +30,15 @@ function elapsedSince(iso: string | undefined): string {
 
 function TaskCard({ task }: { task: ApiTaskSummary }) {
   return (
-    <Card className="flex flex-col gap-1.5 p-3">
-      <p className="text-sm font-medium">{task.title ?? task.id}</p>
-      <div className="flex items-center justify-between text-xs text-[var(--color-fg-muted)]">
-        <span>round {task.round ?? 0}</span>
-        <span>{elapsedSince(task.updated_at)}</span>
-      </div>
-    </Card>
+    <Link to="/tasks/$taskId" params={{ taskId: task.id }}>
+      <Card className="flex flex-col gap-1.5 p-3 hover:border-[var(--color-accent)]">
+        <p className="text-sm font-medium">{task.title ?? task.id}</p>
+        <div className="flex items-center justify-between text-xs text-[var(--color-fg-muted)]">
+          <span>round {task.round ?? 0}</span>
+          <span>{elapsedSince(task.updated_at)}</span>
+        </div>
+      </Card>
+    </Link>
   );
 }
 

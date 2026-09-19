@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter } from "@tanstack/react-rout
 import { Layout } from "./components/layout.js";
 import { ProjectsPage } from "./routes/projects-page.js";
 import { TaskBoardPage } from "./routes/task-board-page.js";
+import { TaskDetailPage } from "./routes/task-detail-page.js";
 
 const rootRoute = createRootRoute({ component: Layout });
 
@@ -17,7 +18,13 @@ const taskBoardRoute = createRoute({
   component: TaskBoardPage,
 });
 
-const routeTree = rootRoute.addChildren([projectsRoute, taskBoardRoute]);
+const taskDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks/$taskId",
+  component: TaskDetailPage,
+});
+
+const routeTree = rootRoute.addChildren([projectsRoute, taskBoardRoute, taskDetailRoute]);
 
 export const router = createRouter({ routeTree });
 

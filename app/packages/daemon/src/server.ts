@@ -3,6 +3,7 @@ import { createAuthHook, generateToken } from "./auth.js";
 import { findOpenPort } from "./port.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerEventRoutes } from "./routes/events.js";
+import { registerTaskRoutes } from "./routes/tasks.js";
 import { registerUiStatic } from "./static-ui.js";
 import { DEFAULT_PORT, loadConfig } from "./config.js";
 import { loadRegistry } from "./registry.js";
@@ -50,6 +51,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 
   await registerProjectRoutes(app, watcher);
   registerEventRoutes(app, watcher);
+  registerTaskRoutes(app, watcher);
   await registerUiStatic(app);
 
   await app.listen({ host: "127.0.0.1", port });
