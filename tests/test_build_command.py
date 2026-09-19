@@ -23,7 +23,7 @@ def test_build_command_shape(dispatch, tmp_path, cli, role, skip):
     args = make_args(role=role, cli=cli, skip_permissions=skip)
     schema_path = d.ROOT / "schemas" / f"{role}.json"
     prompt_file = tmp_path / "run.prompt.md"
-    cmd, stdin, last_message = d.build_command(
+    cmd, stdin, extra_output_file = d.build_command(
         args, "FULL PROMPT " * 5000, prompt_file, schema_path, str(tmp_path), timeout_s=100)
 
     assert cmd[0] == cli
@@ -31,6 +31,13 @@ def test_build_command_shape(dispatch, tmp_path, cli, role, skip):
 
     if cli == "agy":
         assert args.cwd in cmd  # --add-dir <cwd>, honors Phase 5 worktree isolation
+
+    if cli == "copilot":
+        assert "--usage-output-file" in cmd
+        assert extra_output_file is not None
+    if cli == "codex":
+        assert "--json" in cmd
+        assert extra_output_file is not None
 
     if cli in ("claude", "codex"):
         assert stdin is not None and "FULL PROMPT" in stdin

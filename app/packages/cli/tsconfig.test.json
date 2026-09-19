@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false
+  },
+  "references": [{ "path": "../contract" }, { "path": "../adapters" }, { "path": "../engine" }, { "path": "../daemon" }],
+  "include": ["src", "test"]
+}

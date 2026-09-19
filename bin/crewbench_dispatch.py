@@ -48,6 +48,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from crewbench_env import CONFIG_DIRS, cli_argv_prefix  # noqa: E402
+from crewbench_fs import (  # noqa: E402
+    SCHEMA_VERSION, _lock_file, _unlock_file, append_event, now_iso, read_json_or_default,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -265,7 +268,12 @@ def _prompt_pointer(prompt_file):
 
 
 def build_command(args, prompt, prompt_file, schema_path, tmp, conversation=None, timeout_s=None):
-    """Return (argv, stdin_text, codex_last_message_file). Claude and agy stream JSON events.
+    """Return (argv, stdin_text, extra_output_file). Claude and agy stream JSON events.
+
+    `extra_output_file` is CLI-specific and read back after the run finishes:
+    codex's structured result (parse_output() reads it), copilot's real
+    per-session usage (extract_usage() reads it). `None` for claude/agy,
+    which report both through their own stream instead.
 
     `prompt` is the full assembled prompt; `prompt_file` is where it (or, for a
     resume follow-up, the follow-up text) was written to disk. Claude and Codex
@@ -315,12 +323,17 @@ def build_command(args, prompt, prompt_file, schema_path, tmp, conversation=None
             encoding="utf-8")
         cmd = ["codex", "exec", "-m", model,
                "-s", "read-only" if role in READ_ONLY else ("danger-full-access" if skip else "workspace-write"),
-               "--output-schema", str(strict_schema_path), "-o", str(last)]
+               "--output-schema", str(strict_schema_path), "-o", str(last), "--json"]
         if has_effort:
             cmd += ["-c", f"model_reasoning_effort={effort}"]
         return cmd + ["-"], prompt, last
     if args.cli == "copilot":
-        cmd = ["copilot", "-s", "--no-ask-user", "--model", model]
+        # Confirmed live (`copilot --help`, GitHub Copilot CLI 1.0.83):
+        # --usage-output-file writes real per-session token counts as JSON
+        # once the run finishes -- see extract_usage()'s copilot branch.
+        usage_file = Path(tmp) / "usage.json"
+        cmd = ["copilot", "-s", "--no-ask-user", "--model", model,
+               "--usage-output-file", str(usage_file)]
         if skip:
             cmd += ["--allow-all-tools"]
         else:
@@ -330,7 +343,7 @@ def build_command(args, prompt, prompt_file, schema_path, tmp, conversation=None
                 cmd += ["--allow-tool=write"]
         if has_effort:
             cmd += ["--effort", effort]
-        return cmd + ["-p", _prompt_pointer(prompt_file)], None, None
+        return cmd + ["-p", _prompt_pointer(prompt_file)], None, usage_file
     raise SystemExit(f"unknown cli: {args.cli}")
 
 
@@ -459,7 +472,9 @@ def resume_command(cli, session_id):
     return {
         "claude": f"claude --resume {session_id}",
         "agy": f"agy --conversation {session_id}",
-        "codex": f"codex resume {session_id}",
+        # Confirmed live: `codex resume <id>` launches the interactive TUI;
+        # the headless equivalent is `codex exec resume <id>`.
+        "codex": f"codex exec resume {session_id}",
         "copilot": f"copilot --resume={session_id}",
     }[cli]
 
@@ -513,6 +528,8 @@ class Stream:
             return self._claude(line)
         if self.cli == "agy":
             return self._agy(line)
+        if self.cli == "codex":
+            return self._codex(line)
         if self.session_id is None:
             match = re.search(r"session id:\s*([0-9a-fA-F-]{8,})", line)
             if match:
@@ -573,6 +590,64 @@ class Stream:
                 self.denied_commands.append(command)
         return [text]
 
+    def _codex(self, line):
+        # Confirmed live (`codex exec --json`, codex-cli 0.154.0): a JSONL
+        # stream of {"type": "thread.started"|"turn.started"|"item.started"|
+        # "item.completed"|"turn.completed"|"turn.failed"|"error", ...}.
+        # `item.completed`'s `item.type` seen live: "agent_message" (assistant
+        # text), "command_execution" (shell tool call, with `exit_code` once
+        # completed), and "error" (a warning from codex itself, e.g. a hook
+        # config issue -- not a tool failure). The final structured result
+        # still comes from the --output-schema/-o file (parse_output()), not
+        # from this stream; this only gives live progress, the session id
+        # for resume, and turn.completed's real per-turn token usage.
+        event = self._event(line)
+        if event is None:
+            return [line.rstrip("\n")] if line.strip() else []
+        kind = event.get("type")
+        if kind == "thread.started":
+            self.session_id = event.get("thread_id")
+            return [f"session started id={self.session_id}"]
+        if kind == "turn.completed":
+            self.final = {"usage": event.get("usage") or {}}
+            return ["finished: turn complete"]
+        if kind == "turn.failed":
+            error = event.get("error") or {}
+            self.final = {"error": error}
+            return ["finished: turn failed -> " + short(error.get("message", ""))]
+        if kind not in ("item.completed", "item.started"):
+            return []  # e.g. turn.started -- no useful content to log
+        item = event.get("item") or {}
+        item_kind = item.get("type")
+        if item_kind == "agent_message":
+            text = item.get("text", "").strip()
+            return ["says: " + short(text)] if kind == "item.completed" and text else []
+        if item_kind == "command_execution":
+            if kind == "item.started":
+                return []  # log once, on completion, like agy's ACTIVE-state skip
+            text = f"tool: shell {short(item.get('command', ''))}"
+            exit_code = item.get("exit_code")
+            if exit_code not in (0, None):
+                text += "  -> exit " + str(exit_code) + ": " + short(item.get("aggregated_output", ""))
+            return [text]
+        if item_kind == "error" and kind == "item.completed":
+            return ["warning: " + short(item.get("message", ""))]
+        return []
+
+
+def classify_log_entry(entry):
+    """Classify one of Stream.feed()'s readable log-line strings into an
+    events.jsonl event type, without re-parsing each CLI's raw output a
+    second time -- feed() already normalized every CLI's tool/message/error
+    lines into a few fixed textual prefixes (see Stream._claude/_agy above),
+    so matching on those prefixes gives a structured event with the same
+    content as the .log line, cheaply, for all four CLIs at once."""
+    if entry.startswith("  error:"):
+        return "run.tool_error"
+    if entry.startswith("tool: "):
+        return "run.tool_error" if " -> " in entry else "run.tool_call"
+    return "run.message"
+
 
 def parse_output(cli, stream, stdout, last_message_file):
     """Return (result, permission_denials, error)."""
@@ -587,16 +662,24 @@ def parse_output(cli, stream, stdout, last_message_file):
             return None, denials, str(final.get("result") or final.get("error") or final.get("status"))
         text = final.get("result") or final.get("response") or ""
         return extract_json(text), denials, None
-    if cli == "codex" and last_message_file and last_message_file.exists():
-        return extract_json(last_message_file.read_text(encoding="utf-8")), [], None
+    if cli == "codex":
+        if last_message_file and last_message_file.exists():
+            return extract_json(last_message_file.read_text(encoding="utf-8")), [], None
+        final = stream.final if isinstance(stream.final, dict) else {}
+        if "error" in final:
+            error = final["error"] or {}
+            return None, [], str(error.get("message") or error)
+        return None, [], "no result event in output"
     return extract_json(stdout), [], None
 
 
-# Best-effort token-count scan of plain-text CLI output, for CLIs (codex,
-# copilot) that don't expose usage through a structured event today. VERIFY:
-# no confirmed "tokens used" footer was found in `codex exec --help` or
-# `copilot --help` as of writing; this stays null rather than guessing when
-# nothing matches.
+# Best-effort token-count scan of plain-text CLI output, kept only as
+# copilot's fallback when --usage-output-file is missing (e.g. an older
+# copilot version without that flag). codex no longer uses this at all --
+# its real usage comes from `turn.completed`'s structured event (see
+# extract_usage()). VERIFY: no confirmed "tokens used" footer was found in
+# copilot's plain -p output as of writing; this stays null rather than
+# guessing when nothing matches.
 USAGE_TEXT_PATTERNS = [
     re.compile(r"tokens?\s*used[:\s]+([\d,]+)", re.I),
     re.compile(r"total\s*tokens[:\s]+([\d,]+)", re.I),
@@ -614,10 +697,12 @@ def _usage_from_text(text):
     return None
 
 
-def extract_usage(cli, stream, stdout, duration_s):
+def extract_usage(cli, stream, stdout, duration_s, usage_file=None):
     """Whatever usage/cost data this run's CLI actually exposed — every
     field but `duration_s` may be null; a run's ok/error never depends on
-    this being complete (never fails a run over missing usage)."""
+    this being complete (never fails a run over missing usage).
+    `usage_file` is copilot's --usage-output-file, read here rather than by
+    the caller since only this function knows its shape."""
     usage = {"duration_s": duration_s, "input_tokens": None, "output_tokens": None,
              "total_tokens": None, "cost_usd": None, "num_turns": None}
     final = stream.final if isinstance(stream.final, dict) else {}
@@ -647,8 +732,36 @@ def extract_usage(cli, stream, stdout, duration_s):
         usage["total_tokens"] = raw.get("total_tokens")
         usage["cost_usd"] = final.get("cost_usd", final.get("cost"))
         usage["num_turns"] = final.get("num_turns")
-    elif cli in ("codex", "copilot"):
-        usage["total_tokens"] = _usage_from_text(stdout)
+    elif cli == "codex":
+        # Confirmed live (`codex exec --json`, codex-cli 0.154.0): the
+        # terminal `turn.completed` event carries `usage: {input_tokens,
+        # cached_input_tokens, cache_write_input_tokens, output_tokens,
+        # reasoning_output_tokens}`. No cost field was present in that same
+        # live run, so cost_usd stays null rather than guessed; num_turns
+        # isn't reported either (a run is a single turn in this dispatch
+        # model, but codex doesn't say so explicitly).
+        raw = final.get("usage") if isinstance(final.get("usage"), dict) else {}
+        usage["input_tokens"] = raw.get("input_tokens")
+        usage["output_tokens"] = raw.get("output_tokens")
+        if isinstance(usage["input_tokens"], int) and isinstance(usage["output_tokens"], int):
+            usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+    elif cli == "copilot":
+        # Confirmed live (`copilot --help`, GitHub Copilot CLI 1.0.83):
+        # --usage-output-file writes real per-session usage as JSON --
+        # lastCallInputTokens/lastCallOutputTokens (this run's call, not a
+        # session total) and totalNanoAiu (an internal "AI unit" credit
+        # metric, not USD -- cost_usd stays null rather than a wrong
+        # conversion; VERIFY if copilot ever exposes an actual $ figure).
+        # Falls back to the old best-effort text scan if the file is
+        # missing (e.g. an older copilot version without this flag).
+        data = read_json_or_default(usage_file, None) if usage_file else None
+        if isinstance(data, dict):
+            usage["input_tokens"] = data.get("lastCallInputTokens")
+            usage["output_tokens"] = data.get("lastCallOutputTokens")
+            if isinstance(usage["input_tokens"], int) and isinstance(usage["output_tokens"], int):
+                usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+        else:
+            usage["total_tokens"] = _usage_from_text(stdout)
     return usage
 
 
@@ -724,31 +837,6 @@ def validate(result, schema):
     if not isinstance(result, dict):
         return "result is not a JSON object"
     return validate_schema(result, schema, "")
-
-
-def _lock_file(handle):
-    """Take an exclusive lock on an open file handle. POSIX uses fcntl, Windows msvcrt.
-
-    Imported lazily so the module loads on platforms missing the other's lock module.
-    """
-    if os.name == "nt":
-        import msvcrt
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-    else:
-        import fcntl
-        fcntl.flock(handle, fcntl.LOCK_EX)
-
-
-def _unlock_file(handle):
-    if os.name == "nt":
-        import msvcrt
-        try:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
-    # POSIX: fcntl locks release automatically when the file descriptor closes.
 
 
 def update_status(runs_dir, run, fields):
@@ -1016,7 +1104,7 @@ def cmd_start(argv):
     with open(launcher_log, "w", encoding="utf-8") as lf:
         proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, **popen_kwargs)
-    update_status(runs_dir, run, {"state": "starting", "launcher_pid": proc.pid})
+    update_status(runs_dir, run, {"schema_version": SCHEMA_VERSION, "state": "starting", "launcher_pid": proc.pid})
     print(json.dumps({
         "run": run, "pid": proc.pid,
         "log_file": str(runs_dir / f"{run}.log"),
@@ -1076,7 +1164,7 @@ def cmd_cancel(argv):
         if pid:
             killed_any = kill_pid_group(pid) or killed_any
     update_status(runs_dir, args.run, {"state": "failed", "error": "cancelled by user",
-                                       "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S")})
+                                       "finished_at": now_iso()})
     print(json.dumps({"run": args.run, "cancelled": killed_any}, indent=2))
 
 
@@ -1130,11 +1218,13 @@ def main(argv=None):
 
     handoff_path = Path(args.handoff)
     runs_dir, run = resolve_run_paths(args)
-    task_id = Path(args.task_dir).name if args.task_dir else None
+    task_dir_path = Path(args.task_dir) if args.task_dir else None
+    task_id = task_dir_path.name if task_dir_path else None
     out_path = runs_dir / f"{run}.result.json"
     raw_path = runs_dir / f"{run}.raw.txt"
     log_path = runs_dir / f"{run}.log"
-    envelope = {"role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort,
+    envelope = {"schema_version": SCHEMA_VERSION,
+                "role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort,
                 "skip_permissions": args.skip_permissions and args.role not in READ_ONLY,
                 "ok": False, "exit_code": None, "duration_s": None, "result": None, "usage": None,
                 "permission_denials": [], "error": None, "session_id": None, "resume_command": None,
@@ -1143,10 +1233,16 @@ def main(argv=None):
     def finish():
         out_path.write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
         update_status(runs_dir, run, {"state": "done" if envelope["ok"] else "failed",
-                                      "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                      "finished_at": now_iso(),
                                       "session_id": envelope["session_id"],
                                       "resume_command": envelope["resume_command"],
                                       "error": envelope["error"]})
+        if task_dir_path:
+            append_event(task_dir_path, "run.finished", {
+                "ok": envelope["ok"], "exit_code": envelope["exit_code"],
+                "duration_s": envelope["duration_s"], "error": envelope["error"],
+                "usage": envelope["usage"],
+            }, run=run)
         print(json.dumps(envelope, indent=2))
         sys.exit(0 if envelope["ok"] else 1)
 
@@ -1247,6 +1343,8 @@ def main(argv=None):
             stdout_lines.append(line)
             for entry in stream.feed(line):
                 log.write(f"[{now()}] {entry}\n")
+                if task_dir_path:
+                    append_event(task_dir_path, classify_log_entry(entry), {"text": entry}, run=run)
             if stream.session_id and stream.session_id != recorded_session:
                 recorded_session = stream.session_id
                 update_status(runs_dir, run, {"session_id": recorded_session})
@@ -1258,8 +1356,8 @@ def main(argv=None):
         return result_code
 
     with tempfile.TemporaryDirectory() as tmp, open(log_path, "w", buffering=1, encoding="utf-8") as log:
-        cmd, stdin, last_message = build_command(args, prompt, prompt_path, schema_path, tmp,
-                                                 timeout_s=deadline - time.time())
+        cmd, stdin, extra_output_file = build_command(args, prompt, prompt_path, schema_path, tmp,
+                                                      timeout_s=deadline - time.time())
         cmd[0:1] = cli_argv_prefix(cli_path)
         try:
             check_argv_size(cmd)
@@ -1270,10 +1368,15 @@ def main(argv=None):
         log.write(f"[{now()}] {args.role} on {args.cli} ({args.model}, effort {args.effort})\n")
         for warning in warnings:
             log.write(f"[{now()}] warning: {warning}\n")
-        update_status(runs_dir, run, {"role": args.role, "cli": args.cli, "model": args.model,
+        update_status(runs_dir, run, {"schema_version": SCHEMA_VERSION,
+                                      "role": args.role, "cli": args.cli, "model": args.model,
                                       "effort": args.effort, "state": "running",
-                                      "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                      "started_at": now_iso(),
                                       "log_file": str(log_path), "session_id": None})
+        if task_dir_path:
+            append_event(task_dir_path, "run.started",
+                         {"role": args.role, "cli": args.cli, "model": args.model, "effort": args.effort},
+                         run=run)
         print(f"crewbench: {run} running on {args.cli} — live log: tail -f {log_path}",
               file=sys.stderr, flush=True)
         start = time.time()
@@ -1319,10 +1422,10 @@ def main(argv=None):
         envelope["exit_code"] = code
         envelope["session_id"] = stream.session_id
         envelope["resume_command"] = resume_command(args.cli, stream.session_id)
-        envelope["usage"] = extract_usage(args.cli, stream, stdout, envelope["duration_s"])
+        envelope["usage"] = extract_usage(args.cli, stream, stdout, envelope["duration_s"], extra_output_file)
         raw_path.write_text(f"$ {cmd[0]} ...\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n",
                             encoding="utf-8")
-        result, denials, error = parse_output(args.cli, stream, stdout, last_message)
+        result, denials, error = parse_output(args.cli, stream, stdout, extra_output_file)
         result = normalize_optional_nulls(result, schema)
         if stream.denied_commands:
             denials = [{"action": "command", "command": c} for c in dict.fromkeys(stream.denied_commands)]
@@ -1335,6 +1438,9 @@ def main(argv=None):
     # Report only — the Team Lead and user decide what to keep; never undo anything here.
     envelope["warnings"].extend(git_warnings)
     envelope["notes"] = git_notes
+    if task_dir_path:
+        for warning in git_warnings:
+            append_event(task_dir_path, "git.warning", {"warning": warning}, run=run)
     if problem is None and code not in (0, None):
         problem = f"{args.cli} exited with code {code}"
     if timed_out.is_set():

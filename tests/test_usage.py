@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -74,10 +75,23 @@ def test_agy_usage_reads_num_turns_and_extra_usage_fields_confirmed_live(dispatc
     assert usage["cost_usd"] is None
 
 
-def test_codex_usage_from_text_scan(dispatch):
+def test_codex_usage_extracted_from_turn_completed(dispatch):
+    # Confirmed live (`codex exec --json`) -- see test_stream_parsers.py's
+    # test_codex_stream_parser and docs/compatibility.md.
+    stream = dispatch.Stream("codex")
+    stream.final = {"usage": {"input_tokens": 100, "output_tokens": 25,
+                              "cached_input_tokens": 0, "reasoning_output_tokens": 0}}
+    usage = dispatch.extract_usage("codex", stream, "", 3.0)
+    assert usage["input_tokens"] == 100
+    assert usage["output_tokens"] == 25
+    assert usage["total_tokens"] == 125
+    assert usage["cost_usd"] is None  # not present in the confirmed-live shape
+
+
+def test_codex_usage_is_null_without_a_turn_completed_event(dispatch):
     stream = dispatch.Stream("codex")
     usage = dispatch.extract_usage("codex", stream, "done.\nTokens used: 1,234\n", 3.0)
-    assert usage["total_tokens"] == 1234
+    assert usage["total_tokens"] is None  # codex no longer falls back to a text scan
 
 
 def test_copilot_usage_is_null_when_no_usage_text_found(dispatch):
@@ -85,6 +99,29 @@ def test_copilot_usage_is_null_when_no_usage_text_found(dispatch):
     usage = dispatch.extract_usage("copilot", stream, "plain output with no usage info", 2.0)
     assert usage["total_tokens"] is None
     assert usage["duration_s"] == 2.0
+
+
+def test_copilot_usage_extracted_from_usage_output_file(dispatch, tmp_path):
+    # Confirmed live (`copilot --help` + a real -p run, GitHub Copilot CLI
+    # 1.0.83): --usage-output-file writes this shape as JSON. totalNanoAiu
+    # is an internal AI-unit credit metric, not USD, so cost_usd stays null.
+    usage_file = tmp_path / "usage.json"
+    usage_file.write_text(json.dumps({
+        "lastCallInputTokens": 24525, "lastCallOutputTokens": 9, "totalNanoAiu": 6140150000,
+    }))
+    stream = dispatch.Stream("copilot")
+    usage = dispatch.extract_usage("copilot", stream, "", 2.0, usage_file)
+    assert usage["input_tokens"] == 24525
+    assert usage["output_tokens"] == 9
+    assert usage["total_tokens"] == 24525 + 9
+    assert usage["cost_usd"] is None
+
+
+def test_copilot_usage_falls_back_to_text_scan_when_usage_file_missing(dispatch, tmp_path):
+    stream = dispatch.Stream("copilot")
+    missing = tmp_path / "does-not-exist.json"
+    usage = dispatch.extract_usage("copilot", stream, "done.\nTokens used: 1,234\n", 3.0, missing)
+    assert usage["total_tokens"] == 1234
 
 
 def test_usage_from_text_matches_total_tokens_phrasing(dispatch):

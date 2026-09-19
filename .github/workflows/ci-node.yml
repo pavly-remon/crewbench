@@ -1,0 +1,56 @@
+name: CI (app)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "schemas/**"
+      - ".github/workflows/ci-node.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "schemas/**"
+      - ".github/workflows/ci-node.yml"
+
+# Separate workflow file from ci.yml (the Python plugin suite) -- a
+# different language's job interleaved into that matrix risks an unrelated
+# edit breaking both (see docs/app/phase-1-plan.md's open question 4).
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm typecheck
+
+  check-schemas:
+    # Fails if the checked-in root schemas/*.json drifted from what the zod
+    # schemas in app/packages/contract would generate -- the zod schema is
+    # the source of truth (see app/package.json's check:schemas script).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @crewbench/contract build
+      - run: pnpm check:schemas

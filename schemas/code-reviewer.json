@@ -63,8 +63,8 @@
       }
     },
     "previous_issues": {
-      "type": "array",
       "description": "Only present from round 2 on: the status of each issue from the previous round's `issues`.",
+      "type": "array",
       "items": {
         "type": "object",
         "properties": {
@@ -93,7 +93,6 @@
     },
     "blocked": {
       "type": "array",
-      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none.",
       "items": {
         "type": "object",
         "properties": {
@@ -109,7 +108,8 @@
           "reason"
         ],
         "additionalProperties": false
-      }
+      },
+      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none."
     }
   },
   "required": [

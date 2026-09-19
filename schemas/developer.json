@@ -36,7 +36,6 @@
     },
     "blocked": {
       "type": "array",
-      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none.",
       "items": {
         "type": "object",
         "properties": {
@@ -52,7 +51,8 @@
           "reason"
         ],
         "additionalProperties": false
-      }
+      },
+      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none."
     }
   },
   "required": [

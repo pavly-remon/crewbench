@@ -1,0 +1,25 @@
+{
+  "name": "crewbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "crewbench": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@crewbench/adapters": "workspace:*",
+    "@crewbench/contract": "workspace:*",
+    "@crewbench/daemon": "workspace:*",
+    "@crewbench/engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}

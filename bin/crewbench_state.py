@@ -8,7 +8,10 @@ at <root>/index.json (`<root>` is normally `.crewbench`).
 
 Usage:
   crewbench_state.py slug "task description"
-      -> prints a task id: YYYYMMDD-HHMM-<up-to-5-word-kebab-slug>
+      -> prints a task id: YYYYMMDD-HHMM-<up-to-5-word-kebab-slug>-<4 hex>
+         (the hex suffix only guards against two tasks started in the same
+         minute with a similar description; older ids without it still
+         work everywhere else in this script)
 
   crewbench_state.py new --task-dir <dir> --id <id> --command <cmd> --title <title>
                           [--base-commit <sha>] [--branch <name>]
@@ -30,16 +33,17 @@ Usage:
 import argparse
 import json
 import re
+import secrets
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from crewbench_dispatch import _lock_file, _unlock_file  # noqa: E402
-
-
-def now_iso():
-    return time.strftime("%Y-%m-%dT%H:%M:%S")
+from crewbench_fs import (  # noqa: E402
+    SCHEMA_VERSION, append_event, atomic_write_json, locked_read_modify_write, now_iso,
+    parse_legacy_or_utc, read_json_or_default,
+)
 
 
 def make_slug(text, max_words=5):
@@ -48,20 +52,7 @@ def make_slug(text, max_words=5):
 
 
 def make_task_id(text):
-    return f"{time.strftime('%Y%m%d-%H%M')}-{make_slug(text)}"
-
-
-def _atomic_write(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.parent / f".{path.name}.lock"
-    with open(lock_path, "w", encoding="utf-8") as lock:
-        _lock_file(lock)
-        try:
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-            tmp.replace(path)
-        finally:
-            _unlock_file(lock)
+    return f"{time.strftime('%Y%m%d-%H%M')}-{make_slug(text)}-{secrets.token_hex(2)}"
 
 
 def _index_path(task_dir):
@@ -69,22 +60,27 @@ def _index_path(task_dir):
     return task_dir.parent.parent / "index.json"
 
 
-def _update_index(task_dir, state):
-    index_path = _index_path(task_dir)
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        index = {}
-    index[state["id"]] = {
+def _index_entry(state):
+    return {
+        "schema_version": state.get("schema_version", SCHEMA_VERSION),
         "id": state["id"], "command": state.get("command"), "title": state.get("title"),
         "phase": state.get("phase"), "round": state.get("round"),
         "updated_at": state.get("updated_at"),
     }
-    _atomic_write(index_path, index)
 
 
 def _state_path(task_dir):
     return task_dir / "state.json"
+
+
+def _state_lock_path(task_dir):
+    return task_dir / ".state.json.lock"
+
+
+def _index_lock_path(task_dir):
+    # One lock file per .crewbench root, shared by every task under it —
+    # index.json itself is shared, unlike state.json which is per-task.
+    return _index_path(task_dir).parent / ".index.json.lock"
 
 
 def load_state(task_dir):
@@ -94,10 +90,38 @@ def load_state(task_dir):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def save_state(task_dir, state):
-    state["updated_at"] = now_iso()
-    _atomic_write(_state_path(task_dir), state)
-    _update_index(task_dir, state)
+def mutate_state(task_dir, mutate_fn):
+    """Hold locks across load -> mutate -> save for both state.json and
+    index.json, so concurrent `set`/`append`/`new` calls never lose an
+    update to either file — whether they race on the *same* task (e.g. a
+    tester run and a reviewer run finishing at once, serialized by the
+    per-task state lock) or on *different* tasks under the same root
+    racing on the shared index.json (serialized by the index lock).
+    `mutate_fn(state_or_None) -> state` does the actual field change; it
+    receives None when state.json doesn't exist yet (the `new` case).
+
+    Lock order is always state-lock-then-index-lock, so two tasks can never
+    deadlock on each other (each task's state lock is a different file;
+    only the index lock is shared, and it's always acquired last)."""
+    def update_index_and_save(state):
+        def critical_section():
+            atomic_write_json(_state_path(task_dir), state)
+            index_path = _index_path(task_dir)
+            index = read_json_or_default(index_path, {})
+            index[state["id"]] = _index_entry(state)
+            atomic_write_json(index_path, index)
+            return state
+
+        return locked_read_modify_write(_index_lock_path(task_dir), critical_section)
+
+    def critical_section():
+        path = _state_path(task_dir)
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        state = mutate_fn(state)
+        state["updated_at"] = now_iso()
+        return update_index_and_save(state)
+
+    return locked_read_modify_write(_state_lock_path(task_dir), critical_section)
 
 
 def get_at(data, dotted):
@@ -142,28 +166,34 @@ def cmd_slug(args):
 
 def cmd_new(args):
     task_dir = Path(args.task_dir)
-    state = {
-        "id": args.id,
-        "command": args.command,
-        "title": args.title,
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "phase": "scoping",
-        "round": 0,
-        "lineup": {},
-        "base_commit": args.base_commit,
-        "branch": args.branch,
-        "worktree": None,
-        "jira_key": args.jira_key,
-        "host_override": None,
-        "doctor": {},
-        "acceptance_criteria": [],
-        "design_spec_file": args.design_spec_file,
-        "rounds": [],
-        "usage": {},
-        "notes": [],
-    }
-    save_state(task_dir, state)
+
+    def build(existing):
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "id": args.id,
+            "command": args.command,
+            "title": args.title,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "phase": "scoping",
+            "round": 0,
+            "lineup": {},
+            "base_commit": args.base_commit,
+            "branch": args.branch,
+            "worktree": None,
+            "jira_key": args.jira_key,
+            "host_override": None,
+            "doctor": {},
+            "acceptance_criteria": [],
+            "design_spec_file": args.design_spec_file,
+            "rounds": [],
+            "usage": {},
+            "notes": [],
+        }
+
+    state = mutate_state(task_dir, build)
+    append_event(task_dir, "task.created",
+                 {"command": args.command, "title": args.title, "jira_key": args.jira_key})
     print(json.dumps(state, indent=2))
 
 
@@ -174,17 +204,38 @@ def cmd_get(args):
 
 def cmd_set(args):
     task_dir = Path(args.task_dir)
-    state = load_state(task_dir)
-    set_at(state, args.key, json.loads(args.value))
-    save_state(task_dir, state)
+    value = json.loads(args.value)
+    old = {}
+
+    def mutate(state):
+        if state is None:
+            raise SystemExit(f"no state.json in {task_dir} — run `new` first")
+        if args.key in ("phase", "round"):
+            old["value"] = state.get(args.key)
+        set_at(state, args.key, value)
+        return state
+
+    state = mutate_state(task_dir, mutate)
+    if args.key == "phase" and old.get("value") != value:
+        append_event(task_dir, "task.phase_changed", {"from": old.get("value"), "to": value})
+    elif args.key == "round" and old.get("value") != value:
+        append_event(task_dir, "task.round_started", {"round": value})
     print(json.dumps(state, indent=2))
 
 
 def cmd_append(args):
     task_dir = Path(args.task_dir)
-    state = load_state(task_dir)
-    append_at(state, args.key, json.loads(args.value))
-    save_state(task_dir, state)
+    value = json.loads(args.value)
+
+    def mutate(state):
+        if state is None:
+            raise SystemExit(f"no state.json in {task_dir} — run `new` first")
+        append_at(state, args.key, value)
+        return state
+
+    state = mutate_state(task_dir, mutate)
+    if args.key == "notes":
+        append_event(task_dir, "task.note_added", {"note": value})
     print(json.dumps(state, indent=2))
 
 
@@ -194,7 +245,14 @@ def cmd_list(args):
         index = json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         index = {}
-    rows = sorted(index.values(), key=lambda r: r.get("updated_at") or "", reverse=True)
+    # Sort by parsed time (not the raw string) so old naive-local timestamps
+    # and new UTC ones compare correctly against each other; unparseable/
+    # missing timestamps sort last regardless of direction.
+    def sort_key(row):
+        parsed = parse_legacy_or_utc(row.get("updated_at"))
+        return parsed or datetime.min.replace(tzinfo=timezone.utc)
+
+    rows = sorted(index.values(), key=sort_key, reverse=True)
     print(json.dumps(rows, indent=2))
 
 
