@@ -543,4 +543,52 @@ changes").
   (unaffected by this milestone — adapters is new code, not a port that
   touches `bin/*.py`).
 
-(Milestones 3–7's notes appended here as each one completes.)
+### Milestone 3 — done (2026-09-19)
+
+- New `packages/engine` (depends on `@crewbench/contract`). Phases match
+  `schemas/task-state.json`'s enum exactly (no extra internal-only phase
+  was needed): `scoping → [design] → implementing → verifying → fixing →
+  awaiting_commit → done | stopped | failed`. `implementing` is round 1;
+  any later round (whether reached via a failing gate or a fix-worthy
+  verification round) is `fixing` — this wasn't spelled out verbatim
+  anywhere in `lib/dispatch.md`/`skills/new-task/SKILL.md`, so it's an
+  inference from the phase names themselves, flagged here rather than
+  silently assumed.
+- `loop-rules.ts`: every rule in `lib/dispatch.md` §6 as its own named,
+  pure function — `gateShortCircuit`, `severityThresholdReached`,
+  `combinedFixList`, `belowThresholdFollowUps`, `maxRoundsReached`,
+  `stuckDetection`. Each has its own `describe()` block in
+  `test/loop-rules.test.ts` naming the §6 subsection it ports, per the
+  milestone's own acceptance bar ("every rule ... has a named test").
+- `issue-registry.ts`: the engine (not the reviewer) assigns issue ids
+  (`R<round>-<n>`) and owns identity across rounds. `matchPreviousIssues()`
+  matches a reviewer's `previous_issues[]` back to the registry by id
+  first, falling back to file+category+title-similarity (a small
+  word-overlap heuristic — the reviewer's `note` field stands in for a
+  "title", since there's no separate title field in the schema), and
+  records which method matched. `updateRegistry()` advances the registry
+  each round: new issues become `open`, matched-resolved entries reset
+  their streak, matched-still_present entries increment
+  `consecutiveStillPresent` (what `stuckDetection()` actually reads).
+- `reduce.ts`/`decide.ts`: the pure `reduce(state, event) -> state` /
+  `decide(state) -> Command[]` pair the milestone calls for, with zero I/O
+  in either. `reduce()` mirrors `skills/new-task/SKILL.md`'s steps 4-11
+  turned into code; `decide()` derives the next `Command` purely from
+  current state (never from the triggering event), so a resumed/replayed
+  state produces the same next action regardless of how it got there --
+  relevant for milestone 6's resume-from-events-jsonl work later in this
+  phase.
+- **A real bug caught by my own test, not by inspection**: my first
+  `reduce.test.ts` case for "same issue still_present two rounds running"
+  reported `still_present` only *once* and expected the engine to call it
+  stuck immediately. It correctly didn't — `lib/dispatch.md` §6 says
+  "still_present for two consecutive rounds", meaning two consecutive
+  *reports* of still_present, not one. Fixed the test to report
+  `still_present` twice before asserting `stopped`, rather than loosening
+  the rule to match a wrong test — the code was right, the test's
+  understanding of the rule was off by one round.
+- Full verification: `pnpm -r typecheck/build/test` all green (180 TS
+  tests total: 25 contract + 107 adapters + 48 engine); the Python suite
+  (212 tests) unaffected and still green.
+
+(Milestones 4–7's notes appended here as each one completes.)
