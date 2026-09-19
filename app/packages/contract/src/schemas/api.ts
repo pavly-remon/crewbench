@@ -219,6 +219,53 @@ export const ApiRunLogSchema = z
   .strict();
 export type ApiRunLog = z.infer<typeof ApiRunLogSchema>;
 
+/** `GET /api/doctor` (milestone 6) -- mirrors `packages/adapters`'
+ * `DoctorReport` field-for-field, one per CLI. Cached server-side with a
+ * short TTL (`routes/doctor.ts`) since `doctor()` makes real network/auth
+ * calls per adapter -- this schema doesn't know or care about that, it
+ * just describes the response shape either way. */
+export const ApiDoctorReportSchema = z
+  .object({
+    cli: z.enum(["claude", "codex", "agy", "copilot"]),
+    installed: z.boolean(),
+    version: z.string().nullable(),
+    config_dir: z.string().nullable(),
+    config_dir_writable: z.boolean().nullable(),
+    network_ok: z.boolean().nullable(),
+    network_detail: z.string().nullable(),
+    logged_in: z.boolean().nullable(),
+    auth_detail: z.string().nullable(),
+    ok: z.boolean(),
+    errors: z.array(z.string()),
+  })
+  .strict();
+export type ApiDoctorReport = z.infer<typeof ApiDoctorReportSchema>;
+
+export const ApiDoctorResponseSchema = z
+  .object({
+    reports: z.array(ApiDoctorReportSchema),
+    /** When this result was produced -- lets the UI show "checked 3m
+     * ago" and offer a manual refresh, per the phase prompt's own
+     * "(cached)" note on this endpoint. */
+    checked_at: z.string(),
+  })
+  .strict();
+export type ApiDoctorResponse = z.infer<typeof ApiDoctorResponseSchema>;
+
+/** `GET /api/projects/:pid/usage` (milestone 6) -- one row per task,
+ * reusing the same per-role usage rollup `GET /api/tasks/:tid` already
+ * computes (`task-detail.ts`'s `aggregateUsage()`), so there is one
+ * source of truth for "how is usage computed," not a second one for a
+ * project-wide view. */
+export const ApiProjectUsageRowSchema = z
+  .object({
+    task_id: z.string(),
+    title: z.string(),
+    usage: z.record(z.string(), ApiRoleUsageSchema),
+  })
+  .strict();
+export type ApiProjectUsageRow = z.infer<typeof ApiProjectUsageRowSchema>;
+
 export const ApiErrorSchema = z
   .object({
     error: z.string(),

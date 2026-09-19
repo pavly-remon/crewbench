@@ -25,7 +25,7 @@ async function readJsonSafe<T>(path: string): Promise<T | null> {
  * pure state machine. A `null` component makes the whole rollup `null`
  * for that field (never silently 0), matching this repo's `cost_usd:
  * null` convention from Phase 0. */
-async function aggregateUsage(taskDir: string): Promise<Record<string, ApiRoleUsage>> {
+export async function aggregateUsage(taskDir: string): Promise<Record<string, ApiRoleUsage>> {
   const runsDir = join(taskDir, "runs");
   let files: string[] = [];
   try {

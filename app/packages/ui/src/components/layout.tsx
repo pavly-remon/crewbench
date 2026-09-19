@@ -29,15 +29,32 @@ export function Layout() {
             crewbench
           </Link>
           {params.projectId && (
-            <Link
-              to="/projects/$projectId"
-              params={{ projectId: params.projectId }}
-              className={cn("text-[var(--color-fg-muted)] [&.active]:text-[var(--color-fg)]")}
-              activeProps={{ className: "text-[var(--color-fg)]" }}
-            >
-              Board
-            </Link>
+            <>
+              <Link
+                to="/projects/$projectId"
+                params={{ projectId: params.projectId }}
+                className={cn("text-[var(--color-fg-muted)] [&.active]:text-[var(--color-fg)]")}
+                activeProps={{ className: "text-[var(--color-fg)]" }}
+              >
+                Board
+              </Link>
+              <Link
+                to="/projects/$projectId/usage"
+                params={{ projectId: params.projectId }}
+                className={cn("text-[var(--color-fg-muted)] [&.active]:text-[var(--color-fg)]")}
+                activeProps={{ className: "text-[var(--color-fg)]" }}
+              >
+                Usage
+              </Link>
+            </>
           )}
+          <Link
+            to="/health"
+            className={cn("text-[var(--color-fg-muted)] [&.active]:text-[var(--color-fg)]")}
+            activeProps={{ className: "text-[var(--color-fg)]" }}
+          >
+            Health
+          </Link>
         </nav>
         <ThemeToggle />
       </header>

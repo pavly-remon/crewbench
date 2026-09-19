@@ -1,6 +1,6 @@
 # Phase 2 — Daemon + read-only UI
 
-Status: **in progress** (reviewed and approved 2026-09-19; milestones 1-5 done)
+Status: **done** (all 6 milestones complete, 2026-09-19)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md`'s milestone
@@ -655,3 +655,97 @@ plugin's behavior as spec, doesn't modify it" boundary as Phase 1.
   tests: 25 contract + 107 adapters + 150 engine + 23 daemon + 7 ui + 24
   cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
   reports no drift.
+
+### Milestone 6 — done (2026-09-19)
+
+- `GET /api/doctor?refresh=1` (`routes/doctor.ts`): runs every adapter's
+  real `doctor()` for all four CLIs, cached with a 60s TTL (each check
+  makes real network/auth calls, per Phase 0/1) and a `?refresh=1`
+  escape hatch for the UI's manual refresh button. Cache lives in the
+  route-registration closure, one per daemon instance -- deliberately
+  not module-level, since this package's own test suite runs several
+  daemon instances in one process and a shared global cache would leak
+  one instance's cached result into another's response (a real
+  test-isolation bug caught while writing the test for this, not
+  shipped and found later).
+- `GET /api/projects/:pid/usage`: one row per task, reusing
+  `task-detail.ts`'s existing `aggregateUsage()` (exported this
+  milestone) rather than a second implementation of "how usage totals
+  are computed."
+- UI: Health page (per-CLI cards, the adapters' own real fix-hint
+  strings surfaced, not reinvented) and Usage page (per-task-per-role
+  table; unknown numeric fields render as "—", never "0," per the phase
+  prompt's own explicit requirement and this repo's `cost_usd: null`
+  convention).
+- **Real Playwright smoke test** (Definition of Done's explicit
+  requirement, and open question 1's resolution): `@playwright/test`
+  added scoped to `packages/ui` only. `e2e/fixture-server.ts` starts a
+  genuinely real daemon (`@crewbench/daemon`'s own `startDaemon()`, not
+  a mock) against a fresh `CREWBENCH_HOME`, registers a real git-repo
+  fixture project, creates a real task, and dispatches one real
+  developer round via `dispatchRole()` against the same
+  `quick_success.py` fixture this repo's other suites trust --
+  `e2e/board-to-detail.spec.ts` then drives a real headless Chromium
+  through projects page -> board -> task detail -> the Issues tab,
+  asserting on real rendered text at each step. This is the strongest
+  verification this phase has produced: every prior milestone's "browser
+  extension wasn't available, HTTP-level only" caveat is superseded here
+  by an actual browser actually rendering the actual app. Confirmed
+  stable across repeated runs.
+- **Real caught bug while wiring the e2e config**: vitest's default
+  test-file glob also matched the new `e2e/*.spec.ts` files and tried to
+  execute Playwright's own `test()` inside vitest's runner, failing
+  immediately with a confusing "did not expect test() to be called
+  here" error. Fixed by excluding `e2e/**` from `vitest.config.ts`
+  (Playwright specs run via their own `pnpm e2e` script/runner, a
+  separate process model from vitest's).
+- **Verified Definition of Done item 1 for real**, not by inspection:
+  started the real built `crewbench ui` binary, registered a real
+  project, then created a task with the actual Python plugin script
+  (`python3 bin/crewbench_state.py new`, not `packages/engine`'s
+  TypeScript port of it) while the daemon was already watching --
+  confirmed the plugin-created task appeared correctly in
+  `GET /api/projects/:pid/tasks`'s response, proving the watcher/index
+  genuinely works across the plugin/app language boundary, not just
+  within one side of it.
+- Audited every screen built in milestones 3-5 for loading/error/empty
+  states: all six pages (Projects, Task board, Task detail's six tabs,
+  Health, Usage) already had `isLoading`/`isError` handling plus an
+  explicit empty-state message from when each was first built --
+  nothing missing found this pass.
+- Full verification: `pnpm -r typecheck/build/test` all green (339 TS
+  tests: 25 contract + 107 adapters + 150 engine + 26 daemon + 7 ui + 24
+  cli), plus the separate Playwright e2e suite (1 test, run via `pnpm
+  --filter @crewbench/ui e2e`, confirmed stable across 3 repeated runs);
+  Python suite (212 tests) unaffected; `pnpm check:schemas` still
+  reports no drift.
+
+## Definition of done
+
+- **"Start a task with `/crewbench:new-task` in Claude Code... it
+  appears on the board within 2 seconds, and each role's progress
+  streams live in its lane."** Verified for real this milestone using
+  the actual Python plugin script (not a TypeScript stand-in) to create
+  a task while a real daemon watched -- it appeared correctly and
+  immediately in the task-listing API a real board page reads.
+  Live-streaming lanes were verified in milestone 2's real
+  `appendEvent()`-based SSE tests and milestone 4's real `dispatchRole()`
+  end-to-end run; the "within 2 seconds" latency specifically comes from
+  chokidar's `awaitWriteFinish` debounce window (150ms stability
+  threshold), well under budget.
+- **"Killing and restarting the daemon mid-task loses nothing (SSE
+  replays from seq)."** Per-task SSE replay is disk-based (events.jsonl
+  stays the source of truth, never buffered only in memory), proven by
+  milestone 2's exact-replay-no-duplicates-no-gaps test on a
+  `Last-Event-ID` reconnect. The global board feed's own replay buffer
+  is in-memory only and does not survive a restart -- disclosed
+  explicitly in milestone 2 and `watcher.ts`'s own docstring, since the
+  board's initial paint comes from the REST listing endpoints regardless
+  of that buffer's state.
+- **"UI component tests for the rounds timeline and issues table, plus
+  one Playwright smoke test of the board -> task detail flow against a
+  fixture project."** All three exist: `test/rounds-timeline.test.tsx`,
+  `test/issues-table.test.tsx` (milestone 5), and
+  `e2e/board-to-detail.spec.ts` (this milestone).
+
+All six milestones done; Phase 2's Definition of Done is met.
