@@ -213,6 +213,9 @@ importers:
 
   packages/engine:
     dependencies:
+      '@crewbench/adapters':
+        specifier: workspace:*
+        version: link:../adapters
       '@crewbench/contract':
         specifier: workspace:*
         version: link:../contract

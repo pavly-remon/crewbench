@@ -591,4 +591,91 @@ changes").
   tests total: 25 contract + 107 adapters + 48 engine); the Python suite
   (212 tests) unaffected and still green.
 
-(Milestones 4–7's notes appended here as each one completes.)
+### Milestone 4 — done (2026-09-19)
+
+- `contract-fs.ts`: the TS-side counterpart of `crewbench_fs.py` --
+  `nowIso()`/`parseLegacyOrUtc()` (byte-identical timestamp format to the
+  Python side), `atomicWriteJson()`, `appendEvent()` (same events.jsonl
+  line shape, same seq-from-last-line approach). **A disclosed, real
+  limitation, not silently glossed over**: the locking primitive is an
+  exclusive-lockfile mutex (atomic `open(path, "wx")`, polled, with a
+  staleness timeout), not Node's equivalent of POSIX `fcntl.flock`/
+  Windows `msvcrt.locking` -- Node has no built-in binding for either.
+  This guards concurrent *Node-side* writers (a tester run and a reviewer
+  run finishing at once, both from this same runner process) but not
+  simultaneous access from a live Python process and a live Node process
+  at once. Scoped as acceptable for Phase 1 under
+  `docs/app/CONTEXT.md`'s single-owner-at-a-time model (a task is
+  plugin-owned or app-owned, not both simultaneously) -- flagged here as
+  a real design decision for Phase 3's ownership work to revisit, not
+  something quietly assumed equivalent.
+- `gate.ts`: `crewbench_gate.py` ported field-for-field, including
+  `shellSplit()` (the exact `_split()` quoting fix -- POSIX-mode
+  tokenizing mangles Windows backslash paths, non-POSIX-mode leaves quote
+  characters in each token; the fix tokenizes non-POSIX then strips one
+  matching quote pair per token) and the same step-order/skip-if-
+  unconfigured/stop-on-first-failure/gate.finished-event semantics.
+- `profile.ts`: `crewbench_profile.py`'s Node/Python/Go/Make detection and
+  `agy_rules_for_commands()` ported field-for-field, tested against the
+  same scenarios `test_profile.py` covers (plus a Makefile-detection case
+  the Python suite doesn't have, since it's genuinely untested there too).
+- `git.ts`: `git_state()`/`git_changes()` ported field-for-field --
+  **every** warning condition (branch switch, HEAD move, stash change,
+  reverted/deleted uncommitted files, a read-only reviewer touching
+  anything, a tester touching non-test files, push-vs-fetch
+  disambiguation) has its own test, ported directly from
+  `test_git_safety.py`'s real-git-repo scenarios (including the
+  two-remotes push/fetch distinction test, the most elaborate one in that
+  file).
+- `worktree.ts`: the **mechanical** half of `lib/dispatch.md` §5's
+  worktree pre-flight/commit/cleanup -- `createWorktree()`,
+  `runSetupCommands()`, `copyWorkspaceFiles()`, `commitAll()`,
+  `integrate()` (merge/cherry-pick/leave/none), `removeWorktree()`,
+  `pruneWorktrees()`, plus `snapshotRef()`/`deltaDiff()` for §6's
+  per-round delta diff. Deliberately **not** included: the interactive
+  "ask the user" half (dirty-tree decision, setup/copy confirmation,
+  commit message, integrate choice, push confirmation) -- those are
+  milestone 5's approval-flow territory; this milestone only builds the
+  git primitives a later approval handler calls once a decision exists.
+  `commitAll()`'s docstring says explicitly that nothing in this engine
+  calls it without an external approval already having happened, per
+  `docs/app/CONTEXT.md`'s non-negotiable principle 3.
+- `runner.ts`: `dispatchRole()` runs one role headlessly end to end --
+  builds the prompt (via adapters' `buildPrompt`), resolves and spawns
+  the real CLI process detached (its own process group), streams stdout
+  through the adapter's `Stream`, writes the log incrementally, emits
+  every event type from `docs/app/contract/events.md`, and writes the
+  exact `runs/<role>-r<round>.*` file family plus `status.json` in the
+  same locked, atomic way the Python side does. `dispatchVerification()`
+  runs tester and code-reviewer in parallel (`Promise.all`, one wait, not
+  two -- mirrors `lib/dispatch.md` §4 point 4). Collapses Python's
+  detached start/wait split into one direct async call: that split
+  exists in `crewbench_dispatch.py` to survive a *host LLM's own shell
+  tool* possibly cutting off a background job, which doesn't apply here
+  -- this runner is the long-running process itself, not something
+  invoked through another tool's shell. `cancelRun()` is written but
+  currently unreachable from `dispatchRole()`'s own single-call
+  interface (no pid is exposed before the process exits) -- flagged
+  in its docstring as a real gap for a future pid-exposing "start" split,
+  not silently assumed solved.
+- **Caught two real bugs via failing integration tests, not inspection**:
+  (1) `runner.ts` initially never resolved the actual CLI executable path
+  -- `buildCommand()` always emits the bare CLI name (`"claude"`) as
+  `argv[0]`; Python's `main()` substitutes the real, override-aware path
+  in *after* building the command (`cmd[0:1] =
+  cli_argv_prefix(cli_path)`), a step I'd ported into `gate.ts`'s step
+  runner but forgotten in the role-dispatch path. Every fake-CLI
+  integration test silently ran the *real* `claude` binary instead of the
+  fixture until this was fixed -- caught because the test asserted a
+  specific fixture session id (`"quick-0001"`) that a real `claude`
+  process could never produce. (2) `worktree.ts`'s `deltaDiff()` defaulted
+  its second ref to `"HEAD"`, so `git diff <ref> HEAD` only ever compared
+  two *commits* -- useless for the actual use case (diffing a previous
+  round's snapshot against the *current, still-uncommitted* round's
+  work). Fixed to omit the second ref by default, matching plain
+  `git diff <ref>`'s working-tree-comparison behavior.
+- Full verification: `pnpm -r typecheck/build/test` all green (227 TS
+  tests: 25 contract + 107 adapters + 95 engine); the Python suite (212
+  tests) unaffected and still green.
+
+(Milestones 5–7's notes appended here as each one completes.)

@@ -4,6 +4,6 @@
     "noEmit": true,
     "composite": false
   },
-  "references": [{ "path": "../contract" }],
+  "references": [{ "path": "../contract" }, { "path": "../adapters" }],
   "include": ["src", "test"]
 }

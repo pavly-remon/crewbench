@@ -14,6 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@crewbench/adapters": "workspace:*",
     "@crewbench/contract": "workspace:*"
   },
   "devDependencies": {
