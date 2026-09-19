@@ -1,10 +1,12 @@
 {
-  "name": "crewbench",
+  "name": "@crewbench/daemon",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "crewbench": "./dist/bin.js"
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -b",
@@ -14,8 +16,10 @@
   "dependencies": {
     "@crewbench/adapters": "workspace:*",
     "@crewbench/contract": "workspace:*",
-    "@crewbench/daemon": "workspace:*",
-    "@crewbench/engine": "workspace:*"
+    "@crewbench/engine": "workspace:*",
+    "chokidar": "4.0.3",
+    "fastify": "5.12.5",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "24.13.5",

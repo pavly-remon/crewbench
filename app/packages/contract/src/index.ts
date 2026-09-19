@@ -7,5 +7,7 @@ export * from "./schemas/project.js";
 export * from "./schemas/team.js";
 export * from "./schemas/events.js";
 export * from "./schemas/task-spec.js";
+export * from "./schemas/registry.js";
+export * from "./schemas/api.js";
 export * from "./codex-strict.js";
 export * from "./json-schema-postprocess.js";

@@ -4,6 +4,6 @@
     "noEmit": true,
     "composite": false
   },
-  "references": [{ "path": "../contract" }, { "path": "../adapters" }, { "path": "../engine" }, { "path": "../daemon" }],
+  "references": [{ "path": "../contract" }, { "path": "../adapters" }, { "path": "../engine" }],
   "include": ["src", "test"]
 }

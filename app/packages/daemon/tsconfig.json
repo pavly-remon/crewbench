@@ -4,6 +4,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "references": [{ "path": "../contract" }, { "path": "../adapters" }, { "path": "../engine" }, { "path": "../daemon" }],
+  "references": [{ "path": "../contract" }, { "path": "../adapters" }, { "path": "../engine" }],
   "include": ["src"]
 }
