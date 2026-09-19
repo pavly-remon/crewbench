@@ -1,6 +1,6 @@
 # Phase 2 — Daemon + read-only UI
 
-Status: **in progress** (reviewed and approved 2026-09-19; milestone 1 done)
+Status: **in progress** (reviewed and approved 2026-09-19; milestones 1-2 done)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md`'s milestone
@@ -350,3 +350,73 @@ plugin's behavior as spec, doesn't modify it" boundary as Phase 1.
   check:schemas` still reports no drift (the new contract schemas aren't
   in the generator's target list — API/registry shapes have no
   Python-side file to generate).
+
+### Milestone 2 — done (2026-09-19)
+
+- `tail.ts`: incremental byte-offset reads of `events.jsonl` -- only the
+  bytes appended since the last read, split into complete lines with a
+  possibly-partial trailing line buffered for next time (the same "torn
+  line from a crash mid-write" tolerance `events.md` already documents,
+  extended to mid-write reads too). Each complete line is parsed and
+  validated against the existing `CrewbenchEventSchema` discriminated
+  union from `packages/contract` (Phase 0's port); a malformed line is
+  skipped, not thrown, so one bad line can never wedge the tail.
+- `watcher.ts`: one chokidar watcher per registered project's
+  `.crewbench/` tree (`awaitWriteFinish` for the phase prompt's own
+  "debounced"), maintaining an in-memory task-id -> project/taskDir index
+  (Design decision 3) built from `index.json` and kept current whenever
+  it changes -- confirmed live that chokidar picks up a `.crewbench/`
+  directory that doesn't exist yet at watch-start (the common case for a
+  freshly registered project with no tasks), including nested
+  `tasks/<id>/{state.json,events.jsonl}` appearing together, via a
+  standalone script before trusting it in the daemon.
+- **Design correction, not silently**: `docs/app/phase-2-plan.md`'s own
+  open question 4 proposed including `approval.requested` in the global
+  board feed's event-type allowlist. This milestone confirmed that event
+  type is never actually written to any `events.jsonl` anywhere in this
+  codebase -- Phase 1's approvals are resolved purely in-memory via
+  terminal prompts, with no persisted event. Dropped from
+  `GLOBAL_EVENT_TYPES`; the allowlist is `task.created`,
+  `task.phase_changed`, `task.round_started`, `run.started`,
+  `run.finished`.
+- `sse.ts` + `routes/events.ts`: `GET /api/tasks/:tid/events` (per-task,
+  replay-then-live) and `GET /api/events` (global, task-level only).
+  Per-task replay is disk-based and correct across a daemon restart
+  (files stay the source of truth); the global feed's replay buffer is
+  in-memory only, capped at 500 entries, and does **not** survive a
+  restart -- documented in `watcher.ts` rather than left implicit, since
+  the board's own initial paint comes from the milestone-1 REST listing
+  endpoints, not this stream. Both connect-then-subscribe in a specific
+  order (subscribe to live events first, buffer them, *then* read the
+  disk replay snapshot, then flush the buffer filtering out anything
+  already covered by the replay) so an event landing exactly at connect
+  time is never dropped or double-sent.
+- Tests (`test/watcher-sse.test.ts`): a real subprocess-free but
+  real-disk simulation -- `packages/engine`'s own `createTask()`/
+  `appendEvent()` write real files while a real running daemon's real
+  chokidar watcher observes them (the phase prompt's "simulate a plugin
+  writing files, and assert the SSE output," satisfied with the app's own
+  file-writing functions standing in for the plugin's, since both write
+  byte-identical files). Covers: live tailing, 404 on an unknown task id,
+  exact-replay-no-duplicates-no-gaps on a `Last-Event-ID` reconnect, and
+  the global feed's type filtering.
+- **Caught one real bug, in the test helper, not the daemon** (confirmed
+  by hand against the real built daemon with a standalone script before
+  concluding this): the first version of the tests' SSE-reading helper
+  raced each `reader.read()` against a short per-iteration `sleep()` and,
+  on a timeout, looped back and issued a *second* concurrent `read()`
+  while the first was still outstanding -- `Promise.race()` only returns
+  whichever settles first and discards the other's already-consumed
+  value, so a chunk that arrived just after one slice's timeout won was
+  silently thrown away. Fixed by never having more than one `read()`
+  outstanding at a time, raced only against a single whole-call deadline.
+- Fastify's `close()` needed `forceCloseConnections: true` -- an open SSE
+  stream is by design a long-lived keep-alive connection, and without
+  this flag `close()` waits for it to end on its own (which it may not,
+  if a client abort hasn't fully propagated to the socket), hanging
+  daemon shutdown. Caught via a real `afterEach` hook timeout, not
+  inspection.
+- Full verification: `pnpm -r typecheck/build/test` all green (319 TS
+  tests: 25 contract + 107 adapters + 150 engine + 13 daemon + 24 cli);
+  Python suite (212 tests) unaffected; `pnpm check:schemas` still reports
+  no drift.
