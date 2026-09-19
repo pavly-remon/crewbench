@@ -17,6 +17,7 @@
     "@crewbench/adapters": "workspace:*",
     "@crewbench/contract": "workspace:*",
     "@crewbench/engine": "workspace:*",
+    "@fastify/static": "10.1.4",
     "chokidar": "4.0.3",
     "fastify": "5.12.5",
     "zod": "4.6.5"

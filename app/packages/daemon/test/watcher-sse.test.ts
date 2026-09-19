@@ -97,6 +97,26 @@ describe("daemon watcher + SSE", () => {
     return { Authorization: `Bearer ${daemon.token}`, ...extra };
   }
 
+  /** Polls the per-task SSE route until the watcher's task index knows
+   * about `taskId` (a plain 200 vs. the "unknown task" 404), instead of a
+   * fixed sleep -- a flat sleep here was flaky under load (other
+   * workspace packages' test runs contending for CPU during `pnpm -r
+   * test` made chokidar's own debounce+dispatch occasionally take longer
+   * than a fixed budget), while polling adapts to however long it
+   * actually takes on the machine running it. Each probe opens and
+   * immediately cancels the stream -- only the response status matters
+   * here. */
+  async function waitForTaskKnown(taskId: string, timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const res = await fetch(url(`/api/tasks/${taskId}/events`), { headers: authHeaders() });
+      res.body?.cancel().catch(() => {});
+      if (res.status !== 404) return;
+      if (Date.now() > deadline) throw new Error(`watcher never learned about task ${taskId} within ${timeoutMs}ms`);
+      await sleep(100);
+    }
+  }
+
   /** Simulates a plugin process appending real events to a real task's
    * events.jsonl -- the phase prompt's own acceptance bar ("simulate a
    * plugin writing files, and assert the SSE output"), not a mocked
@@ -114,10 +134,11 @@ describe("daemon watcher + SSE", () => {
     const taskDir = join(repo, ".crewbench", "tasks", taskId);
     await createTask(taskDir, { id: taskId, command: "new-task", title: "Watch this task" });
     // Registering the project happens before the task exists on disk in a
-    // real run too (task creation is itself a later step) -- give the
-    // watcher's chokidar instance a moment to observe the new
-    // events.jsonl file safely past its own debounce window.
-    await sleep(400);
+    // real run too (task creation is itself a later step) -- wait for the
+    // watcher's chokidar instance to actually observe the new task rather
+    // than assuming a fixed delay is enough (see waitForTaskKnown's
+    // docstring).
+    await waitForTaskKnown(taskId);
     return { pid: project.id, taskId, taskDir };
   }
 
@@ -147,7 +168,7 @@ describe("daemon watcher + SSE", () => {
 
     controller.abort();
     reader.cancel().catch(() => {});
-  }, 15_000);
+  }, 20_000);
 
   it("returns 404 for an SSE connection to an unknown task id", async () => {
     const res = await fetch(url("/api/tasks/does-not-exist/events"), { headers: authHeaders() });
@@ -185,7 +206,7 @@ describe("daemon watcher + SSE", () => {
     expect(events2).toHaveLength(1);
     expect(events2[0]?.data.note).toBe("third");
     expect(events2[0]!.seq).toBeGreaterThan(lastSeq);
-  }, 15_000);
+  }, 20_000);
 
   it("global /api/events surfaces task-level events but not run.message noise", async () => {
     const { taskId, taskDir } = await registerProjectWithTask();
@@ -207,5 +228,5 @@ describe("daemon watcher + SSE", () => {
     const globalEvents = parseDataLines(buffered) as Array<{ taskId: string; event: { type: string } }>;
     expect(globalEvents.some((e) => e.taskId === taskId && e.event.type === "run.started")).toBe(true);
     expect(globalEvents.some((e) => e.event.type === "run.message")).toBe(false);
-  }, 15_000);
+  }, 20_000);
 });

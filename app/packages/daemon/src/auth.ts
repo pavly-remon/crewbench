@@ -33,6 +33,15 @@ export function createAuthHook(token: string, port: number) {
   const allowedOrigins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
 
   return async function authHook(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    // Static UI assets (index.html, JS, CSS) are deliberately exempt: the
+    // browser's own <script>/<link> requests for them never carry the
+    // Authorization header, and the page has to load *before* its own JS
+    // can read the token out of the URL fragment and start attaching it
+    // to /api/* calls. None of those files contain the token or any
+    // other secret -- it's generated fresh per daemon start and only
+    // ever appears in the URL the daemon itself opens.
+    if (!request.url.startsWith("/api/")) return;
+
     const auth = request.headers.authorization;
     const presented = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null;
     if (!presented || !tokensMatch(presented, token)) {

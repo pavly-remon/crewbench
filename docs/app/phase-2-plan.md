@@ -1,6 +1,6 @@
 # Phase 2 — Daemon + read-only UI
 
-Status: **in progress** (reviewed and approved 2026-09-19; milestones 1-2 done)
+Status: **in progress** (reviewed and approved 2026-09-19; milestones 1-3 done)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md`'s milestone
@@ -420,3 +420,81 @@ plugin's behavior as spec, doesn't modify it" boundary as Phase 1.
   tests: 25 contract + 107 adapters + 150 engine + 13 daemon + 24 cli);
   Python suite (212 tests) unaffected; `pnpm check:schemas` still reports
   no drift.
+
+### Milestone 3 — done (2026-09-19)
+
+- New `packages/ui`: Vite + React 19 + TanStack Router + TanStack Query +
+  Tailwind v4 (CSS-first `@theme`/`@media (prefers-color-scheme)`
+  tokens) + a handful of small Radix-based primitives (`Button`, `Card`,
+  `Dialog`) in place of pulling in shadcn/ui's CLI scaffolding for three
+  components. **One implementation deviation from Design decision 6,
+  worth calling out**: routes are declared in code
+  (`src/router.tsx`, `createRootRoute`/`createRoute`/`createRouter`), not
+  via `@tanstack/router-plugin`'s file-based codegen -- skips a codegen
+  step entirely for a route tree this small (2 routes this milestone, 5
+  screens total across the whole phase), one less moving part. Still real
+  TanStack Router, satisfying the actual stack requirement.
+- Auth token bootstrap (`lib/auth.ts`): reads `location.hash` once on
+  load, strips it via `history.replaceState`, holds it in a
+  module-level variable (never `localStorage`) -- exactly Design
+  decision 7's plan, implemented as specified.
+- `lib/api.ts`: a bearer-token `fetch` wrapper for REST calls, plus a
+  hand-rolled fetch-based SSE reader (`openEventStream`) since the native
+  `EventSource` constructor has no way to attach the `Authorization`
+  header -- the milestone plan flagged this exact mechanism as
+  undecided-until-now; resolved here.
+- `useGlobalEvents()` (`api/events.ts`): subscribes to the daemon's
+  global feed (milestone 2) and invalidates the affected project's
+  task-list query on every event, so the live board updates by
+  refetching through the *same* query path its initial load already
+  uses, rather than a hand-maintained client-side cache patch that could
+  drift from it.
+- Pages: **Projects** (cards with active/recent counts, an "add project"
+  dialog wired to the milestone-1 `POST /api/projects` endpoint, with its
+  git-repo-validation error surfaced inline) and **Task board** (columns
+  for all nine `TASK_PHASES`, live-updating via `useGlobalEvents`).
+- **Real cross-package wiring, not just component-level plumbing**: the
+  daemon now actually serves this build. New `packages/daemon/src/
+  static-ui.ts` (`@fastify/static` + an SPA fallback to `index.html` for
+  any non-`/api/` GET that doesn't match a real file) registered from
+  `server.ts`, with the build path resolved relative to the daemon's own
+  package (sibling `packages/ui/dist`), `CREWBENCH_UI_DIST`-overridable.
+  If no build exists (e.g. the daemon's own test suite, or a dev
+  environment that hasn't built the UI yet), this is a silent no-op --
+  the API still works, there's just nothing to open in a browser.
+- **Caught one real bug via live testing, not a unit test**: with the UI
+  now served by the daemon, the existing `onRequest` auth hook (Design
+  decision from milestone 1) was rejecting the *page itself* with 401 --
+  a browser's own `<script src>`/`<link>` requests for `index.html`'s JS
+  and CSS never carry the `Authorization` header, and the page has to
+  finish loading before its own JS can even read the token out of the
+  URL fragment to start attaching it to `/api/*` calls. Fixed by scoping
+  the auth hook to `/api/` paths only (`auth.ts`) -- static assets carry
+  no secret of their own (the token is generated fresh per daemon start
+  and never baked into the bundle), so this doesn't weaken the actual
+  security boundary, it just draws it in the right place. Found by
+  actually running the real built `crewbench ui` binary and `curl`-ing
+  the real served page and its asset URLs -- the browser-extension tool
+  available in other sessions wasn't connected in this one, so this was
+  verified via direct HTTP checks (200 on `index.html`/JS/CSS with no
+  auth, 200 on a client-route path via the SPA fallback, 401 on `/api/
+  projects` with no token) rather than a visual check; noting the gap
+  rather than claiming a browser was actually opened.
+- **Caught one real test-flakiness bug**: the watcher/SSE tests
+  (milestone 2) used a fixed `sleep(400)` before assuming the watcher
+  had indexed a freshly created task. Under `pnpm -r test`'s parallel
+  cross-package load this was occasionally too short (chokidar's own
+  dispatch delayed by CPU contention from other packages' concurrent
+  test runs), causing an intermittent 404. Fixed by replacing the fixed
+  sleep with `waitForTaskKnown()`, which polls the real SSE endpoint
+  until the task is actually known, up to a generous ceiling -- adapts to
+  the machine's real load instead of guessing a number. Confirmed stable
+  across repeated runs after the fix.
+- UI component test (`test/projects-page.test.tsx`, Vitest +
+  `@testing-library/react`, the pairing proposed in open question 2):
+  renders `ProjectsPage` against a mocked `fetch`, asserting the
+  populated-cards state and the empty state.
+- Full verification: `pnpm -r typecheck/build/test` all green (321 TS
+  tests: 25 contract + 107 adapters + 150 engine + 13 daemon + 2 ui + 24
+  cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
+  reports no drift.
