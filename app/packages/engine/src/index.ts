@@ -16,3 +16,5 @@ export * from "./summary.js";
 export * from "./chat-runner.js";
 export * from "./scoping.js";
 export * from "./task-store.js";
+export * from "./concurrency.js";
+export * from "./resume.js";

@@ -75,6 +75,16 @@ Emitted by `crewbench_dispatch.py` right before it spawns a role's CLI
 process (foreground or via `start`).
 `data`: `{ "role": string, "cli": string, "model": string, "effort": string }`
 
+### `run.queued` / `run.dequeued`
+Added in Phase 1 milestone 6 (the app's per-CLI concurrency limiter,
+`app/packages/engine/src/concurrency.ts`) — **not emitted by the plugin**,
+since the Python dispatch script has no concurrency limiter of its own
+(the Team Lead itself decides how many roles to run at once). `run.queued`
+fires when a run has to wait for a free slot for its CLI (never when a
+slot was immediately available); `run.dequeued` fires for whichever queued
+run is woken once a slot frees up.
+`data`: `{ "cli": string }`
+
 ### `run.finished`
 Emitted by `crewbench_dispatch.py`'s `finish()`, for every exit path
 (success, validation failure, timeout, CLI-not-installed, argv-too-large,

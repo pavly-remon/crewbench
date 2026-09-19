@@ -35,7 +35,7 @@ async function main(): Promise<void> {
       await statusCommand(rest);
       return;
     case "resume":
-      await resumeCommand(rest);
+      await resumeCommand(rest, root);
       return;
     case "doctor":
       await doctorCommand(rest);

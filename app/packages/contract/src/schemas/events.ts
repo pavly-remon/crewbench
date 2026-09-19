@@ -53,6 +53,18 @@ export const RunStartedEventSchema = EventBase.extend({
   }),
 });
 
+/** Added in Phase 1 milestone 6 (the concurrency limiter) -- not part of
+ * Phase 0's original catalog, since nothing queued before this milestone.
+ * See docs/app/contract/events.md. */
+export const RunQueuedEventSchema = EventBase.extend({
+  type: z.literal("run.queued"),
+  data: z.object({ cli: z.string() }),
+});
+export const RunDequeuedEventSchema = EventBase.extend({
+  type: z.literal("run.dequeued"),
+  data: z.object({ cli: z.string() }),
+});
+
 export const RunFinishedEventSchema = EventBase.extend({
   type: z.literal("run.finished"),
   data: z.object({
@@ -102,6 +114,8 @@ export const CrewbenchEventSchema = z.discriminatedUnion("type", [
   TaskRoundStartedEventSchema,
   TaskNoteAddedEventSchema,
   RunStartedEventSchema,
+  RunQueuedEventSchema,
+  RunDequeuedEventSchema,
   RunFinishedEventSchema,
   RunMessageEventSchema,
   RunToolCallEventSchema,

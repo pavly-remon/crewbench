@@ -755,4 +755,60 @@ changes").
   tests: 25 contract + 107 adapters + 128 engine + 20 cli); the Python
   suite (212 tests) unaffected and still green.
 
-(Milestones 6–7's notes appended here as each one completes.)
+### Milestone 6 — done (2026-09-19)
+
+- `concurrency.ts`: a per-CLI `ConcurrencyLimiter` (default 2, matching
+  `docs/app/phase-1-plan.md`'s milestone description), FIFO-queued,
+  emitting the two **new** event types this milestone adds to the
+  contract — `run.queued`/`run.dequeued` (added to
+  `packages/contract`'s `events.ts` and `docs/app/contract/events.md`,
+  explicitly marked as app-only: the plugin's Python dispatch script has
+  no concurrency limiter of its own, so these never appear in a
+  plugin-created task's `events.jsonl`).
+- `resume.ts`: `reconcileDeadRuns()` ports `/crewbench:resume` step 3
+  exactly (a `running` status.json entry whose pid is dead gets marked
+  `failed`). `rehydrateState()` **deviates from the plan's literal
+  "replay events.jsonl" phrasing, for a documented reason, not silently**:
+  `run.finished` events carry `{ok, exit_code, duration_s, error,
+  usage}`, not the role's full structured `result`, so they can't by
+  themselves reconstruct a tester/reviewer verdict or the issue registry.
+  What actually rebuilds state is replaying each round's
+  `runs/<role>-r<round>.result.json` files through the *exact same*
+  `reduce()` the live engine uses — more correct than a separate replay
+  code path would be, and works identically for a legacy plugin task with
+  no `events.jsonl` at all, since this function never reads that file.
+- **The cross-compat tests are real, not simulated** — `cross-compat.test.ts`
+  spawns the actual `python3 bin/crewbench_state.py` on this machine, in
+  both directions: a task created by `task-store.ts` is read by
+  `crewbench_state.py get`/`list` and further mutated by
+  `crewbench_state.py set`; a task created by `crewbench_state.py new` is
+  read by `loadState()` and fully rehydrated by `rehydrateState()`
+  (including its issue registry), then confirmed still readable by the
+  plugin's own `get` afterward. This is the headline requirement of this
+  milestone and the thing most worth trusting isn't hand-waved.
+- The CLI's `resume` command went from milestone 5's honest stub to a
+  real implementation: reconciles dead runs, rehydrates state, re-resolves
+  only the *loop* settings (not the lineup — `state.json.lineup` is used
+  as-is, never re-asked, matching `/crewbench:resume` step 5 exactly),
+  and continues the fix loop via the same `driveTask()` milestone 5's
+  `run` command now also uses (extracted from `run.ts` into
+  `drive.ts` this milestone, so `run` and `resume` share one loop
+  implementation instead of two that could drift).
+- **Caught one real bug via a failing test**: `ConcurrencyLimiter.release()`
+  tagged the `run.dequeued` event with the *releasing* run's own id
+  instead of the *woken* waiter's id (a copy-paste-shaped mistake — passing
+  the same `taskDir`/`run` params to both the queued-side and release-side
+  event calls, when the two calls describe two different runs entirely).
+  Fixed by capturing each waiter's own `taskDir`/`run` in its queue entry
+  at `acquire()` time and using *that* for the dequeue event, not
+  whatever `release()` happened to be called with — and removed
+  `release()`'s now-pointless `taskDir`/`run` parameters entirely, since
+  nothing in that function's own logic ever needed them.
+- Full verification: `pnpm -r typecheck/build/test` all green (303 TS
+  tests: 25 contract + 107 adapters + 149 engine + 22 cli, the last of
+  which includes two more real end-to-end subprocess tests — a resume
+  that reconciles a dead run and re-dispatches, and a resume against an
+  already-terminal task); the Python suite (212 tests) unaffected and
+  still green; `pnpm check:schemas` still reports no drift.
+
+(Milestone 7's notes appended here once it completes.)
