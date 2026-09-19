@@ -28,14 +28,21 @@ function elapsedSince(iso: string | undefined): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function TaskCard({ task }: { task: ApiTaskSummary }) {
+function TaskCard({ task, queued }: { task: ApiTaskSummary; queued: boolean }) {
   return (
     <Link to="/tasks/$taskId" params={{ taskId: task.id }}>
       <Card className="flex flex-col gap-1.5 p-3 hover:border-[var(--color-accent)]">
         <p className="text-sm font-medium">{task.title ?? task.id}</p>
         <div className="flex items-center justify-between text-xs text-[var(--color-fg-muted)]">
           <span>round {task.round ?? 0}</span>
-          <span>{elapsedSince(task.updated_at)}</span>
+          {queued ? (
+            <span className="flex items-center gap-1 text-amber-500">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              queued
+            </span>
+          ) : (
+            <span>{elapsedSince(task.updated_at)}</span>
+          )}
         </div>
       </Card>
     </Link>
@@ -45,7 +52,7 @@ function TaskCard({ task }: { task: ApiTaskSummary }) {
 export function TaskBoardPage() {
   const { projectId } = useParams({ from: "/projects/$projectId" });
   const { data: tasks, isLoading, isError, error } = useProjectTasks(projectId);
-  useGlobalEvents();
+  const queuedTaskIds = useGlobalEvents();
 
   const byPhase = new Map<string, ApiTaskSummary[]>();
   for (const task of tasks ?? []) {
@@ -66,7 +73,7 @@ export function TaskBoardPage() {
           </h2>
           <div className="flex flex-col gap-2">
             {(byPhase.get(phase) ?? []).map((task) => (
-              <TaskCard key={task.id} task={task} />
+              <TaskCard key={task.id} task={task} queued={queuedTaskIds.has(task.id)} />
             ))}
           </div>
         </div>

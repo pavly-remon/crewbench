@@ -27,6 +27,13 @@ const GLOBAL_EVENT_TYPES = new Set<CrewbenchEvent["type"]>([
   "task.round_started",
   "run.started",
   "run.finished",
+  // Phase 3 milestone 2's Design decision 7: run.queued/run.dequeued are
+  // real, already-emitted event types (packages/engine's
+  // ConcurrencyLimiter, wired into dispatchRole() this milestone) --
+  // reusing this same allowlist for the board's queue indicator instead
+  // of a separate queue-status channel.
+  "run.queued",
+  "run.dequeued",
 ]);
 
 export interface GlobalEvent {

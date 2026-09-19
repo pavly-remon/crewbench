@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  ConcurrencyLimiter,
   driveTask,
   isPidAlive,
   listTasks,
@@ -41,9 +42,19 @@ interface StatusEntry {
 export class TaskRunner {
   private readonly active = new Map<string, ActiveTask>();
   private readonly root: string;
+  /** One shared instance across every active task in this daemon
+   * process (Design decision 2 -- "one shared ConcurrencyLimiter per
+   * daemon process, not per project or per task"), so a per-CLI limit
+   * genuinely caps concurrency across every project the daemon watches,
+   * not just within one task's own dispatches. */
+  private readonly limiter: ConcurrencyLimiter;
 
-  constructor(private readonly watcher: DaemonWatcher) {
+  constructor(
+    private readonly watcher: DaemonWatcher,
+    concurrency: Partial<Record<Cli, number>> = {},
+  ) {
     this.root = findRoot();
+    this.limiter = new ConcurrencyLimiter(concurrency);
   }
 
   isActive(taskId: string): boolean {
@@ -110,6 +121,7 @@ export class TaskRunner {
       worktree: taskState.worktree,
       approvals: new HttpApprovalProvider(),
       yes: false,
+      limiter: this.limiter,
     };
   }
 

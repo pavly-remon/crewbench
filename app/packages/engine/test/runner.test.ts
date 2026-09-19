@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { dispatchRole, dispatchVerification } from "../src/runner.js";
 import type { DispatchParams } from "../src/runner.js";
+import { ConcurrencyLimiter } from "../src/concurrency.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -200,6 +201,53 @@ describe("dispatchVerification", () => {
     const runsDir = join(taskDir, "runs");
     await expect(readFile(join(runsDir, "tester-r1.result.json"), "utf-8")).resolves.toBeTruthy();
     await expect(readFile(join(runsDir, "code-reviewer-r1.result.json"), "utf-8")).resolves.toBeTruthy();
+  }, 20_000);
+});
+
+describe("dispatchRole: concurrency limiter (Phase 3 milestone 2)", () => {
+  // The plan's own acceptance bar: two real tasks, same CLI, a limit of
+  // 1 -- the second dispatch genuinely waits and only starts once the
+  // first's slot frees, proven by real timing (quick_success.py's own
+  // FAKE_CLI_SLEEP support), not a mock or a fake clock.
+  it("serializes two real dispatches for the same CLI under a limit of 1", async () => {
+    const repo = await gitRepo();
+    process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = QUICK_SUCCESS;
+    process.env.FAKE_CLI_SLEEP = "0.4";
+    const taskDir = join(repo, ".crewbench", "tasks", "concurrency");
+    const limiter = new ConcurrencyLimiter({ claude: 1 });
+    const base: Omit<DispatchParams, "round"> = {
+      role: "developer",
+      cli: "claude",
+      model: "m",
+      effort: "none",
+      permissions: "safe",
+      taskDir,
+      cwd: repo,
+      handoff: "Task: anything\n",
+      agentsDir: AGENTS_DIR,
+      schemaPath: join(REPO_ROOT, "schemas", "developer.json"),
+      timeoutS: 15,
+      limiter,
+    };
+
+    const start = Date.now();
+    const [first, second] = await Promise.all([dispatchRole({ ...base, round: 1 }), dispatchRole({ ...base, round: 2 })]);
+    const elapsedS = (Date.now() - start) / 1000;
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    // Each real dispatch sleeps ~0.4s before its own subprocess exits --
+    // serialized under a limit of 1, the pair takes at least that long
+    // twice over; truly parallel (the bug this test guards against)
+    // would finish in ~0.4s total.
+    expect(elapsedS).toBeGreaterThanOrEqual(0.75);
+
+    const events = (await readFile(join(taskDir, "events.jsonl"), "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+    expect(events.some((e) => e.type === "run.queued")).toBe(true);
+    expect(events.some((e) => e.type === "run.dequeued")).toBe(true);
   }, 20_000);
 });
 

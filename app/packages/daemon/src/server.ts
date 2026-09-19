@@ -50,7 +50,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   app.addHook("onRequest", createAuthHook(token, port));
 
   const watcher = new DaemonWatcher();
-  const taskRunner = new TaskRunner(watcher);
+  const taskRunner = new TaskRunner(watcher, config.concurrency ?? {});
   const registry = await loadRegistry();
   await Promise.all(Object.values(registry).map((p) => watcher.addProject(p)));
   // Reattach every app-owned, non-terminal task (Phase 3 milestone 1's

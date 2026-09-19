@@ -5,6 +5,7 @@ import { requestApproval, resolveApproval, type ApprovalDecision } from "./appro
 import type { ApprovalProvider } from "./approval-provider.js";
 import { decide } from "./decide.js";
 import { dispatchRole, dispatchVerification } from "./runner.js";
+import type { ConcurrencyLimiter } from "./concurrency.js";
 import { reduce, type FullEngineState } from "./reduce.js";
 import { runGate } from "./gate.js";
 import { setField } from "./task-store.js";
@@ -61,6 +62,13 @@ export interface DriveTaskParams {
    * cased here so a future caller that resolves commit through some
    * other path doesn't silently skip them. */
   yes: boolean;
+  /** Phase 3 milestone 2's global scheduler -- omitted by
+   * `crewbench run`/`resume` (one task, no reason to queue against
+   * itself), one shared instance passed by the daemon's `TaskRunner`
+   * across every active task, so `dispatchRole()`'s own per-CLI slot
+   * gating (`runner.ts`) applies across the whole daemon process, not
+   * just within one task's own dispatches. */
+  limiter?: ConcurrencyLimiter;
 }
 
 function buildParams(role: RoleName, p: DriveTaskParams, round: number, handoff: string) {
@@ -77,6 +85,7 @@ function buildParams(role: RoleName, p: DriveTaskParams, round: number, handoff:
     handoff,
     agentsDir: p.agentsDir,
     schemaPath: p.schemaPathFor(role),
+    ...(p.limiter ? { limiter: p.limiter } : {}),
   };
 }
 

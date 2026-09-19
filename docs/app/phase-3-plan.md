@@ -1,6 +1,6 @@
 # Phase 3 — Interactive UI (create, scope, approve, control)
 
-Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach)
+Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md` and
@@ -384,3 +384,71 @@ correct because it looked plausible.
   cli), plus the Playwright e2e suite (1 test, still passing); Python
   suite (212 tests) unaffected; `schemas/task-state.json` regenerated
   (additive `owner`/`scoping_session_id` fields).
+
+### Milestone 2 — done (2026-09-19)
+
+- `packages/engine/src/runner.ts`'s `DispatchParams` gains an optional
+  `limiter?: ConcurrencyLimiter` (Phase 1 milestone 6's
+  `ConcurrencyLimiter`, real and unit-tested but never wired into
+  anything until now). Gates the block from "mark this run `running` in
+  status.json" through the actual subprocess finishing -- not just the
+  spawn call -- behind `limiter.withSlot(cli, ...)`, so a queued run
+  never shows `"running"` before it actually has a slot. Omitted
+  entirely by every single-task CLI caller (`crewbench run`/`resume`),
+  matching Design decision 2's "the CLI does not need it." Threaded
+  through `DriveTaskLineup`/`DriveTaskParams` (`drive.ts`) so both
+  `dispatchRole()` and `dispatchVerification()` calls inside the fix loop
+  pick it up automatically.
+- `TaskRunner` (`packages/daemon`) now constructs one shared
+  `ConcurrencyLimiter` per daemon process (Design decision 2 -- "not per
+  project or per task") and passes it into every task's `DriveTaskParams`,
+  so a per-CLI limit genuinely caps concurrency across every project the
+  daemon watches.
+- New `concurrency: Partial<Record<Cli, number>>` field on
+  `~/.crewbench/config.json`'s schema (additive), read at daemon startup.
+- `run.queued`/`run.dequeued` added to the global SSE feed's allowlist
+  (Design decision 7) -- both are real event types already emitted by
+  `ConcurrencyLimiter` itself, now finally reachable since `dispatchRole()`
+  actually calls it. New `useGlobalEvents()` return value (a live
+  `Set<taskId>` of currently-queued tasks, built from those same two
+  event types) drives a small "queued" indicator on the task board's
+  cards, replacing the elapsed-time text while a task's next run is
+  waiting for a slot.
+- **A real bug in the Phase 2 auth/schema layer, caught live, not by
+  inspection**: `DaemonConfigSchema`'s first version wrote `concurrency`
+  as `z.record(z.enum([...]), z.number()...)`. In zod v4, `z.record()`
+  keyed by an enum infers a schema requiring *every* enum variant as a
+  key (`Record<K, V>`, not `Partial<Record<K, V>>`) -- a real
+  `config.json` with only `{claude: 1}` failed validation and
+  `loadConfig()`'s own `safeParse` failure path silently fell back to
+  `{}`, so a concurrency limit configured for one CLI was quietly
+  ignored entirely, with no error anywhere. First surfaced as the new
+  cross-project concurrency test passing on total elapsed time (~0.6s,
+  plausible for either outcome) but failing its `run.queued`-actually-
+  happened assertion -- traced to the root cause with a small standalone
+  script before fixing, not guessed. Fixed with `z.partialRecord()`,
+  zod's actual API for "some, not all, of these keys." New regression
+  tests directly on the schema (`packages/contract`), not just the
+  integration test that happened to catch it.
+- Tests: a real unit-level test proving two real dispatches for the same
+  CLI serialize under a limit of 1 (`runner.test.ts`), and a real
+  daemon-level test proving the same across *two different projects*
+  sharing one daemon's limiter (`concurrency.test.ts`) -- both projects
+  registered before `startDaemon()` runs, so its own startup reattach
+  kicks both tasks' `driveTask()` loops off in the same `Promise.all()`,
+  giving the limiter a genuine simultaneous pair of claims to serialize
+  rather than an artificially staggered one.
+- **Real, live end-to-end verification**: started the real built
+  `crewbench ui` binary with a real `config.json` limiting `claude` to
+  1, registered two real projects each with a real app-owned task, and
+  restarted the daemon so both tasks' developer rounds began dispatching
+  in the same startup tick -- the real console output showed genuine
+  staggered completion (not lockstep-parallel), and a direct `curl` of
+  the real global SSE feed showed real `run.queued`(12)/`run.dequeued`(11)
+  events actually flowing.
+- Full verification: `pnpm -r typecheck/build/test` all green (347 TS
+  tests: 27 contract + 107 adapters + 152 engine + 30 daemon + 7 ui + 24
+  cli), plus the Playwright e2e suite (still passing); Python suite (212
+  tests) unaffected; no schema drift for `schemas/*.json` (this
+  milestone's only schema change, `config.json`'s `concurrency` field,
+  has no Python-side file to generate).

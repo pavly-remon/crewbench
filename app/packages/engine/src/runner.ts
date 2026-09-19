@@ -19,6 +19,7 @@ import { normalizeOptionalNulls, ROLE_RESULT_SCHEMAS, SCHEMA_VERSION, type RoleN
 import { appendEvent, atomicWriteJson, lockedReadModifyWrite, nowIso, readJsonOrDefault } from "./contract-fs.js";
 import { gitChanges, gitState, type GitState } from "./git.js";
 import { killProcessGroup, terminateProcessGroup, hardKillProcessGroup, GRACEFUL_KILL_TIMEOUT_S } from "./process-kill.js";
+import type { ConcurrencyLimiter } from "./concurrency.js";
 
 export interface DispatchParams {
   role: RoleName;
@@ -33,6 +34,14 @@ export interface DispatchParams {
   agentsDir: string;
   schemaPath: string;
   timeoutS?: number;
+  /** Gates the actual subprocess spawn (not the file-system bookkeeping
+   * before/after it) behind a per-CLI slot -- Phase 3 milestone 2's
+   * "global scheduler." Omitted by every single-task caller
+   * (`crewbench run`/`resume`, which only ever has one dispatch active
+   * at a time and has no reason to queue against itself); the daemon's
+   * `TaskRunner` passes one shared instance across every active task
+   * (Design decision 2). */
+  limiter?: ConcurrencyLimiter;
 }
 
 export interface DispatchEnvelope {
@@ -179,36 +188,46 @@ export async function dispatchRole(params: DispatchParams): Promise<DispatchEnve
   const stream = adapter.newStream();
   const env = childEnv(cli, role, taskDirName(taskDir));
 
-  await updateStatus(runsDir, run, {
-    schema_version: SCHEMA_VERSION,
-    role,
-    cli,
-    model,
-    effort,
-    state: "running",
-    started_at: nowIso(),
-    log_file: logPath,
-    session_id: null,
-  });
-  await appendEvent(taskDir, "run.started", { role, cli, model, effort }, run);
-
+  // Everything from here through spawnAndCollect() finishing is gated
+  // behind the concurrency limiter's slot (Phase 3 milestone 2), not
+  // just the spawn call itself -- a queued run shouldn't show "running"
+  // in status.json (misleading: it hasn't started at all yet) or emit
+  // run.started before it actually has a slot. `params.limiter` is
+  // undefined for every single-task CLI caller, which just runs `body`
+  // directly with no queueing.
   const gitBefore = await gitState(cwd);
-  const start = Date.now();
-  const { code, stdout, timedOut } = await spawnAndCollect(argv, {
-    cwd,
-    env,
-    stdin,
-    timeoutS,
-    onLine: async (entry) => {
-      await appendFileLine(logPath, `[${localTime()}] ${entry}\n`);
-      const type = classifyEntry(entry);
-      await appendEvent(taskDir, type, { text: entry }, run);
-    },
-    onFeed: (line) => stream.feed(line),
-    onSpawn: async (pid) => {
-      if (pid !== undefined) await updateStatus(runsDir, run, { pid });
-    },
-  });
+  let start = Date.now();
+  const body = async (): Promise<{ code: number | null; stdout: string; timedOut: boolean }> => {
+    await updateStatus(runsDir, run, {
+      schema_version: SCHEMA_VERSION,
+      role,
+      cli,
+      model,
+      effort,
+      state: "running",
+      started_at: nowIso(),
+      log_file: logPath,
+      session_id: null,
+    });
+    await appendEvent(taskDir, "run.started", { role, cli, model, effort }, run);
+    start = Date.now();
+    return spawnAndCollect(argv, {
+      cwd,
+      env,
+      stdin,
+      timeoutS,
+      onLine: async (entry) => {
+        await appendFileLine(logPath, `[${localTime()}] ${entry}\n`);
+        const type = classifyEntry(entry);
+        await appendEvent(taskDir, type, { text: entry }, run);
+      },
+      onFeed: (line) => stream.feed(line),
+      onSpawn: async (pid) => {
+        if (pid !== undefined) await updateStatus(runsDir, run, { pid });
+      },
+    });
+  };
+  const { code, stdout, timedOut } = params.limiter ? await params.limiter.withSlot(cli, body, taskDir, run) : await body();
   const durationS = Math.round((Date.now() - start) / 100) / 10;
 
   await writeFile(rawPath, `$ ${argv[0]} ...\n--- stdout ---\n${stdout}\n--- stderr ---\n\n`, "utf-8");

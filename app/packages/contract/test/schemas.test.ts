@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CodeReviewerResultSchema,
   CrewbenchEventSchema,
+  DaemonConfigSchema,
   DeveloperResultSchema,
   ProjectSchema,
   SCHEMA_VERSION,
@@ -204,5 +205,26 @@ describe("TaskSpecSchema", () => {
       constraints: [],
     });
     expect(spec.needs_design).toBe(false);
+  });
+});
+
+describe("DaemonConfigSchema", () => {
+  // Regression: caught live in Phase 3 milestone 2, not by inspection --
+  // z.record(z.enum([...]), ...) in zod v4 requires *every* enum key to
+  // be present (it infers a full Record<K, V>, not Partial<Record<K,
+  // V>>). A config.json with only `{claude: 1}` failed this schema's
+  // validation and silently fell back to `{}` in loadConfig()'s own
+  // safeParse failure path, so a concurrency limit configured for one
+  // CLI was quietly ignored entirely -- the daemon ran fully unlimited
+  // concurrency with no error, no log line, nothing. Fixed with
+  // z.partialRecord(), zod's actual API for "some, not all, of these
+  // keys."
+  it("accepts a concurrency map naming only some CLIs, not every one", () => {
+    const config = DaemonConfigSchema.parse({ concurrency: { claude: 1 } });
+    expect(config.concurrency).toEqual({ claude: 1 });
+  });
+
+  it("rejects a non-positive concurrency limit", () => {
+    expect(() => DaemonConfigSchema.parse({ concurrency: { claude: 0 } })).toThrow();
   });
 });

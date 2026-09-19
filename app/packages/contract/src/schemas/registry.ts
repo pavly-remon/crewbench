@@ -27,6 +27,19 @@ export type ProjectsRegistry = z.infer<typeof ProjectsRegistrySchema>;
 export const DaemonConfigSchema = z
   .object({
     port: z.number().int().optional(),
+    /** Per-CLI max concurrent runs across every task in every project
+     * (Phase 3 milestone 2's Design decision 2, `docs/app/phase-3-plan.md`)
+     * -- passed to `packages/engine`'s `ConcurrencyLimiter`, one shared
+     * instance per daemon process. Any CLI not listed here keeps
+     * `ConcurrencyLimiter`'s own built-in default (2). **Real bug, caught
+     * live, not by inspection**: `z.record(z.enum([...]), ...)` in zod v4
+     * requires *every* enum key to be present (it infers a full
+     * `Record<K, V>`, not `Partial<Record<K, V>>`) -- a config.json with
+     * only `{claude: 1}` failed validation and silently fell back to `{}`
+     * (`loadConfig()`'s own `safeParse` failure path), so a limit set for
+     * one CLI was quietly ignored entirely. `z.partialRecord()` is zod's
+     * actual API for "some, not all, of these keys." */
+    concurrency: z.partialRecord(z.enum(["claude", "codex", "agy", "copilot"]), z.number().int().positive()).optional(),
   })
   .catchall(z.unknown());
 export type DaemonConfig = z.infer<typeof DaemonConfigSchema>;
