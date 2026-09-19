@@ -103,6 +103,15 @@ export interface CreateTaskParams {
   branch?: string | null;
   designSpecFile?: string | null;
   jiraKey?: string | null;
+  /** Phase 3's ownership marker (docs/app/phase-3-plan.md's Design
+   * decision 5) -- only the daemon's own task-creation endpoint passes
+   * `"app"`. Omitted (not `null`) when unset, matching
+   * `TaskStateSchema.owner`'s truly-optional shape: an absent field
+   * reads as `"plugin"`, the historical default every task before this
+   * phase (and every `crewbench run`-created task, which the CLI itself
+   * drives synchronously and the daemon must never also try to reattach
+   * to) already has. */
+  owner?: "plugin" | "app";
 }
 
 /** Ported from crewbench_state.py's cmd_new(). Emits `task.created`, same
@@ -130,6 +139,7 @@ export async function createTask(taskDir: string, params: CreateTaskParams): Pro
     rounds: [],
     usage: {},
     notes: [],
+    ...(params.owner ? { owner: params.owner } : {}),
   }));
   await appendEvent(taskDir, "task.created", { command: params.command, title: params.title, jira_key: params.jiraKey ?? null });
   return state;

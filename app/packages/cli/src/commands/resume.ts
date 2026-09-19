@@ -2,11 +2,11 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createAdapter, type Cli } from "@crewbench/adapters";
-import { listTasks, loadState, reconcileDeadRuns, rehydrateState } from "@crewbench/engine";
+import { driveTask, listTasks, loadState, reconcileDeadRuns, rehydrateState, type DriveTaskLineup } from "@crewbench/engine";
 import type { TaskSpec } from "@crewbench/contract";
-import { resolveLineup, type ResolvedLineup } from "../lineup.js";
-import { defaultsPath } from "../root.js";
-import { driveTask } from "../drive.js";
+import { resolveLineup } from "../lineup.js";
+import { agentsDir, defaultsPath, schemaPath } from "../root.js";
+import { createTerminalApprovalProvider } from "../terminal-approvals.js";
 
 const LEAD_PREFERENCE: Cli[] = ["claude", "codex", "agy", "copilot"];
 
@@ -83,25 +83,21 @@ export async function resumeCommand(argv: string[], root: string): Promise<void>
     return;
   }
 
-  // state.json.lineup's shape matches ResolvedLineup.roles exactly by
+  // state.json.lineup's shape matches DriveTaskLineup.roles exactly by
   // construction (`run` writes it via `setField(taskDir, "lineup",
   // lineup.roles)` at creation time), but state.json's own contract type
   // is intentionally loose (Record<string, unknown> -- see
   // schemas/task-state.json), so a cast is needed to hand it back to
   // driveTask() in the shape it expects.
-  const resolvedLineup = {
-    roles: lineupRoles,
-    loop,
-    workspace: { mode: taskState.worktree ? ("worktree" as const) : ("in-place" as const), setup: [], copy: [] },
-    confirmLineup: "never" as const,
-  } as unknown as ResolvedLineup;
+  const driveLineup: DriveTaskLineup = { roles: lineupRoles as DriveTaskLineup["roles"], loop };
 
   await driveTask({
     state,
     taskDir,
     cwd,
-    lineup: resolvedLineup,
-    root,
+    lineup: driveLineup,
+    agentsDir: agentsDir(root),
+    schemaPathFor: (role) => schemaPath(root, role),
     taskText,
     spec,
     title: taskState.title,
@@ -109,6 +105,7 @@ export async function resumeCommand(argv: string[], root: string): Promise<void>
     base: (taskState.base_commit as string | null) ?? "HEAD",
     branch: taskState.branch as string | null,
     worktree: taskState.worktree as string | null,
+    approvals: createTerminalApprovalProvider(),
     yes: false,
   });
 }

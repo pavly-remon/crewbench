@@ -71,6 +71,13 @@ describe("dispatchRole", () => {
 
     const status = JSON.parse(await readFile(join(runsDir, "status.json"), "utf-8"));
     expect(status["developer-r1"]).toMatchObject({ state: "done", session_id: "quick-0001" });
+    // Regression: reconcileDeadRuns()/cancelRun() (resume.ts) both read a
+    // `pid` field off a "running" status.json entry, but nothing ever
+    // wrote one -- found while building Phase 3 milestone 1's reattach
+    // logic. A real child process really was spawned for this dispatch,
+    // so its pid must be a real positive integer, not just present.
+    expect(typeof status["developer-r1"].pid).toBe("number");
+    expect(status["developer-r1"].pid).toBeGreaterThan(0);
 
     const events = (await readFile(join(taskDir, "events.jsonl"), "utf-8"))
       .trim()
@@ -113,6 +120,50 @@ describe("dispatchRole", () => {
     expect(envelope.ok).toBe(false);
     expect(envelope.error).toContain("not installed");
   });
+
+  // Regression: a real, reproducible hang caught live in Phase 3
+  // milestone 1's end-to-end verification (crewbench resume's own e2e
+  // test, timing out at exactly its 30s ceiling on its third round of
+  // parallel tester+code-reviewer dispatches). Root cause: the pid-
+  // capture fix above (`onSpawn`) was originally awaited *before*
+  // spawnAndCollect() attached its `child.once("exit", ...)` listener --
+  // for a child process fast enough to exit during that await's yield to
+  // the event loop (quick_success.py, with nothing to sleep for), `exit`
+  // could fire before anything was listening for it, and the run's
+  // result promise then never resolved. Fixed by building (not
+  // awaiting) the exit-watching promise synchronously, in the same tick
+  // as spawn(), before `onSpawn` is ever awaited. A single dispatch
+  // reproduces this only intermittently (real OS process-scheduling
+  // timing, not deterministic) -- many rapid, parallel dispatches of the
+  // same near-instant fixture make the race window get hit reliably if
+  // it ever regresses, without needing a fixed artificial delay.
+  // Verified directly before settling on 80: temporarily reintroduced
+  // the exact buggy ordering and confirmed this test reliably times out
+  // against it (3/3 runs), then confirmed it reliably passes in ~2-3s
+  // against the fix (3/3 runs) -- an effective regression test, not
+  // just a plausible-sounding one. 20 dispatches wasn't enough to
+  // reliably trigger the race on this machine.
+  it("does not hang when many fast-exiting dispatches race in parallel", async () => {
+    const repo = await gitRepo();
+    process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = QUICK_SUCCESS;
+    const taskDir = join(repo, ".crewbench", "tasks", "race");
+    const base: Omit<DispatchParams, "round"> = {
+      role: "developer",
+      cli: "claude",
+      model: "m",
+      effort: "none",
+      permissions: "safe",
+      taskDir,
+      cwd: repo,
+      handoff: "Task: anything\n",
+      agentsDir: AGENTS_DIR,
+      schemaPath: join(REPO_ROOT, "schemas", "developer.json"),
+      timeoutS: 10,
+    };
+    const envelopes = await Promise.all(Array.from({ length: 80 }, (_, i) => dispatchRole({ ...base, round: i + 1 })));
+    expect(envelopes).toHaveLength(80);
+    expect(envelopes.every((e) => e.ok)).toBe(true);
+  }, 15_000);
 });
 
 describe("dispatchVerification", () => {

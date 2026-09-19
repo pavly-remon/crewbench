@@ -205,6 +205,9 @@ export async function dispatchRole(params: DispatchParams): Promise<DispatchEnve
       await appendEvent(taskDir, type, { text: entry }, run);
     },
     onFeed: (line) => stream.feed(line),
+    onSpawn: async (pid) => {
+      if (pid !== undefined) await updateStatus(runsDir, run, { pid });
+    },
   });
   const durationS = Math.round((Date.now() - start) / 100) / 10;
 
@@ -316,6 +319,17 @@ async function spawnAndCollect(
     timeoutS: number;
     onLine: (entry: string) => Promise<void>;
     onFeed: (line: string) => string[];
+    /** Called once, right after `spawn()`, with the real child pid --
+     * `reconcileDeadRuns()`/`cancelRun()` (`resume.ts`, both from Phase 1
+     * milestone 6) already read a `pid`/`launcher_pid` field off
+     * `status.json`'s "running" entries, but nothing ever wrote one: a
+     * real gap found while building Phase 3 milestone 1's reattach logic
+     * (which fundamentally needs to know whether an in-flight run's
+     * process actually survived a daemon restart), not present in any
+     * test because no test ever needed the pid to be real. Awaited
+     * before this function does anything else, so the pid is durably
+     * recorded before the child can produce any output. */
+    onSpawn?: (pid: number | undefined) => Promise<void>;
   },
 ): Promise<SpawnResult> {
   const child = spawn(argv[0] as string, argv.slice(1), {
@@ -355,7 +369,18 @@ async function spawnAndCollect(
   });
 
   let timedOut = false;
-  const code = await new Promise<number | null>((resolve) => {
+  // Built (not yet awaited) synchronously, in the same tick as spawn()
+  // and the listener attachments above -- `new Promise()`'s executor
+  // runs synchronously, so `child.once("exit", ...)` is guaranteed
+  // attached before this function's first `await`. Awaiting `onSpawn`
+  // *before* this existed as a real, caught bug: a fast-exiting child
+  // (quick_success.py, with nothing to sleep for) could fire `exit`
+  // during that await's yield to the event loop, before anything was
+  // listening for it -- the promise below then never resolves, hanging
+  // forever. Found live via a real, reproducible CLI hang (`crewbench
+  // resume`'s own e2e test, timing out at exactly its own 30s ceiling),
+  // not by inspection.
+  const codePromise = new Promise<number | null>((resolve) => {
     const timer = setTimeout(() => {
       timedOut = true;
       if (child.pid) {
@@ -375,6 +400,9 @@ async function spawnAndCollect(
       resolve(null);
     });
   });
+
+  await opts.onSpawn?.(child.pid);
+  const code = await codePromise;
 
   if (buffer.trim()) {
     const entries = opts.onFeed(buffer);

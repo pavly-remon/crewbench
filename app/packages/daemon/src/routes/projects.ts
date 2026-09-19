@@ -3,6 +3,7 @@ import { listTasks } from "@crewbench/engine";
 import { ApiProjectListSchema, ApiTaskListSchema, type ApiProject, type ApiTaskSummary } from "@crewbench/contract";
 import { addProject, getProject, loadRegistry, NotAGitRepoError, removeProject } from "../registry.js";
 import type { DaemonWatcher } from "../watcher.js";
+import type { TaskRunner } from "../task-runner.js";
 import { join } from "node:path";
 
 const ACTIVE_PHASES = new Set(["scoping", "design", "implementing", "verifying", "fixing", "awaiting_commit"]);
@@ -21,7 +22,7 @@ async function projectSummary(id: string, path: string, name: string, addedAt: s
   return { id, path, name, added_at: addedAt, active_task_count: active, recent_task_count: recent };
 }
 
-export async function registerProjectRoutes(app: FastifyInstance, watcher: DaemonWatcher): Promise<void> {
+export async function registerProjectRoutes(app: FastifyInstance, watcher: DaemonWatcher, taskRunner: TaskRunner): Promise<void> {
   app.get("/api/projects", async (_request, reply) => {
     const registry = await loadRegistry();
     const projects = await Promise.all(
@@ -40,6 +41,13 @@ export async function registerProjectRoutes(app: FastifyInstance, watcher: Daemo
     try {
       const entry = await addProject(path, name);
       await watcher.addProject(entry);
+      // Covers a project with an in-flight app-owned task left behind by
+      // a previous daemon instance that crashed (Phase 3 milestone 1) --
+      // not just the common "already in the registry at startup" case
+      // startDaemon() handles.
+      await taskRunner.reattachProject(entry.path).catch((err: unknown) => {
+        console.error(`failed to reattach tasks in ${entry.path}:`, err);
+      });
       const body = ApiProjectListSchema.element.parse(await projectSummary(entry.id, entry.path, entry.name, entry.added_at));
       await reply.code(201).send(body);
     } catch (err) {

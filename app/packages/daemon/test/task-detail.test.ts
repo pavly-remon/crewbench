@@ -4,7 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTask, makeTaskId } from "@crewbench/engine";
-import { dispatchRole, type DispatchParams } from "@crewbench/engine";
+import { dispatchRole, runGate, type DispatchParams } from "@crewbench/engine";
 import { startDaemon, type DaemonHandle } from "../src/server.js";
 import { gitRepo, waitForTaskKnown } from "./helpers.js";
 
@@ -94,6 +94,23 @@ describe("daemon task detail", () => {
     expect(detail.title).toBe("Show me the detail");
     expect(detail.rounds).toHaveLength(0); // developer done, but no gate.finished recorded yet this round
     expect(detail.usage.developer).toMatchObject({ runs: 1, cli: "claude", model: "m" });
+  }, 20_000);
+
+  // Regression: caught live in Phase 3 milestone 1's real end-to-end
+  // reattach run -- a real multi-round task (the first time this
+  // codebase produced a gate-r<round>.result.json alongside a role
+  // envelope in the same runs/ directory) 500'd because
+  // aggregateUsage() read the gate file as if it were a DispatchEnvelope
+  // (role: undefined), producing a schema-invalid usage["undefined"]
+  // entry.
+  it("does not mistake a real gate-r<round>.result.json for a role's dispatch envelope", async () => {
+    const { taskId, taskDir, repo } = await setUpTaskWithARealRun();
+    await runGate(repo, taskDir, 1);
+
+    const res = await fetch(url(`/api/tasks/${taskId}`), { headers: authHeaders() });
+    expect(res.status).toBe(200);
+    const detail = (await res.json()) as { usage: Record<string, unknown> };
+    expect(Object.keys(detail.usage)).toEqual(["developer"]);
   }, 20_000);
 
   it("returns 404 for an unknown task id", async () => {

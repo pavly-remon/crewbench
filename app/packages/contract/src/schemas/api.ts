@@ -185,6 +185,12 @@ export const ApiTaskDetailSchema = z
     usage: z.record(z.string(), ApiRoleUsageSchema),
     spec: z.unknown().nullable(),
     warnings: z.array(z.string()),
+    /** Phase 3's ownership marker (Design decision 5) -- an absent
+     * `owner` on the underlying `state.json` (every plugin-created task,
+     * and every task from before Phase 3) surfaces here as `"plugin"`
+     * explicitly, not left `undefined`, so the UI never has to treat
+     * "field missing" as its own third case. */
+    owner: z.enum(["plugin", "app"]),
   })
   .catchall(z.unknown());
 export type ApiTaskDetail = z.infer<typeof ApiTaskDetailSchema>;

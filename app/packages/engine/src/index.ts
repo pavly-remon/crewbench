@@ -18,3 +18,5 @@ export * from "./scoping.js";
 export * from "./task-store.js";
 export * from "./concurrency.js";
 export * from "./resume.js";
+export * from "./approval-provider.js";
+export * from "./drive.js";

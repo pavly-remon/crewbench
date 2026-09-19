@@ -93,6 +93,23 @@ export const TaskStateSchema = z
      * Never written by the plugin; optional so a plugin-created task's
      * state.json (which has no such field) still validates. */
     spec_file: z.union([z.string(), z.null()]).optional(),
+    /** Phase 3 addition (docs/app/phase-3-plan.md's Design decision 5):
+     * who is allowed to drive this task's fix loop and resolve its
+     * approvals. Optional and additive -- a plugin-created task's
+     * state.json (and every task from before this phase) has no such
+     * field, which reads as `"plugin"` (the historical default): the
+     * daemon must never write to a task it didn't create, so "no owner
+     * recorded" has to mean "not mine," not "mine by default." Only
+     * `createTask()` sets this explicitly, only to `"app"`. */
+    owner: z.enum(["plugin", "app"]).optional(),
+    /** Phase 3 addition (open question 3): the lead CLI's own
+     * session-resume id for this task's in-progress scoping
+     * conversation, so a daemon restart mid-scoping can hand the same
+     * session id back to the next `POST .../scoping/messages` call
+     * instead of losing the conversation. `null`/absent once scoping is
+     * finished (the spec is what matters after that, not the chat that
+     * produced it). */
+    scoping_session_id: z.union([z.string(), z.null()]).optional(),
     rounds: z.array(TaskRoundSchema),
     usage: z.record(z.string(), RoleUsageSchema),
     notes: z.array(z.string()),

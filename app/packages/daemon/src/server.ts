@@ -10,12 +10,14 @@ import { registerUiStatic } from "./static-ui.js";
 import { DEFAULT_PORT, loadConfig } from "./config.js";
 import { loadRegistry } from "./registry.js";
 import { DaemonWatcher } from "./watcher.js";
+import { TaskRunner } from "./task-runner.js";
 
 export interface DaemonHandle {
   app: FastifyInstance;
   token: string;
   port: number;
   watcher: DaemonWatcher;
+  taskRunner: TaskRunner;
   close: () => Promise<void>;
 }
 
@@ -48,10 +50,23 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   app.addHook("onRequest", createAuthHook(token, port));
 
   const watcher = new DaemonWatcher();
+  const taskRunner = new TaskRunner(watcher);
   const registry = await loadRegistry();
   await Promise.all(Object.values(registry).map((p) => watcher.addProject(p)));
+  // Reattach every app-owned, non-terminal task (Phase 3 milestone 1's
+  // Design decision 3) -- after the watcher has indexed every project's
+  // tasks (above), so rehydrateState()/listTasks() see a consistent
+  // on-disk picture. A reattach failure for one project must never take
+  // the rest of startup down with it.
+  await Promise.all(
+    Object.values(registry).map((p) =>
+      taskRunner.reattachProject(p.path).catch((err: unknown) => {
+        console.error(`failed to reattach tasks in ${p.path}:`, err);
+      }),
+    ),
+  );
 
-  await registerProjectRoutes(app, watcher);
+  await registerProjectRoutes(app, watcher, taskRunner);
   registerEventRoutes(app, watcher);
   registerTaskRoutes(app, watcher);
   registerDoctorRoutes(app);
@@ -65,6 +80,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     token,
     port,
     watcher,
+    taskRunner,
     close: async () => {
       await watcher.close();
       await app.close();

@@ -9,6 +9,7 @@ import {
   createTask,
   createWorktree,
   detectProfile,
+  driveTask,
   initialState,
   isDirty,
   makeTaskId,
@@ -23,9 +24,9 @@ import {
 import type { Project } from "@crewbench/contract";
 import { extractJiraKey, parseRunFlags } from "../flags.js";
 import { resolveLineup, type ResolvedLineup } from "../lineup.js";
-import { defaultsPath } from "../root.js";
+import { agentsDir, defaultsPath, schemaPath } from "../root.js";
 import { ask, confirm } from "../prompt.js";
-import { driveTask } from "../drive.js";
+import { createTerminalApprovalProvider } from "../terminal-approvals.js";
 
 const LEAD_PREFERENCE: Cli[] = ["claude", "codex", "agy", "copilot"];
 
@@ -142,5 +143,21 @@ export async function runCommand(argv: string[], root: string): Promise<void> {
 
   const state: FullEngineState = reduce(initialState(), { type: "start", needsDesign, loop: lineup.loop });
 
-  await driveTask({ state, taskDir, cwd, lineup, root, taskText, spec, title, projectRoot, base, branch, worktree, yes: flags.yes });
+  await driveTask({
+    state,
+    taskDir,
+    cwd,
+    lineup,
+    agentsDir: agentsDir(root),
+    schemaPathFor: (role) => schemaPath(root, role),
+    taskText,
+    spec,
+    title,
+    projectRoot,
+    base,
+    branch,
+    worktree,
+    approvals: createTerminalApprovalProvider(),
+    yes: flags.yes,
+  });
 }

@@ -105,6 +105,19 @@
         "null"
       ]
     },
+    "owner": {
+      "type": "string",
+      "enum": [
+        "plugin",
+        "app"
+      ]
+    },
+    "scoping_session_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "rounds": {
       "type": "array",
       "items": {

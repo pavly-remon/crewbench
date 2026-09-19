@@ -36,10 +36,23 @@ export async function aggregateUsage(taskDir: string): Promise<Record<string, Ap
 
   const usage: Record<string, ApiRoleUsage> = {};
   for (const file of files) {
-    if (!file.endsWith(".result.json")) continue;
+    // Real bug, caught live in Phase 3 milestone 1's end-to-end reattach
+    // run (a real multi-round failing task, the first time this code
+    // path ever saw more than one round): `runs/` also holds
+    // `gate-r<round>.result.json` files, which end in ".result.json" too
+    // but have no `role` field at all (GateResult, not DispatchEnvelope)
+    // -- without this filter, aggregateUsage() read a gate file as an
+    // envelope with `role: undefined`, producing a `usage["undefined"]`
+    // entry with `cli`/`model` both `undefined`, which then failed
+    // ApiRoleUsageSchema.parse() at the route boundary with a 500. Only
+    // milestones 2+ (parallel verification) ever produced more than one
+    // result.json per round before now, so a single-round Phase 2 test
+    // never exercised a gate file existing alongside a role file.
+    if (!file.endsWith(".result.json") || file.startsWith("gate-")) continue;
     const envelope = await readJsonSafe<DispatchEnvelope>(join(runsDir, file));
     if (!envelope) continue;
     const role = envelope.role;
+    if (!role) continue;
     const existing = usage[role] ?? {
       runs: 0,
       duration_s: null,
@@ -142,6 +155,7 @@ export async function buildTaskDetail(location: TaskLocation): Promise<ApiTaskDe
     issues: rehydrated.issueRegistry as ApiTaskDetail["issues"],
     usage,
     spec,
+    owner: state.owner ?? "plugin",
     warnings,
   };
 }

@@ -12,7 +12,7 @@ import { atomicWriteJson, nowIso, readJsonOrDefault } from "./contract-fs.js";
  * still alive"); on POSIX this is exact, on Windows Node emulates it well
  * enough for this purpose (VERIFY against a real Windows run, same
  * caveat every other POSIX-first piece of this codebase carries). */
-function isPidAlive(pid: number): boolean {
+export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
