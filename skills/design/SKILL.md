@@ -17,6 +17,8 @@ Design request: $ARGUMENTS
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
+Before anything else, run `python3 <root>/bin/crewbench_banner.py` and show
+its output verbatim.
 Read `<root>/lib/dispatch.md`'s "Before you start (every skill)" section
 and follow it — this delegates, so §0's task folder setup applies.
 
