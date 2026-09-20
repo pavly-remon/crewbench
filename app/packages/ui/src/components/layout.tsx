@@ -46,6 +46,22 @@ export function Layout() {
               >
                 Usage
               </Link>
+              <Link
+                to="/projects/$projectId/team"
+                params={{ projectId: params.projectId }}
+                className={cn("text-[var(--color-fg-muted)] [&.active]:text-[var(--color-fg)]")}
+                activeProps={{ className: "text-[var(--color-fg)]" }}
+              >
+                Team
+              </Link>
+              <Link
+                to="/projects/$projectId/profile"
+                params={{ projectId: params.projectId }}
+                className={cn("text-[var(--color-fg-muted)] [&.active]:text-[var(--color-fg)]")}
+                activeProps={{ className: "text-[var(--color-fg)]" }}
+              >
+                Profile
+              </Link>
             </>
           )}
           <Link

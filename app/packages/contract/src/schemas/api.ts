@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TaskCommandSchema, TaskPhaseSchema } from "./task-state.js";
 import { TaskSpecSchema } from "./task-spec.js";
+import { PermissionsSchema, ROLE_KEYS } from "./team.js";
 
 /** Daemon API response envelopes (Phase 2). These describe what the
  * daemon serves over HTTP, not an on-disk file -- there is no Python-side
@@ -169,6 +170,13 @@ export type ApiRegisteredIssue = z.infer<typeof ApiRegisteredIssueSchema>;
 export const ApiTaskDetailSchema = z
   .object({
     id: z.string(),
+    /** Phase 3 milestone 4 addition, not previously in this schema: the
+     * owning project's id, needed by the lineup step (`/tasks/:tid/lineup`)
+     * to fetch that project's `GET .../team` defaults and doctor status
+     * without a second round-trip through `GET /api/projects` to find
+     * which project this task belongs to. `buildTaskDetail()` already has
+     * it on `TaskLocation` -- this just surfaces it. */
+    project_id: z.string(),
     title: z.string(),
     phase: TaskPhaseSchema,
     round: z.number().int(),
@@ -343,3 +351,38 @@ export type ApiScopingStreamEvent =
  * source of truth for what actually gets built, not the lead's draft. */
 export const ApiFinalizeScopingRequestSchema = TaskSpecSchema;
 export type ApiFinalizeScopingRequest = z.infer<typeof ApiFinalizeScopingRequestSchema>;
+
+/** `POST /api/tasks/:tid/lineup` (Phase 3 milestone 4) -- the lineup
+ * step's "confirm and start" action. Not named as its own endpoint in
+ * the phase prompt's milestone 4 bullet (which lists only the team/
+ * profile routes), but a real, disclosed addition: without it, the
+ * lineup step built for this milestone has nothing to submit to, and a
+ * finalized-spec task can never actually start running from the UI --
+ * see this milestone's own log entry. Every role is required (`z.record`
+ * keyed by an enum, per Phase 3 milestone 2's own finding, enforces
+ * *every* key present at runtime in zod v4 -- exactly the "all four
+ * roles or none" shape a lineup submission needs, unlike `TeamSchema`'s
+ * own `roles`, which is deliberately partial). `cli` reuses
+ * `ApiCliSchema` (the concrete four, no `"host"` -- there is nothing for
+ * "host" to resolve against here, the user picked an explicit CLI in the
+ * UI), not `team.ts`'s `CliNameSchema`. */
+export const ApiLineupRoleSchema = z
+  .object({
+    cli: ApiCliSchema,
+    model: z.string().min(1),
+    effort: ApiEffortSchema,
+    permissions: PermissionsSchema,
+  })
+  .strict();
+export type ApiLineupRole = z.infer<typeof ApiLineupRoleSchema>;
+
+export const ApiLineupRequestSchema = z
+  .object({
+    roles: z.record(z.enum(ROLE_KEYS), ApiLineupRoleSchema),
+    /** "Save as project default" (milestone 4's own UI bullet) -- when
+     * true, the route also merges these roles into `.crewbench/team.json`
+     * (`routes/lineup.ts`), not just this one task's own `state.json`. */
+    save_as_default: z.boolean().optional(),
+  })
+  .strict();
+export type ApiLineupRequest = z.infer<typeof ApiLineupRequestSchema>;

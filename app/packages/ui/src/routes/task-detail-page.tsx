@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useParams } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import { Card } from "../components/card.js";
+import { Button } from "../components/button.js";
 import { RoundsTimeline } from "../components/rounds-timeline.js";
 import { IssuesTable } from "../components/issues-table.js";
 import { FailuresTable } from "../components/failures-table.js";
@@ -81,6 +82,34 @@ function AgentLanes({ lanes }: { lanes: Record<string, LaneEvent[]> }) {
   );
 }
 
+/** Phase 3 milestone 4: an app-owned task with a finalized spec but no
+ * lineup yet has been left mid-setup -- either the user closed the tab
+ * right after finalizing scoping (before this milestone, there was
+ * nowhere left to go from here; now there is), or they navigated back to
+ * the board and clicked in from there instead of following the
+ * scoping-chat page's own redirect. A task that hasn't even finished
+ * scoping yet (`spec` still null) has no lineup-step link to offer --
+ * resuming an abandoned scoping conversation isn't wired up this
+ * milestone (a real, disclosed gap, not silently missing -- see this
+ * milestone's own log). */
+function LineupCta({ detail, taskId }: { detail: NonNullable<ReturnType<typeof useTaskDetail>["data"]>; taskId: string }) {
+  if (detail.owner !== "app" || Object.keys(detail.lineup).length > 0) return null;
+  return (
+    <Card className="flex items-center justify-between border-[var(--color-accent)]">
+      {detail.spec ? (
+        <>
+          <p className="text-sm">Spec finalized -- pick a lineup to start this task running.</p>
+          <Link to="/tasks/$taskId/lineup" params={{ taskId }}>
+            <Button variant="primary">Set up lineup</Button>
+          </Link>
+        </>
+      ) : (
+        <p className="text-sm text-[var(--color-fg-muted)]">Still being scoped -- no spec finalized yet.</p>
+      )}
+    </Card>
+  );
+}
+
 const TABS = ["Rounds & lanes", "Issues", "Failures", "Diff", "Spec", "Screenshots"] as const;
 type Tab = (typeof TABS)[number];
 
@@ -135,6 +164,7 @@ export function TaskDetailPage() {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-4">
       <Header detail={detail} />
+      <LineupCta detail={detail} taskId={taskId} />
       <WarningsBanner warnings={detail.warnings} />
 
       <div className="flex gap-4 border-b border-[var(--color-border)] text-sm">

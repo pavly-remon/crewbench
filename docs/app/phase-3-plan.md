@@ -1,6 +1,6 @@
 # Phase 3 — Interactive UI (create, scope, approve, control)
 
-Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review, see its log entry)
+Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review; milestone 4 implemented 2026-09-20, pending human review -- see its log entry)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md` and
@@ -675,3 +675,185 @@ still-open items above rather than folded in silently here.
 Full `pnpm -r typecheck`/`build`/`test` reverified green after both
 follow-up fixes (360 TS tests: 27 contract + 107 adapters + 152 engine +
 39 daemon + 10 ui + 24 cli), Python suite unaffected, no schema drift.
+
+### Milestone 4 -- implemented, pending human review (2026-09-20)
+
+**Not marked "done" by this session**, same disclosure as milestone 3's
+own entry: everything below was actually built, run, and verified the
+ways described, but this entry hasn't had a live human review yet, and
+it includes real, disclosed judgment calls beyond the plan's literal
+text.
+
+- **Daemon**: `GET/PUT /api/projects/:pid/team` (`routes/team.ts`) and
+  `GET/PUT /api/projects/:pid/profile` (`routes/profile.ts`), both
+  validating directly against `@crewbench/contract`'s existing
+  `TeamSchema`/`ProjectSchema` per Design decision 6 -- no new schema for
+  either file's shape. `GET .../team` returns `{}` when no `team.json`
+  exists yet (a normal, meaningful "every role/setting falls back to
+  hardcoded defaults" state); `GET .../profile` 404s in the equivalent
+  case (an unconfirmed profile is genuinely nothing to show, mirroring
+  `crewbench profile show`'s own message) and `?refresh=1` runs a real,
+  *unsaved* `detectProfile()` (same convention `routes/doctor.ts`'s own
+  `?refresh=1` already uses); `PUT .../profile` 400s unless
+  `confirmed: true` is in the body, enforcing `ProjectSchema`'s own doc
+  comment ("never write project.json before this is true") server-side.
+- **A real, necessary addition beyond the plan's literal milestone 4
+  bullet, disclosed rather than silently added**: `POST
+  /api/tasks/:tid/lineup` (`routes/lineup.ts`). The plan's milestone 4
+  section names only the team/profile routes, but the lineup step UI it
+  also asks for had nothing to submit to without this -- and milestone
+  3's own log already flagged that "the plan's design decisions assumed a
+  resolved lineup/lead-CLI already exists by the time scoping happens,"
+  a gap only a real lineup-confirm endpoint actually closes. One-shot
+  (400s if `state.lineup` is already non-empty -- a task starts exactly
+  once, matching `commands/run.ts`'s own real order) and requires a
+  finalized spec first (400 if `spec_file` is still null). On success:
+  `setField(taskDir, "lineup", roles)`, optionally merges into
+  `team.json` (`save_as_default`), then calls a new
+  `TaskRunner.startTask()` (exposes the same `buildParams()`/`start()`
+  machinery `reattachOne()` already uses, so this is structurally
+  identical to "reattach found nothing in flight," just reached from a
+  fresh task instead of a restart) -- genuinely starts `driveTask()` for
+  the first time, proven live below, not just a state write.
+- **A real, live bug found and fixed while designing this milestone, not
+  discovered by accident**: reasoning through what "a task can now
+  legitimately sit in `scoping` across a daemon restart, waiting on the
+  lineup step" actually implies for `reattachProject()` surfaced that it
+  already had no guard for this. Before the fix: `reattachProject()` ran
+  unconditionally on any non-terminal app-owned task, including one still
+  in `scoping` with an empty `lineup: {}`; `buildParams()`'s
+  `rehydrateState()` unconditionally reduces `{type: "start"}`, and
+  `driveTask()`'s own first two lines *persist* that reduced phase to
+  `state.json` before ever touching `lineup.roles` -- so a mid-scoping
+  task's on-disk phase would have been silently corrupted from
+  `"scoping"` to `"design"`/`"implementing"` on every restart, immediately
+  followed by a `TypeError` reading `lineup.roles.developer.cli` off the
+  empty lineup, caught only by `start()`'s own `.catch()` and logged to
+  console -- never surfaced to the user, and the task left in a
+  corrupted, effectively stuck state. This is the same class of bug
+  milestone 3 already found once for the read-only task-detail path
+  (`task-detail.ts`'s `hasLineup` guard); this fix applies the equivalent
+  guard to the actual task-*driving* path, which milestone 3 never
+  exercised (nothing could reach "scoping across a restart with no
+  lineup" before this milestone's endpoints existed). Fixed with a
+  `hasLineup` check in `reattachProject()`'s own loop, skipping
+  `reattachOne()` entirely for such a task. Proven with a real regression
+  test (`lineup.test.ts`, "does not corrupt or attempt to drive a
+  lineup-less task across a daemon restart"): creates a task, finalizes
+  its spec, closes and restarts the real daemon without ever submitting a
+  lineup, and confirms `state.json`'s `phase` is still exactly
+  `"scoping"` and `lineup` is still `{}` afterward -- then confirms the
+  task is still perfectly startable, proving the fix skips driving it
+  rather than breaking it.
+- **A second real, pre-existing bug, caught live by this milestone's own
+  "save as project default" test, not by inspection**: `team.ts`'s
+  `EffortSchema` (`"low"|"medium"|"high"|"xhigh"|"max"`) was missing
+  `"none"`, even though `@crewbench/adapters`' own `Effort` type and
+  Phase 3 milestone 3's `ApiEffortSchema` both already include it, and
+  `packages/daemon/test/task-runner.test.ts`'s own `LINEUP_ROLES` fixture
+  (milestone 1) has used `effort: "none"` for every role since that
+  milestone. A lineup submission with `effort: "none"` and
+  `save_as_default: true` wrote a real, genuinely invalid-per-its-own-
+  schema `team.json`, then 500'd the very next `GET .../team` reading it
+  back through `TeamSchema.parse()`. Fixed by adding `"none"` to
+  `EffortSchema` -- additive, so nothing that validated before stops
+  validating.
+- **UI**: lineup step (`routes/lineup-step-page.tsx`, new route
+  `/tasks/:taskId/lineup`) -- per-role CLI/model/effort/permissions rows
+  (`components/role-lineup-editor.tsx`, shared with the team settings
+  page below), a model field with "cheap"/"strong" quick-pick buttons
+  that resolve against `team.json`'s own `tiers` mapping client-side
+  (`lib/lineup-defaults.ts`'s `resolveModelTier()`, a straight port of
+  `packages/cli/src/lineup.ts`'s `resolveModel()` -- the daemon still has
+  no `config/defaults.json` dependency, same real gap milestone 3
+  disclosed for the scoping-chat picker), an inline warning when a role's
+  permissions is `"skip"`, a per-chosen-CLI doctor badge (reusing
+  `useDoctor()` unchanged), and "save as project default." Team settings
+  (`routes/team-settings-page.tsx`, `/projects/:projectId/team`) reuses
+  the same `RoleLineupEditor` for the actual "team roster" the phase
+  prompt names, with a real diff preview (field-by-field before/after
+  lines) shown only once an edit has actually been made. Profile page
+  (`routes/profile-page.tsx`, `/projects/:projectId/profile`):
+  refresh/edit/confirm, editable command fields and package manager,
+  detected languages/frameworks/source dirs shown read-only.
+  `scoping-chat-page.tsx`'s finalize now navigates to the lineup step
+  instead of straight to task detail (the real hand-off milestone 3's own
+  log flagged as missing); `task-detail-page.tsx` gained a "set up
+  lineup" banner for an app-owned task with a finalized spec but no
+  lineup yet (covers navigating away and back in via the board, not just
+  the direct redirect); `layout.tsx` gained Team/Profile nav links.
+- **Real, disclosed scope limits, not hidden**: (1) team settings edits
+  only `roles` -- `team.json` also has `tiers`/`loop`/`workspace`/
+  `confirm_lineup` fields the phase prompt doesn't specifically name here
+  and this page leaves read-only-via-omission (not shown at all this
+  milestone); (2) the lineup step has no per-task loop-setting override
+  (`max_rounds`/`fix_threshold`) -- not named in the phase prompt's own
+  lineup-step bullet, and `buildParams()`'s own docstring already
+  documents that loop settings aren't persisted per-task anywhere on
+  disk, only resolved fresh from `team.json` each time; (3) a task
+  abandoned mid-scoping-conversation (no spec finalized) still has no way
+  to resume that conversation from the board/task-detail page -- the new
+  "set up lineup" banner explicitly does *not* offer this, since wiring
+  it up would mean reconstructing `scoping-chat-page.tsx`'s `search.text`
+  requirement from state that isn't persisted anywhere, a real separate
+  gap this milestone didn't need to close to make the lineup step work
+  for the actual common path (finalize -> lineup, in one sitting).
+- Tests: daemon route tests for all four team/profile endpoints
+  (`test/team.test.ts`, `test/profile.test.ts`) and the lineup endpoint
+  (`test/lineup.test.ts`, seven tests covering the real-dispatch-actually-
+  happens claim, `save_as_default`'s real `team.json` write, both 400
+  guards, the 403 ownership check, the `z.record`-over-an-enum
+  "every role required" behavior, and the reattach regression above). UI
+  component tests for all three new pages
+  (`test/lineup-step-page.test.tsx`, `test/team-settings-page.test.tsx`,
+  `test/profile-page.test.tsx`), including a real tier-resolution
+  assertion (a mocked `team.json` with `tiers.codex.strong = "o1"`
+  actually renders `"o1"` in the model field, not the literal string
+  `"strong"`) and a real diff-only-after-edit assertion for the team
+  settings page.
+- **Real, live end-to-end verification**, beyond the automated tests: a
+  real built `crewbench ui` binary was started against a real repo (a
+  real `package.json` with `lint`/`test` scripts) and a real fake-CLI
+  script, driven purely over `curl` through the full chain this milestone
+  closes for the first time: add project, `GET .../team` (confirmed
+  `{}`), `GET .../profile` (confirmed 404), `?refresh=1` (confirmed real
+  detection against the real `package.json`), `PUT .../profile` with
+  `confirmed: true` (confirmed a subsequent plain `GET` now returns 200),
+  create task, finalize spec, `POST .../lineup` with `save_as_default:
+  true` (confirmed the response's `phase` had already moved off
+  `"scoping"`, confirmed a real `team.json` was written with the
+  submitted roles), then waited and confirmed real
+  `developer-r1/r2/r3.result.json` and `gate-r*.result.json` files
+  actually appeared on disk (the task ran three real rounds and stopped,
+  since the fixture CLI isn't a schema-valid tester/reviewer -- the
+  expected, same outcome the automated test already covers), and a final
+  `GET /api/tasks/:tid` confirming the new `project_id` field matches the
+  real project id. No errors in the daemon's own log across the whole
+  sequence; shut down cleanly.
+- Full verification: `pnpm -r typecheck/build/test` all green (379 TS
+  tests: 27 contract + 107 adapters + 152 engine + 55 daemon + 14 ui + 24
+  cli), plus the Playwright e2e suite (1 test, still passing); Python
+  suite (212 tests) unaffected; `pnpm check:schemas` clean (neither
+  `TeamSchema` nor `ProjectSchema`'s own shape changed -- only
+  `EffortSchema`'s allowed values, and `team.json` has no Python-side
+  generated schema file per its own docstring). One genuine flake seen
+  under `pnpm -r test`'s full parallel load, not from this milestone's
+  own code: `doctor-usage.test.ts`'s pre-existing `waitForTaskKnown`
+  timing sensitivity (already known from milestones 2-3's own runs);
+  isolated and full-suite reruns both green afterward. A `lineup.test.ts`
+  test using `waitForTaskKnown` under its default 5s vitest timeout also
+  flaked once under the same load and was fixed with an explicit 15s
+  timeout, matching this file's other real-subprocess tests.
+- **What still needs human sign-off before this is "done"**: (1) the
+  three real, disclosed scope limits above (team settings' roles-only
+  editing, no per-task loop override, no resume-abandoned-scoping path);
+  (2) whether `POST /api/tasks/:tid/lineup` existing at all, beyond the
+  plan's literal milestone 4 bullet, is the right way to have closed this
+  gap, versus some other shape; (3) the "cheap"/"strong" quick-pick
+  buttons' client-side tier resolution (`lib/lineup-defaults.ts`) is a
+  second, independent reimplementation of `packages/cli/src/lineup.ts`'s
+  `resolveModel()` logic, not a shared import -- worth a second look for
+  whether the two should be unified later, same kind of duplication
+  milestone 3's own `ApiCliSchema` vs. `CliNameSchema` split already
+  accepted for a similar reason (no cross-package dependency in that
+  direction).

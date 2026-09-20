@@ -69,12 +69,28 @@ export class TaskRunner {
     return this.active.get(taskId)?.approvals.resolve(approvalId, decision) ?? false;
   }
 
+  /** Starts a task for the very first time, once its lineup has actually
+   * been chosen (Phase 3 milestone 4's `POST /api/tasks/:tid/lineup`,
+   * after `setField(taskDir, "lineup", ...)` has already persisted it) --
+   * the only public entry point that begins driving a task that was
+   * never running before, as opposed to `reattachProject()`'s own
+   * `start()` calls, which resume one already mid-flight. Reuses
+   * `buildParams()`/`start()` unchanged: by the time this is called,
+   * `state.json` already has a real, non-empty `lineup`, so this is
+   * structurally the same as any reattach that found nothing still
+   * running, just reached from a fresh task instead of a restart. */
+  async startTask(taskId: string, taskDir: string, projectPath: string, taskState: TaskState): Promise<void> {
+    const params = await this.buildParams(taskId, taskDir, projectPath, taskState);
+    this.start(taskId, params);
+  }
+
   /** Starts driving a task that's ready to go *right now* -- either a
-   * brand-new task (milestone 3's task-creation endpoint) or one whose
-   * reattach found nothing still in flight. Fire-and-forget by design:
-   * `driveTask()` runs for as long as the task's fix loop takes, and its
-   * own progress is observable through the same events.jsonl/SSE path
-   * every other run already uses (Phase 2), not through this promise. */
+   * brand-new task with a lineup already chosen (`startTask()`) or one
+   * whose reattach found nothing still in flight. Fire-and-forget by
+   * design: `driveTask()` runs for as long as the task's fix loop takes,
+   * and its own progress is observable through the same events.jsonl/SSE
+   * path every other run already uses (Phase 2), not through this
+   * promise. */
   private start(taskId: string, params: DriveTaskParams): void {
     const approvals = params.approvals as HttpApprovalProvider;
     const promise = driveTask(params)
@@ -148,6 +164,25 @@ export class TaskRunner {
       }
       if (taskState.owner !== "app") continue;
       if (["done", "stopped", "failed"].includes(taskState.phase)) continue;
+      // Real, live bug found while building milestone 4's lineup step,
+      // fixed here rather than shipped further: an app-owned task sits
+      // in "scoping" -- a non-terminal phase -- for the entire scoping-
+      // chat/spec-editor/lineup-step flow now that milestone 4 makes that
+      // flow span real time (a user can legitimately leave a task
+      // half-set-up across a daemon restart). Before this fix,
+      // `reattachOne()` ran unconditionally on such a task: `buildParams()`
+      // calls `rehydrateState()`, which unconditionally reduces
+      // `{type: "start"}` and gets *persisted* to `state.json`'s `phase`
+      // by `driveTask()`'s own first two lines -- silently corrupting a
+      // never-started task's on-disk phase from "scoping" to "design"/
+      // "implementing" -- and then `driveTask()` itself would throw
+      // reading `lineup.roles.developer.cli` off an empty `{}` lineup,
+      // caught only by `start()`'s own `.catch()` and logged to console,
+      // never surfaced to the user. Mirrors `task-detail.ts`'s own
+      // `hasLineup` guard (Phase 3 milestone 3), applied here to the
+      // actual task-driving path, not just the read-only detail view.
+      const hasLineup = Object.keys(taskState.lineup ?? {}).length > 0;
+      if (!hasLineup) continue;
       await this.reattachOne(row.id, taskDir, projectPath, taskState);
     }
   }

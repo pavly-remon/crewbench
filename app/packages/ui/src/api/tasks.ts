@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { ApiCli, ApiEffort, ApiScopingStreamEvent, ApiTaskDetail, TaskSpec } from "@crewbench/contract";
+import type { ApiCli, ApiEffort, ApiLineupRequest, ApiScopingStreamEvent, ApiTaskDetail, TaskSpec } from "@crewbench/contract";
 import { apiFetch, openEventStream } from "../lib/api.js";
 
 export function useCreateTask(projectId: string | undefined) {
@@ -18,6 +18,21 @@ export function useFinalizeScoping(taskId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (spec: TaskSpec) => apiFetch<ApiTaskDetail>(`/api/tasks/${taskId}/scoping/finalize`, { method: "POST", body: JSON.stringify(spec) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", taskId] }).catch(() => {});
+    },
+  });
+}
+
+/** The lineup step's "confirm and start" action (Phase 3 milestone 4).
+ * Kicks off the task's real fix loop for the first time -- see
+ * `routes/lineup.ts`'s own docstring for why this endpoint exists beyond
+ * the phase prompt's literal milestone 4 bullet. */
+export function useSubmitLineup(taskId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ApiLineupRequest) =>
+      apiFetch<ApiTaskDetail>(`/api/tasks/${taskId}/lineup`, { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks", taskId] }).catch(() => {});
     },

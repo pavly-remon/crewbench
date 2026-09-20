@@ -7,7 +7,19 @@ import { z } from "zod";
 export const CliNameSchema = z.enum(["host", "claude", "codex", "agy", "copilot"]);
 export type CliName = z.infer<typeof CliNameSchema>;
 
-export const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
+/** Real, pre-existing gap found live while building Phase 3 milestone 4:
+ * this omitted `"none"`, even though `@crewbench/adapters`' own `Effort`
+ * type (`"low" | "medium" | "high" | "xhigh" | "max" | "none"`) and Phase
+ * 3 milestone 3's `ApiEffortSchema` (`schemas/api.ts`) both already
+ * include it -- a real `team.json`/`.state.json`'s `lineup` role with
+ * `effort: "none"` (a genuinely valid, already-used value --
+ * `packages/daemon/test/task-runner.test.ts`'s own `LINEUP_ROLES`
+ * fixture sets every role to it) could never validate against this
+ * schema. Surfaced as a real 500 from milestone 4's own "save as project
+ * default" round-trip test (`PUT` a lineup with `effort: "none"` into
+ * `team.json`, then `GET` it back through `TeamSchema.parse()`), not
+ * found by inspection. */
+export const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max", "none"]);
 export type Effort = z.infer<typeof EffortSchema>;
 
 export const PermissionsSchema = z.enum(["safe", "skip"]);

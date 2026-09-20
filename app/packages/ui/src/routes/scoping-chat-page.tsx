@@ -8,15 +8,19 @@ import { useScopingChat, useFinalizeScoping } from "../api/tasks.js";
 
 const CLI_OPTIONS = ApiCliSchema.options;
 
-/** New-task-dialog -> scoping-chat -> spec-editor (Phase 3 milestone 3).
- * The first message is the task text the New task dialog collected
- * (`search.text`, since the task-creation endpoint's own response only
- * carries a truncated `title` -- see `api/tasks.ts`'s `useScopingChat`
- * docstring). `cli`/`model` are only asked for once, before that first
- * message goes out -- every later turn in `useScopingChat` resumes
- * automatically. There is no lineup step to hand off into yet (milestone
- * 4) -- confirming a spec here lands back on the task detail page, which
- * already renders a finalized spec via the existing spec tab. */
+/** New-task-dialog -> scoping-chat -> spec-editor -> lineup-step (Phase 3
+ * milestones 3-4). The first message is the task text the New task
+ * dialog collected (`search.text`, since the task-creation endpoint's
+ * own response only carries a truncated `title` -- see `api/tasks.ts`'s
+ * `useScopingChat` docstring). `cli`/`model` are only asked for once,
+ * before that first message goes out -- every later turn in
+ * `useScopingChat` resumes automatically. This inline picker is itself a
+ * real, disclosed stand-in for milestone 4's lineup step (see milestone
+ * 3's own log) -- it only decides who drives the *scoping conversation*,
+ * a separate, smaller decision than the lineup step's own per-role
+ * cli/model/effort/permissions choice for the actual fix loop. Confirming
+ * a spec here now hands off to `/tasks/:taskId/lineup`, not straight to
+ * task detail. */
 export function ScopingChatPage() {
   const { taskId } = useParams({ from: "/tasks/$taskId/scoping" });
   const search = useSearch({ from: "/tasks/$taskId/scoping" });
@@ -50,7 +54,11 @@ export function ScopingChatPage() {
   const onConfirm = (spec: Parameters<typeof finalize.mutate>[0]) => {
     finalize.mutate(spec, {
       onSuccess: () => {
-        navigate({ to: "/tasks/$taskId", params: { taskId } }).catch(() => {});
+        // Phase 3 milestone 4: the real lineup step now exists, so a
+        // finalized spec hands off there instead of straight to task
+        // detail (where, before this milestone, there was nothing left
+        // to do -- the task could never actually start).
+        navigate({ to: "/tasks/$taskId/lineup", params: { taskId } }).catch(() => {});
       },
     });
   };

@@ -165,6 +165,7 @@ export async function buildTaskDetail(location: TaskLocation): Promise<ApiTaskDe
 
   return {
     id: state.id,
+    project_id: location.projectId,
     title: state.title,
     phase: rehydrated.phase,
     round: rehydrated.round,

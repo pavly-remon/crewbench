@@ -4,6 +4,9 @@ import { ProjectsPage } from "./routes/projects-page.js";
 import { TaskBoardPage } from "./routes/task-board-page.js";
 import { TaskDetailPage } from "./routes/task-detail-page.js";
 import { ScopingChatPage } from "./routes/scoping-chat-page.js";
+import { LineupStepPage } from "./routes/lineup-step-page.js";
+import { TeamSettingsPage } from "./routes/team-settings-page.js";
+import { ProfilePage } from "./routes/profile-page.js";
 import { HealthPage } from "./routes/health-page.js";
 import { UsagePage } from "./routes/usage-page.js";
 
@@ -42,6 +45,24 @@ const scopingChatRoute = createRoute({
   component: ScopingChatPage,
 });
 
+const lineupStepRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks/$taskId/lineup",
+  component: LineupStepPage,
+});
+
+const teamSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects/$projectId/team",
+  component: TeamSettingsPage,
+});
+
+const profileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects/$projectId/profile",
+  component: ProfilePage,
+});
+
 const healthRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/health",
@@ -54,6 +75,9 @@ const routeTree = rootRoute.addChildren([
   projectUsageRoute,
   taskDetailRoute,
   scopingChatRoute,
+  lineupStepRoute,
+  teamSettingsRoute,
+  profileRoute,
   healthRoute,
 ]);
 
