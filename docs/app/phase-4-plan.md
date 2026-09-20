@@ -15,11 +15,15 @@ caught (a wrong pnpm filter name silently no-opping the publish build),
 confirmed by a second, genuinely green 3-OS `package-smoke` run -- see
 its log entry, including a disclosed, out-of-scope pre-existing Windows
 test failure in `packages/engine` found live in that same run. Milestone
-2 implemented 2026-09-20, pending human review -- see its log entry,
-including a disclosed real safety incident during this milestone's own
-investigation (a real, already-installed local `agy` plugin was
-accidentally refreshed against this machine's real config, not a fake
-override) and a real bug its own live daemon check caught and fixed.)
+2 done -- reviewed and approved 2026-09-20, including a disclosed real
+safety incident during this milestone's own investigation (a real,
+already-installed local `agy` plugin was accidentally refreshed against
+this machine's real config, not a fake override -- independently
+verified via `git reflog`/file mtimes during review, confirmed low
+severity: only the on-disk plugin source was replaced with a fresh
+clone, no registration/settings changed; user confirmed leaving it
+as-is) and a real bug its own live daemon check caught and fixed (a
+doubled `command` string in the install-step API response).)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -570,7 +574,7 @@ rather than a drive-by patch here) — flagging it now since this is the
 first time in this app's build that CI has actually been watched run-by-
 run on all three OSes, and Windows has apparently never genuinely passed.
 
-### Milestone 2 -- implemented, pending human review (2026-09-20)
+### Milestone 2 -- done (reviewed and approved 2026-09-20)
 
 **A real safety incident during this milestone's own investigation,
 disclosed rather than hidden**: before writing any code, this session
