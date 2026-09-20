@@ -86,6 +86,23 @@ export function registerScopingRoutes(app: FastifyInstance, watcher: DaemonWatch
         session_id: result.sessionId,
         spec: result.spec,
       } satisfies ApiScopingStreamEvent);
+    } catch (err) {
+      // `startScoping()`/`continueScoping()` normally report failure via
+      // `{ok: false, error}`, not by throwing -- but nothing guarantees
+      // that (a `setField()` write failing mid-turn, for one). Without
+      // this, the stream would close with no `done` frame at all: the
+      // client's `onDone` fallback still fires (the connection closing
+      // triggers it), but `sending` flips back to `false` with no
+      // `error` ever set, silently stranding the user. Report it as a
+      // real (if session-id-less) `done` frame instead of a bare close.
+      writeSseEvent(reply, "", {
+        type: "done",
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        reply: null,
+        session_id: sessionId,
+        spec: null,
+      } satisfies ApiScopingStreamEvent);
     } finally {
       sse.close();
       reply.raw.end();

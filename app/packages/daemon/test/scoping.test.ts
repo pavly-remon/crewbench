@@ -145,6 +145,56 @@ describe("POST /api/tasks/:tid/scoping/* (Phase 3 milestone 3)", () => {
     expect(secondDone.spec).toEqual(VALID_SPEC);
   });
 
+  it("reports a done:false frame instead of a bare stream close when the turn throws", async () => {
+    // Forces a genuine throw out of setField()'s atomicWriteJson() (not a
+    // mock), from inside the route's try block specifically: the first
+    // turn's cli/model/effort persistence happens *before* the SSE
+    // stream opens (a separate, pre-existing gap this test doesn't cover
+    // -- an early failure there surfaces as a plain 500, which is a
+    // reasonable failure mode since no stream has started yet to leave
+    // hanging). The resumed-turn path only writes `scoping_session_id`,
+    // and does so *inside* the try -- so a real second turn, with the
+    // taskDir made unwritable in between, exercises the actual catch
+    // block this fix adds.
+    const cliPath = await fakeClaudeCli(["What page should it redirect to?", JSON.stringify(VALID_SPEC)]);
+    process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = cliPath;
+    daemon = await startDaemon({ port: 0 });
+    const repo = await gitRepo("crewbench-scoping-throw-");
+    const { taskId } = await setupTask(daemon, repo);
+    const headers = { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" };
+    const taskDir = join(repo, ".crewbench", "tasks", taskId);
+
+    const firstRes = await fetch(`http://127.0.0.1:${daemon.port}/api/tasks/${taskId}/scoping/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ message: "Fix the login redirect bug", cli: "claude", model: "m" }),
+    });
+    expect(firstRes.status).toBe(200);
+    await readSse(firstRes);
+
+    await chmod(taskDir, 0o555);
+    try {
+      const res = await fetch(`http://127.0.0.1:${daemon.port}/api/tasks/${taskId}/scoping/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ message: "It should go to /dashboard" }),
+      });
+      expect(res.status).toBe(200); // the SSE stream itself still opens fine -- the failure surfaces inside it
+      const events = await readSse(res);
+      // The fake CLI's own output still streams as `chunk` frames (the
+      // throw happens afterward, in setField()) -- the actual claim here
+      // is that the stream ends with a real `done` frame reporting
+      // failure, not a bare close with no frame at all.
+      expect(events.length).toBeGreaterThan(0);
+      const done = events[events.length - 1] as { type: string; ok: boolean; error: string | null };
+      expect(done.type).toBe("done");
+      expect(done.ok).toBe(false);
+      expect(done.error).toBeTruthy();
+    } finally {
+      await chmod(taskDir, 0o755); // afterEach's daemon.close() and temp-dir cleanup need to write/delete here
+    }
+  });
+
   it("resumes the same underlying CLI session across a real daemon restart mid-scoping", async () => {
     const cliPath = await fakeClaudeCli(["What page should it redirect to?", JSON.stringify(VALID_SPEC)]);
     process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = cliPath;

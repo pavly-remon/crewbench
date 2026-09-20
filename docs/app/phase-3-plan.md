@@ -625,3 +625,53 @@ elements; `projects-page.test.tsx`'s existing multi-test file happened
 not to collide on any query, masking the same latent gap). Full
 `pnpm -r typecheck`/`test` reverified green after this change (358 TS
 tests: ui now 9, others unchanged from the count above).
+
+**Second follow-up fix, applied after human review (2026-09-20)**: the
+scoping-turn dispatch in `routes/scoping.ts` had a `finally` but no
+`catch` -- `startScoping()`/`continueScoping()` normally report failure
+via `{ok: false, error}`, not by throwing, but nothing guaranteed that
+(a `setField()` write genuinely failing mid-turn, for one). Without a
+catch, the SSE stream would close with no `done` frame at all: the UI's
+`onDone` fallback still fires on connection close, so `sending` would
+flip back to `false`, but no `error` was ever set -- a silently stranded
+user, not a crash. Fixed by catching and emitting a real
+`{type: "done", ok: false, error: ...}` frame before closing. Verified
+with a genuine (not mocked) failure: a new daemon test does a real first
+scoping turn, then `chmod`s the taskDir read-only and sends a second
+(resumed-session) turn, whose only write -- `setField(...,
+"scoping_session_id", ...)` -- sits inside the try and throws a real
+`EACCES` from `atomicWriteJson()`; the test confirms the stream still
+returns 200 and ends with a `done:false` frame instead of a bare close.
+
+**A related, narrower gap found live while building that test, deliberately
+left unfixed**: on a task's *first* scoping turn (not resumed), the
+`scoping_cli`/`scoping_model`/`scoping_effort` `setField()` writes happen
+*before* `startSse(reply)` is called at all -- outside every try/catch in
+the route. Reproducing the same read-only-taskDir trick against a first
+turn (not the resumed turn the shipped test uses) throws before any SSE
+stream opens, and Fastify's default error handler returns a plain 500
+with no body-stream at all -- arguably a reasonable failure mode on its
+own (the client's `fetch()` sees a real non-2xx status, not a silently
+hanging connection), except that `lib/api.ts`'s `openEventStream()` had
+its own related bug: on `!res.ok`, it returned without ever calling
+`init.onDone?.()`, so `useScopingChat`'s `sending` flag would stay `true`
+forever with no error shown -- the first turn's "Start scoping" flow has
+no visible way to recover from a pre-stream failure. **Fixed** (in
+`openEventStream()` itself, since it's shared with the per-task/global
+event feeds too, though those don't pass `onDone` so the fix is a no-op
+for them): call `init.onDone?.()` before returning on a non-ok/bodyless
+response. New UI regression test
+(`test/scoping-chat-page.test.tsx`, "doesn't leave the chat stuck
+'sending'...") mocks a bare 500 on the very first request and confirms
+the follow-up input un-disables rather than staying stuck. The pre-stream
+`setField()` calls themselves are not wrapped in a try/catch here --
+flagging that as still open, since fixing it properly means deciding
+whether a pre-stream failure should be a plain HTTP error (current
+behavior, now at least recoverable client-side) or should itself open an
+SSE stream just to report one `done:false` frame, which is a real design
+choice, not a bug fix, and belongs with the rest of milestone 3's
+still-open items above rather than folded in silently here.
+
+Full `pnpm -r typecheck`/`build`/`test` reverified green after both
+follow-up fixes (360 TS tests: 27 contract + 107 adapters + 152 engine +
+39 daemon + 10 ui + 24 cli), Python suite unaffected, no schema drift.

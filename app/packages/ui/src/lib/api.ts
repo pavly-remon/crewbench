@@ -59,7 +59,16 @@ export function openEventStream(
         ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
         signal: controller.signal,
       });
-      if (!res.ok || !res.body) return;
+      if (!res.ok || !res.body) {
+        // A non-2xx (or bodyless) response means no stream ever opened --
+        // still call onDone so a caller like useScopingChat's `sending`
+        // flag doesn't stay stuck true forever (found live: the scoping
+        // route can genuinely 500 before its SSE stream starts, e.g. a
+        // filesystem write failing on the very first turn, before there's
+        // any stream to report failure over).
+        init.onDone?.();
+        return;
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";

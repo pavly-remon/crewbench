@@ -106,4 +106,20 @@ describe("ScopingChatPage", () => {
     await waitFor(() => expect(screen.getByText("Shows a success toast")).toBeInTheDocument());
     expect(screen.getByText("Redirects to /dashboard")).toBeInTheDocument();
   });
+
+  it("doesn't leave the chat stuck 'sending' when the very first turn's request fails outright (no SSE stream ever opens)", async () => {
+    const fetchMock = vi.fn(async () => new Response("internal error", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderScopingPage();
+
+    await screen.findByText(/Scoping: Fix the login redirect bug/i);
+    fireEvent.change(screen.getByPlaceholderText("e.g. sonnet"), { target: { value: "m1" } });
+    fireEvent.click(screen.getByRole("button", { name: /start scoping/i }));
+
+    // Once `openEventStream()` sees the 500 and calls `onDone`, `sending`
+    // must flip back to false -- otherwise the follow-up input stays
+    // disabled forever with no way to retry.
+    await waitFor(() => expect(screen.getByPlaceholderText("Reply to the lead…")).not.toBeDisabled());
+  });
 });
