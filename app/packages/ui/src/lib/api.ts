@@ -40,15 +40,25 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
  * subscription lifecycle drives that in practice -- see
  * `useTaskEvents`/`useGlobalEvents`). Returns an `AbortController` to
  * stop the stream. */
-export function openEventStream(path: string, onEvent: (id: string | null, data: unknown) => void): AbortController {
+export function openEventStream(
+  path: string,
+  onEvent: (id: string | null, data: unknown) => void,
+  init: { method?: "GET" | "POST"; body?: unknown; onDone?: () => void } = {},
+): AbortController {
   const controller = new AbortController();
   const token = getToken();
   const headers = new Headers();
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (init.body !== undefined) headers.set("Content-Type", "application/json");
 
   (async () => {
     try {
-      const res = await fetch(`${API_BASE}${path}`, { headers, signal: controller.signal });
+      const res = await fetch(`${API_BASE}${path}`, {
+        method: init.method ?? "GET",
+        headers,
+        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+        signal: controller.signal,
+      });
       if (!res.ok || !res.body) return;
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -75,6 +85,7 @@ export function openEventStream(path: string, onEvent: (id: string | null, data:
           }
         }
       }
+      init.onDone?.();
     } catch {
       // aborted, or the connection dropped -- caller decides whether to reconnect
     }

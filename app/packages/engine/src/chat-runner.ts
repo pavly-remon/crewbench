@@ -26,6 +26,15 @@ export async function runChatTurn(
   sessionId: string | null,
   cwd: string,
   timeoutS = 120,
+  /** Phase 3 milestone 3, Design decision 4: called with each readable
+   * log line `stream.feed()` produces as output arrives (the same lines
+   * dispatchRole()'s own logging would write, e.g. "says: ...", "tool:
+   * ..."), not a token-level diff of the final reply -- the smallest real
+   * addition that lets a caller (the daemon's scoping SSE route) forward
+   * genuine incremental progress without a second output parser. The
+   * final `reply` returned once the process exits is still extracted the
+   * same way as before (`extractChatReply`), unaffected by this. */
+  onChunk?: (text: string) => void,
 ): Promise<ChatTurnResult> {
   const cliPath = resolveCliPath(cli);
   if (!cliPath) {
@@ -54,7 +63,10 @@ export async function runChatTurn(
     buffer += text;
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
-    for (const line of lines) stream.feed(line + "\n");
+    for (const line of lines) {
+      const readable = stream.feed(line + "\n");
+      if (onChunk) for (const l of readable) onChunk(l);
+    }
   });
   child.stderr?.on("data", (chunk: Buffer) => {
     stdoutAll += chunk.toString("utf-8");
@@ -79,7 +91,10 @@ export async function runChatTurn(
       resolve(null);
     });
   });
-  if (buffer.trim()) stream.feed(buffer);
+  if (buffer.trim()) {
+    const readable = stream.feed(buffer);
+    if (onChunk) for (const l of readable) onChunk(l);
+  }
 
   const reply = extractChatReply(cli, stream.final, stdoutAll);
   const newSessionId = stream.sessionId ?? sessionId;

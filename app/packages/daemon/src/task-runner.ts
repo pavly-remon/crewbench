@@ -102,7 +102,11 @@ export class TaskRunner {
     const lineupRoles = taskState.lineup as Record<RoleName, { cli: Cli; model: string; effort: Effort; permissions: Permissions }>;
     const lineup: DriveTaskLineup = { roles: lineupRoles, loop };
 
-    const specPath = taskState.spec_file ? join(taskDir, taskState.spec_file) : null;
+    // spec_file is always an absolute path (see task-detail.ts's
+    // buildTaskDetail() docstring for the same real bug, fixed there and
+    // here together) -- joining it onto taskDir a second time would
+    // silently resolve to a nonexistent path.
+    const specPath = (taskState.spec_file as string | null | undefined) ?? null;
     const spec: TaskSpec | null = specPath && existsSync(specPath) ? (JSON.parse(await readFile(specPath, "utf-8")) as TaskSpec) : null;
 
     return {

@@ -1,6 +1,6 @@
 # Phase 3 — Interactive UI (create, scope, approve, control)
 
-Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done)
+Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 implemented, pending human review -- see its log entry)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md` and
@@ -452,3 +452,152 @@ correct because it looked plausible.
   tests) unaffected; no schema drift for `schemas/*.json` (this
   milestone's only schema change, `config.json`'s `concurrency` field,
   has no Python-side file to generate).
+
+### Milestone 3 -- implemented, pending human review (2026-09-20)
+
+**Not marked "done" by this session.** Everything below was actually
+built, run, and verified the ways described -- but unlike milestones 1-2,
+this entry wasn't written after a live human review confirmed the design
+choices below (several are real, disclosed deviations from the plan's
+literal design decisions, made to keep the milestone shippable without
+inventing app-side concepts -- like a default model tier -- this repo
+deliberately doesn't have). Flagging that honestly rather than writing
+"done" myself.
+
+- **Daemon**: `POST /api/projects/:pid/tasks` (`routes/tasks-mutating.ts`)
+  creates an app-owned task (`owner: "app"`, phase `"scoping"`) from raw
+  task text, registered immediately in the watcher's task index
+  (`DaemonWatcher.registerTask()`, new) rather than waiting on the fs
+  watcher's own ~150ms debounced `index.json` pickup -- a client's very
+  next call is realistically `POST .../scoping/messages` against that
+  same task id. `POST /api/tasks/:tid/scoping/messages`
+  (`routes/scoping.ts`) streams the lead's reply over SSE and
+  `POST .../scoping/finalize` writes the (possibly user-edited) spec to
+  `spec.json`, mirroring `commands/run.ts`'s own write.
+- **Design decision 4, actually implemented**: `chat-runner.ts`'s
+  `runChatTurn()` gained the planned optional `onChunk?: (text: string)
+  => void`, called with each readable log line `Stream.feed()` already
+  produces (the same lines dispatch logging would write -- "says: ...",
+  "tool: ...") as output arrives, not a token-level diff of the final
+  reply. `scoping.ts`'s `startScoping()`/`continueScoping()` thread it
+  through. This is a **disclosed interpretation, not a literal token
+  stream**: the plan's own wording ("streams the lead's reply via SSE")
+  doesn't specify chunk granularity, and reusing the exact existing
+  line-parser was the smallest real change per the plan's own framing --
+  verified live (see below) to actually deliver incremental chunks
+  before the final reply arrives, not faked.
+- **Open question 3, implemented, with an addition not in the original
+  plan**: `scoping_session_id` persists to `state.json` as planned, but a
+  session id alone isn't resumable without knowing which CLI's own
+  resume mechanism it belongs to -- two more additive fields,
+  `scoping_cli`/`scoping_model` (plus `scoping_effort`, defaulting to
+  `"medium"`, matching `commands/run.ts`'s own hardcoded default), were
+  added to `TaskStateSchema` and persisted on the first scoping turn.
+  Every later turn resumes using the persisted values, ignoring
+  whatever `cli`/`model` the client sends (the route 400s if the first
+  message omits them). This is why `schemas/task-state.json` has a real,
+  additive diff this milestone.
+- **A real deviation from the plan's own ordering, made deliberately, not
+  silently**: the plan's design decisions assumed a resolved
+  lineup/lead-CLI already exists by the time scoping happens
+  (`commands/run.ts`'s actual order: lineup, then scoping). Milestone 4
+  (lineup step) doesn't exist yet, and the daemon has no equivalent of
+  `packages/cli`'s `resolveLineup()`/tier resolution (which reads
+  `config/defaults.json`, a plugin-root concept `loop-settings.ts`
+  already deliberately avoids depending on -- see its own docstring).
+  Rather than inventing an app-side default-model policy not grounded in
+  existing code, `POST .../scoping/messages` requires the client to
+  supply `cli`/`model` on the task's first message; the UI's scoping-chat
+  page asks for them in a small inline form before the conversation
+  starts. Flagging this as a real gap milestone 4 should revisit once a
+  real lineup step exists.
+- **Two real, pre-existing bugs, caught live by this milestone's own new
+  code paths (not by inspection)**:
+  1. `rehydrateState()` (`packages/engine/src/resume.ts`, shipped Phase
+     1) unconditionally reduces `{type: "start"}`, which is correct for
+     every caller before this milestone (`crewbench resume`, the
+     daemon's own reattach path, `packages/engine/test/resume.test.ts`'s
+     own fixtures, and the Playwright e2e fixture -- the last two
+     legitimately have no `lineup` set either, but always have a real
+     round-1 result on disk) -- but wrong for an app-owned task still in
+     this milestone's scoping-chat step, which has *neither* a lineup
+     nor any recorded round yet. Calling it unconditionally reported a
+     freshly-created, never-started task as already `"implementing"`
+     instead of `"scoping"` -- caught first by this milestone's own
+     task-creation route test, and a first fix attempt (skip rehydration
+     whenever `lineup` is empty) then broke the *existing* Playwright e2e
+     suite, caught by rerunning it before considering this done, not
+     assumed safe. Fixed in `packages/daemon/src/task-detail.ts`'s
+     `buildTaskDetail()`, not in `rehydrateState()` itself (rehydrated's
+     own unconditional-start contract is correct for its real callers,
+     verified by `packages/engine`'s full suite staying green once that
+     first, over-eager fix there was reverted): skips rehydration only
+     when *both* `state.lineup` is empty *and* no `developer-r1.result.json`
+     exists, reporting the plain on-disk phase/round in that case, since
+     there's genuinely nothing to replay.
+  2. `spec_file` is always written as an *absolute* path
+     (`commands/run.ts`'s own `join(taskDir, "spec.json")`, and this
+     milestone's finalize route matches it) -- but
+     `task-detail.ts`'s `buildTaskDetail()` and `task-runner.ts`'s
+     `buildParams()` both read it back via `join(taskDir, spec_file)`, a
+     second join that silently produced a nonexistent, doubled path
+     (Node's `path.join` doesn't special-case an already-absolute later
+     argument). `readJsonSafe()`'s swallowed-error fallback meant this
+     failed silently, always returning `spec: null` -- caught by this
+     milestone's own finalize-then-read-it-back test, the first thing to
+     exercise a real `spec_file` round-trip through the daemon at all.
+     `packages/cli`'s own `resume.ts` already read it directly, unjoined
+     -- fixed both daemon call sites to match.
+- **UI**: New task dialog (`task-board-page.tsx`, task text + optional
+  Jira key), a scoping-chat page (`routes/scoping-chat-page.tsx`, new
+  route `/tasks/:taskId/scoping`) with a live transcript and a draft-spec
+  side panel that fills in once the lead's reply parses as a complete
+  spec, and a spec editor (`components/spec-editor.tsx`, acceptance
+  criteria as an add/remove editable list, per the phase prompt's own
+  wording -- every other spec field is shown read-only) gating
+  confirmation. `lib/api.ts`'s `openEventStream()` gained optional
+  `method`/`body`/`onDone` to support a POST-initiated one-shot SSE
+  stream (the scoping turn), reused rather than duplicated for the
+  existing GET-based per-task/global feeds.
+- Tests: daemon route tests for all three new endpoints
+  (`test/tasks-mutating.test.ts`, `test/scoping.test.ts`), including a
+  **real subprocess-level restart-mid-scoping test**: a real fake-CLI
+  process (session state on disk, not in-process memory) answers turn
+  one, the daemon is fully closed and a fresh one started against the
+  same `CREWBENCH_HOME`, and turn two -- sent with no `cli`/`model`, only
+  the persisted session -- genuinely resumes the same underlying
+  conversation and produces the spec, not a fresh turn-zero reply. A UI
+  test (`test/scoping-chat-page.test.tsx`) drives the chat page against a
+  mocked SSE response, asserting the first request actually carries the
+  chosen `cli`/`model` and that a `done` frame's `spec` renders into the
+  spec editor.
+- **Real, live end-to-end verification**, beyond the automated tests: a
+  real built `crewbench ui` binary was started against a real repo and a
+  real fake chat-CLI script (session state on disk), driven purely over
+  `curl` -- project add, task create (confirmed `phase: "scoping"`, the
+  actual claim the rehydrate fix makes), first scoping message (real SSE
+  chunk frames observed arriving before the final `done` frame, then
+  `state.json`'s `scoping_cli`/`scoping_model`/`scoping_session_id`
+  confirmed persisted), second scoping message with no `cli`/`model`
+  (confirmed it resumed the same session and produced the parsed spec),
+  finalize (confirmed `spec.json` written and `title` updated), and a
+  final `GET /api/tasks/:tid` (confirmed the real spec_file bug fix: the
+  finalized spec actually reads back, not `null`). No errors in the
+  daemon's own log across the whole sequence; shut down cleanly.
+- Full verification: `pnpm -r typecheck/build/test` all green (357 TS
+  tests: 27 contract + 107 adapters + 152 engine + 38 daemon + 8 ui + 24
+  cli), plus the Playwright e2e suite (1 test, passing -- genuinely
+  exercised, not skipped: it's what caught the lineup-only version of the
+  rehydrate fix above being wrong); Python suite (212 tests) unaffected;
+  `schemas/task-state.json` regenerated (additive
+  `scoping_cli`/`scoping_model`/`scoping_effort` fields), `pnpm
+  check:schemas` clean.
+- **What still needs human sign-off before this is "done"**: (1) the
+  lead-CLI/model-picker-in-the-scoping-UI deviation above, which milestone
+  4's real lineup step should probably subsume rather than leave as a
+  separate ad hoc form; (2) whether the chunk-granularity interpretation
+  of Design decision 4 is acceptable, or whether a real token-level
+  stream is expected; (3) the `rehydrateState()`/`spec_file` bug fixes
+  above are scoped narrowly to this milestone's own new call sites --
+  worth a second look for any other reader of either field this session
+  didn't find.

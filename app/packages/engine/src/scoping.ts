@@ -52,8 +52,9 @@ async function scopingTurn(
   message: string,
   sessionId: string | null,
   cwd: string,
+  onChunk?: (text: string) => void,
 ): Promise<ScopingTurnResult> {
-  const result = await runChatTurn(cli, model, effort, message, sessionId, cwd);
+  const result = await runChatTurn(cli, model, effort, message, sessionId, cwd, 120, onChunk);
   if (!result.ok || result.reply === null) {
     return { sessionId: result.sessionId, reply: "", spec: null, ok: false, error: result.error };
   }
@@ -68,8 +69,9 @@ export function startScoping(
   taskText: string,
   cwd: string,
   jiraKey?: string | null,
+  onChunk?: (text: string) => void,
 ): Promise<ScopingTurnResult> {
-  return scopingTurn(cli, model, effort, buildScopingPrompt(taskText, jiraKey), null, cwd);
+  return scopingTurn(cli, model, effort, buildScopingPrompt(taskText, jiraKey), null, cwd, onChunk);
 }
 
 export function continueScoping(
@@ -79,8 +81,9 @@ export function continueScoping(
   userAnswer: string,
   sessionId: string,
   cwd: string,
+  onChunk?: (text: string) => void,
 ): Promise<ScopingTurnResult> {
-  return scopingTurn(cli, model, effort, userAnswer, sessionId, cwd);
+  return scopingTurn(cli, model, effort, userAnswer, sessionId, cwd, onChunk);
 }
 
 /** Parses a reply as a task-spec, the same way a role dispatch's result

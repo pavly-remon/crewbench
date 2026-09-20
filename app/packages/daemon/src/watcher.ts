@@ -66,6 +66,15 @@ export class DaemonWatcher extends EventEmitter {
     return this.taskIndex.get(taskId) ?? null;
   }
 
+  /** Phase 3 milestone 3: registers a just-created task immediately,
+   * rather than waiting for `addProject()`'s fs watcher to notice
+   * `index.json` change on its own (debounced 150ms per
+   * `awaitWriteFinish`) -- a client that creates a task and immediately
+   * calls `POST .../scoping/messages` must not race that debounce. */
+  registerTask(projectId: string, projectPath: string, taskId: string): void {
+    this.taskIndex.set(taskId, { projectId, projectPath, taskDir: join(projectPath, ".crewbench", "tasks", taskId) });
+  }
+
   /** Full history for one task's SSE stream, replayed from disk (files
    * stay the source of truth, per docs/app/CONTEXT.md -- this daemon
    * keeps no separate durable event log of its own). `sinceSeq` is

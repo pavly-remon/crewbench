@@ -118,6 +118,24 @@
         "null"
       ]
     },
+    "scoping_cli": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scoping_model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scoping_effort": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "rounds": {
       "type": "array",
       "items": {

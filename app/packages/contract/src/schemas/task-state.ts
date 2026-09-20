@@ -110,6 +110,16 @@ export const TaskStateSchema = z
      * finished (the spec is what matters after that, not the chat that
      * produced it). */
     scoping_session_id: z.union([z.string(), z.null()]).optional(),
+    /** Phase 3 milestone 3 addition, not previously planned: the CLI and
+     * model driving the in-progress scoping conversation, persisted
+     * alongside `scoping_session_id` for the same restart-survival reason
+     * (open question 3) -- a session id alone isn't resumable without
+     * knowing which CLI's own resume mechanism it belongs to. Optional/
+     * additive; `null`/absent once scoping is finished, same lifecycle as
+     * `scoping_session_id`. */
+    scoping_cli: z.union([z.string(), z.null()]).optional(),
+    scoping_model: z.union([z.string(), z.null()]).optional(),
+    scoping_effort: z.union([z.string(), z.null()]).optional(),
     rounds: z.array(TaskRoundSchema),
     usage: z.record(z.string(), RoleUsageSchema),
     notes: z.array(z.string()),

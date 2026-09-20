@@ -4,6 +4,8 @@ import { findOpenPort } from "./port.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerEventRoutes } from "./routes/events.js";
 import { registerTaskRoutes } from "./routes/tasks.js";
+import { registerMutatingTaskRoutes } from "./routes/tasks-mutating.js";
+import { registerScopingRoutes } from "./routes/scoping.js";
 import { registerDoctorRoutes } from "./routes/doctor.js";
 import { registerUsageRoutes } from "./routes/usage.js";
 import { registerUiStatic } from "./static-ui.js";
@@ -69,6 +71,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   await registerProjectRoutes(app, watcher, taskRunner);
   registerEventRoutes(app, watcher);
   registerTaskRoutes(app, watcher);
+  registerMutatingTaskRoutes(app, watcher);
+  registerScopingRoutes(app, watcher);
   registerDoctorRoutes(app);
   registerUsageRoutes(app);
   await registerUiStatic(app);

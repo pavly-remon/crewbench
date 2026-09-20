@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { TaskCommandSchema, TaskPhaseSchema } from "./task-state.js";
+import { TaskSpecSchema } from "./task-spec.js";
 
 /** Daemon API response envelopes (Phase 2). These describe what the
  * daemon serves over HTTP, not an on-disk file -- there is no Python-side
@@ -278,3 +279,67 @@ export const ApiErrorSchema = z
   })
   .strict();
 export type ApiError = z.infer<typeof ApiErrorSchema>;
+
+/** Phase 3 milestone 3. Local copy of `@crewbench/adapters`' `CLI_NAMES`
+ * (the concrete four, not `team.ts`'s `CliNameSchema` which also allows
+ * `"host"` -- there is no "host" to resolve against yet at task-creation
+ * time, the daemon has no notion of "the CLI I'm running inside" the way
+ * the plugin's own Team Lead does). `packages/contract` deliberately has
+ * no dependency on `@crewbench/adapters` (the reverse dependency exists),
+ * so this is duplicated rather than imported. */
+export const ApiCliSchema = z.enum(["claude", "codex", "agy", "copilot"]);
+export type ApiCli = z.infer<typeof ApiCliSchema>;
+
+export const ApiEffortSchema = z.enum(["none", "low", "medium", "high", "xhigh", "max"]);
+export type ApiEffort = z.infer<typeof ApiEffortSchema>;
+
+/** `POST /api/projects/:pid/tasks` (milestone 3) -- creates an app-owned
+ * task in the `"scoping"` phase, before any scoping conversation has
+ * happened. The scoping chat (`POST .../scoping/messages`) is a separate
+ * call the UI makes right after, not folded into this one, so a task
+ * exists on disk (and is addressable by id) before its first scoping
+ * turn -- needed for `scoping_session_id` to have somewhere to persist
+ * to from turn one. */
+export const ApiCreateTaskRequestSchema = z
+  .object({
+    task_text: z.string().min(1),
+    jira_key: z.union([z.string(), z.null()]).optional(),
+  })
+  .strict();
+export type ApiCreateTaskRequest = z.infer<typeof ApiCreateTaskRequestSchema>;
+
+/** `POST /api/tasks/:tid/scoping/messages` (milestone 3, Design decision
+ * 4). `cli`/`model`/`effort` are required on the task's first scoping
+ * message (no session exists yet to infer them from) and ignored on
+ * every later one, where the daemon uses what it persisted to
+ * `state.json`'s `scoping_cli`/`scoping_model` on the first turn instead
+ * -- see `routes/scoping.ts`. */
+export const ApiScopingMessageRequestSchema = z
+  .object({
+    message: z.string().min(1),
+    cli: ApiCliSchema.optional(),
+    model: z.string().optional(),
+    effort: ApiEffortSchema.optional(),
+  })
+  .strict();
+export type ApiScopingMessageRequest = z.infer<typeof ApiScopingMessageRequestSchema>;
+
+/** One SSE frame from `POST /api/tasks/:tid/scoping/messages`'s response
+ * stream -- `chunk` events forward the lead's reply as it's produced
+ * (`chat-runner.ts`'s new `onChunk`, per Design decision 4), `done` is
+ * the final `ScopingTurnResult` once the CLI process exits. Not itself
+ * validated with `.parse()` at the route boundary the way REST responses
+ * are (an SSE stream isn't one JSON value) -- exported as a type for the
+ * daemon and UI to share the same shape. */
+export type ApiScopingStreamEvent =
+  | { type: "chunk"; text: string }
+  | { type: "done"; ok: boolean; error: string | null; reply: string | null; session_id: string | null; spec: unknown | null };
+
+/** `POST /api/tasks/:tid/scoping/finalize` (milestone 3) -- the spec
+ * editor's "confirm" action. Body is the (possibly user-edited) task
+ * spec, written to `spec.json` exactly as `crewbench run`'s own
+ * `spec.json` write does (`commands/run.ts`), not re-derived from the
+ * scoping conversation's own JSON reply -- the spec editor is the
+ * source of truth for what actually gets built, not the lead's draft. */
+export const ApiFinalizeScopingRequestSchema = TaskSpecSchema;
+export type ApiFinalizeScopingRequest = z.infer<typeof ApiFinalizeScopingRequestSchema>;
