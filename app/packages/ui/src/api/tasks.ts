@@ -3,6 +3,48 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ApiCli, ApiEffort, ApiLineupRequest, ApiScopingStreamEvent, ApiTaskDetail, TaskSpec } from "@crewbench/contract";
 import { apiFetch, openEventStream } from "../lib/api.js";
 
+/** Task control (Phase 3 milestone 6): `POST .../cancel` (`{run}`
+ * optional -- omitted cancels the whole task, matching
+ * `routes/task-control.ts`'s own "every run currently `running`" default),
+ * `.../resume` (no body -- `apiFetch()` only sets `Content-Type` `if
+ * (init.body ...)`, so this genuinely sends none, unlike a naive shared-
+ * headers POST would; see `task-control.test.ts`'s own note on that exact
+ * gap), `.../retry-run` (`{run}` required). All three invalidate both the
+ * task-detail cache (phase/active flip) and the board's task list (a
+ * cancelled/resumed task's phase-column placement changes too). */
+export function useCancelTask(taskId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (run?: string) => apiFetch<ApiTaskDetail>(`/api/tasks/${taskId}/cancel`, { method: "POST", body: JSON.stringify({ run }) }),
+    onSuccess: (detail) => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", taskId] }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: ["projects", detail.project_id, "tasks"] }).catch(() => {});
+    },
+  });
+}
+
+export function useResumeTask(taskId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch<ApiTaskDetail>(`/api/tasks/${taskId}/resume`, { method: "POST" }),
+    onSuccess: (detail) => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", taskId] }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: ["projects", detail.project_id, "tasks"] }).catch(() => {});
+    },
+  });
+}
+
+export function useRetryRun(taskId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (run: string) => apiFetch<ApiTaskDetail>(`/api/tasks/${taskId}/retry-run`, { method: "POST", body: JSON.stringify({ run }) }),
+    onSuccess: (detail) => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", taskId] }).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: ["projects", detail.project_id, "tasks"] }).catch(() => {});
+    },
+  });
+}
+
 export function useCreateTask(projectId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({

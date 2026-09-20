@@ -9,7 +9,10 @@ import { DiffViewer } from "../components/diff-viewer.js";
 import { SpecTab } from "../components/spec-tab.js";
 import { ScreenshotsTab } from "../components/screenshots-tab.js";
 import { WarningsBanner } from "../components/warnings-banner.js";
+import { TaskControls, RunLaneRetryButton } from "../components/task-controls.js";
 import { useTaskDetail, useTaskDiff, useTaskEvents } from "../api/task-detail.js";
+import { useProjects } from "../api/projects.js";
+import type { ApiTaskDetail } from "@crewbench/contract";
 
 interface LaneEvent {
   seq: number;
@@ -34,7 +37,7 @@ function summarizeEvent(event: { type: string; data: unknown; ts: string; seq: n
   }
 }
 
-function Header({ detail }: { detail: NonNullable<ReturnType<typeof useTaskDetail>["data"]> }) {
+function Header({ detail, projectPath }: { detail: NonNullable<ReturnType<typeof useTaskDetail>["data"]>; projectPath: string | undefined }) {
   const lineup = detail.lineup as Record<string, { cli?: string; model?: string; effort?: string; permissions?: string }>;
   return (
     <Card className="flex flex-col gap-2">
@@ -57,11 +60,16 @@ function Header({ detail }: { detail: NonNullable<ReturnType<typeof useTaskDetai
         ))}
       </div>
       {detail.stuck_reason && <p className="text-xs text-amber-500">stuck: {detail.stuck_reason}</p>}
+      {detail.owner === "app" && Object.keys(detail.lineup).length > 0 && (
+        <div className="pt-1">
+          <TaskControls detail={detail} projectPath={projectPath} />
+        </div>
+      )}
     </Card>
   );
 }
 
-function AgentLanes({ lanes }: { lanes: Record<string, LaneEvent[]> }) {
+function AgentLanes({ lanes, taskId, detail }: { lanes: Record<string, LaneEvent[]>; taskId: string; detail: ApiTaskDetail }) {
   const runs = Object.keys(lanes).sort();
   if (runs.length === 0) {
     return <p className="text-sm text-[var(--color-fg-muted)]">No agent runs recorded yet.</p>;
@@ -70,7 +78,10 @@ function AgentLanes({ lanes }: { lanes: Record<string, LaneEvent[]> }) {
     <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
       {runs.map((run) => (
         <Card key={run} className="flex max-h-72 flex-col gap-1 overflow-y-auto">
-          <p className="sticky top-0 bg-[var(--color-bg)] pb-1 text-sm font-medium">{run}</p>
+          <div className="sticky top-0 flex items-center justify-between bg-[var(--color-bg)] pb-1">
+            <p className="text-sm font-medium">{run}</p>
+            {detail.owner === "app" && <RunLaneRetryButton taskId={taskId} run={run} detail={detail} />}
+          </div>
           {lanes[run]?.map((event) => (
             <p key={event.seq} className="text-xs text-[var(--color-fg-muted)]">
               <span className="text-[var(--color-fg)]">{event.type}</span> {event.text}
@@ -142,6 +153,7 @@ function DiffTab({ taskId, round }: { taskId: string; round: number }) {
 export function TaskDetailPage() {
   const { taskId } = useParams({ from: "/tasks/$taskId" });
   const { data: detail, isLoading, isError, error } = useTaskDetail(taskId);
+  const { data: projects } = useProjects();
   const [lanes, setLanes] = useState<Record<string, LaneEvent[]>>({});
   const [tab, setTab] = useState<Tab>("Rounds & lanes");
 
@@ -160,10 +172,11 @@ export function TaskDetailPage() {
   if (!detail || !taskId) return null;
 
   const screenshots = detail.rounds.flatMap((r) => r.tester?.screenshots ?? []);
+  const projectPath = projects?.find((p) => p.id === detail.project_id)?.path;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-4">
-      <Header detail={detail} />
+      <Header detail={detail} projectPath={projectPath} />
       <LineupCta detail={detail} taskId={taskId} />
       <WarningsBanner warnings={detail.warnings} />
 
@@ -187,7 +200,7 @@ export function TaskDetailPage() {
           </section>
           <section>
             <h2 className="mb-2 text-sm font-semibold">Agent lanes</h2>
-            <AgentLanes lanes={lanes} />
+            <AgentLanes lanes={lanes} taskId={taskId} detail={detail} />
           </section>
         </>
       )}
