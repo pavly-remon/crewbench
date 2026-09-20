@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startDaemon, type DaemonHandle } from "../src/server.js";
 
 /** A fake CLI standing in for claude/codex/copilot/agy's real plugin
@@ -47,6 +47,18 @@ async function readCalls(recordPath: string): Promise<string[][]> {
 describe("POST /api/plugin-install/:cli", () => {
   let daemon: DaemonHandle;
   const savedEnv = { ...process.env };
+  // Real, pre-existing isolation gap fixed here -- see
+  // test/fs-browse.test.ts's own comment for the full story
+  // (`daemonHome()` defaults to the real `~/.crewbench` without this) --
+  // an especially real risk for *this* file, since a `startDaemon()`
+  // that read a real, populated `~/.crewbench/projects.json` could have
+  // its own `reattachProject()` genuinely re-drive a real task.
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "crewbench-plugininstall-home-"));
+    process.env.CREWBENCH_HOME = home;
+  });
 
   afterEach(async () => {
     await daemon.close();

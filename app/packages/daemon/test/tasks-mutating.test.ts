@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startDaemon, type DaemonHandle } from "../src/server.js";
@@ -7,6 +8,15 @@ import { gitRepo } from "./helpers.js";
 describe("POST /api/projects/:pid/tasks (Phase 3 milestone 3)", () => {
   let daemon: DaemonHandle;
   const savedEnv = { ...process.env };
+  // Real, pre-existing isolation gap fixed here -- see
+  // test/fs-browse.test.ts's own comment for the full story
+  // (`daemonHome()` defaults to the real `~/.crewbench` without this).
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "crewbench-tasksmutating-home-"));
+    process.env.CREWBENCH_HOME = home;
+  });
 
   afterEach(async () => {
     await daemon.close();

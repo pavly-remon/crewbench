@@ -51,7 +51,27 @@ export async function resumeCommand(argv: string[], root: string): Promise<void>
   console.log(`${taskState.title} (${taskState.id})`);
   console.log(`Last known phase: ${taskState.phase}, round ${taskState.round}.`);
 
-  if (["done", "stopped", "failed"].includes(taskState.phase)) {
+  // Phase 4 milestone 3, a real, disclosed, pre-existing bug this
+  // milestone's own embedded-terminal work found live, not invented:
+  // this check used to bail out for "stopped"/"failed" too, matching
+  // skills/resume/SKILL.md's *original*, plugin-only-workflow intent
+  // (§1: offer only a task whose phase is "not done/stopped/failed" --
+  // once stopped, a human must intervene some other way). But Phase 3
+  // milestone 6 established a real, reviewed-and-approved, genuinely
+  // *different* meaning for those two phases in the daemon-hosted flow:
+  // routes/task-control.ts's own `POST .../resume` explicitly treats
+  // "stopped"/"failed" as the resumable set (rejecting only anything
+  // else), the whole reason TaskControls' in-app Resume button exists.
+  // task-controls.tsx's own CopyResumeCommand claims to build "the exact
+  // same resume" for running from a terminal instead -- but until this
+  // fix, pasting that exact command into a terminal for a stopped/failed
+  // task silently printed this message and exited, doing nothing at
+  // all. Confirmed by actually running it, not assumed: this milestone's
+  // own real test drives `crewbench resume` against a task in phase
+  // "stopped" and checks the real process output. Narrowed to bail out
+  // for "done" only, matching the daemon route's own already-approved
+  // resumable set exactly.
+  if (taskState.phase === "done") {
     console.log("This task already reached a terminal phase -- nothing to resume.");
     return;
   }

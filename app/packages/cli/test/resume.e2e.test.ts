@@ -100,7 +100,7 @@ describe("crewbench resume (end to end)", () => {
     expect(state.round).toBeGreaterThanOrEqual(2);
   }, 30_000);
 
-  it("reports nothing to resume for a task already done/stopped/failed", async () => {
+  it("reports nothing to resume for a task already done", async () => {
     const repo = await gitRepo();
     const taskDir = join(repo, ".crewbench", "tasks", "already-done");
     await createTask(taskDir, { id: "already-done", command: "new-task", title: "T" });
@@ -111,5 +111,35 @@ describe("crewbench resume (end to end)", () => {
       execFile(process.execPath, [BIN, "resume", "already-done"], { cwd: repo, env, timeout: 15_000 }, (_err, out) => resolveResult({ stdout: out }));
     });
     expect(stdout).toContain("already reached a terminal phase");
+  });
+
+  /** Phase 4 milestone 3, a real, disclosed, pre-existing bug this
+   * milestone's own embedded-terminal work found live: this early check
+   * used to also bail out for "stopped"/"failed" (identically to "done"
+   * above), matching skills/resume/SKILL.md's original, plugin-only-
+   * workflow intent -- but Phase 3 milestone 6 already established, real
+   * and reviewed-and-approved, that "stopped"/"failed" are the daemon's
+   * own resumable set (`routes/task-control.ts`'s `POST .../resume`).
+   * Until this milestone's fix, `task-controls.tsx`'s own
+   * `CopyResumeCommand` -- which claims to build "the exact same resume"
+   * for running from a terminal -- silently did nothing at all for a
+   * stopped task if you actually ran the command it copied. This test
+   * proves the real fix: a "stopped" task no longer hits the old
+   * "already reached a terminal phase" message -- it proceeds to the
+   * next real check instead (no saved lineup, since this task was never
+   * actually dispatched), a different, real failure further down the
+   * same function, not the old early bail-out. */
+  it("no longer reports 'nothing to resume' for a stopped task -- proceeds past the old early bail-out", async () => {
+    const repo = await gitRepo();
+    const taskDir = join(repo, ".crewbench", "tasks", "was-stopped");
+    await createTask(taskDir, { id: "was-stopped", command: "new-task", title: "T" });
+    await setField(taskDir, "phase", "stopped");
+
+    const env = { ...process.env, CREWBENCH_ROOT: REPO_ROOT };
+    const { stdout } = await new Promise<{ stdout: string }>((resolveResult) => {
+      execFile(process.execPath, [BIN, "resume", "was-stopped"], { cwd: repo, env, timeout: 15_000 }, (_err, out) => resolveResult({ stdout: out }));
+    });
+    expect(stdout).not.toContain("already reached a terminal phase");
+    expect(stdout).toContain("no saved lineup");
   });
 });

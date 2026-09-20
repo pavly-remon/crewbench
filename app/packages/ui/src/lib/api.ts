@@ -31,6 +31,21 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return (await res.json()) as T;
 }
 
+/** The embedded-terminal PTY channel's own connection URL (Phase 4
+ * milestone 3) -- a real `WebSocket`, which has no mechanism to set
+ * custom request headers at all (unlike `apiFetch`/`openEventStream`
+ * above, both real header-bearing `fetch()` calls) -- so the token
+ * travels as `?token=`, a real, narrowly-scoped, disclosed exception
+ * matched exactly on the daemon side (`auth.ts`'s own
+ * `isPtyWebsocketPath()`, gated to this one path shape only). Same-origin
+ * `API_BASE` swapped from `http(s)` to `ws(s)`, not hardcoded, so this
+ * still works under `vite dev`'s own `VITE_API_BASE` override. */
+export function ptyWebSocketUrl(taskId: string): string {
+  const token = getToken() ?? "";
+  const wsBase = API_BASE.replace(/^http/, "ws");
+  return `${wsBase}/api/tasks/${encodeURIComponent(taskId)}/pty?token=${encodeURIComponent(token)}`;
+}
+
 /** An `EventSource`-equivalent that can send a bearer token -- the native
  * `EventSource` constructor has no way to set custom request headers, so
  * a fetch-based reader is used instead (docs/app/phase-2-plan.md's

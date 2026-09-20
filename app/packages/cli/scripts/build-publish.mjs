@@ -34,22 +34,49 @@ const outDir = join(cliRoot, "publish");
 
 // Real npm dependencies the bundle needs at runtime (confirmed by
 // grepping every package's actual `from "<pkg>"` imports, not assumed --
-// zod, fastify, @fastify/static, chokidar; everything else imported
-// across contract/adapters/engine/daemon/cli is either a workspace
-// package (inlined below by esbuild) or a node: builtin). Versions read
-// from each package's own package.json, not hand-typed, so this can't
-// silently drift from what's actually installed.
-const EXTERNAL_DEPS = ["zod", "fastify", "@fastify/static", "chokidar"];
+// zod, fastify, @fastify/static, chokidar, @fastify/websocket (Phase 4
+// milestone 3 -- the embedded terminal's own WebSocket channel);
+// everything else imported across contract/adapters/engine/daemon/cli is
+// either a workspace package (inlined below by esbuild) or a node:
+// builtin). Versions read from each package's own package.json, not
+// hand-typed, so this can't silently drift from what's actually
+// installed. Kept external (not esbuild-inlined) for the same reason as
+// milestone 1's own original four: avoids duplicating a real npm
+// package's worth of code into this one file for no reason -- caught
+// live this milestone (build-publish's very first re-run after adding
+// @fastify/websocket to the daemon jumped bin.js from ~212KB to ~465KB
+// because it wasn't in this list yet and got bundled in whole).
+const EXTERNAL_DEPS = ["zod", "fastify", "@fastify/static", "@fastify/websocket", "chokidar"];
 
-async function resolveDepVersion(name) {
+// node-pty (Phase 4 milestone 3) is a *native* module -- it ships a real
+// compiled `.node` binary plus a `spawn-helper` executable it locates
+// relative to its own package directory at runtime (`pty-capability.ts`'s
+// own docstring has the full story on why that directory's exec bit
+// needs defensive fixing up too). esbuild already leaves it alone as-is
+// (confirmed by reading the actual bundled bin.js: `require("node-pty")`
+// stays a real, dynamic runtime call, since `pty-capability.ts` calls it
+// through a `createRequire()`-bound variable, not a literal `require(...)`
+// esbuild would try to statically resolve and inline) -- but a *real,
+// separate* gap this milestone's own live pack+install check caught: the
+// generated package.json below never listed node-pty as a dependency of
+// any kind, so a real `npm install crewbench` would never even attempt
+// to install it, permanently disabling the embedded terminal for every
+// real user regardless of platform. Listed here, separately from
+// EXTERNAL_DEPS, since it belongs in `optionalDependencies`, not
+// `dependencies` -- a failed install must never fail the whole package
+// install (Design decision 3's own "must never break install... when it
+// does" requirement).
+const OPTIONAL_EXTERNAL_DEPS = ["node-pty"];
+
+async function resolveDepVersion(name, { optional = false } = {}) {
   for (const pkg of ["daemon", "engine", "contract", "adapters", "cli"]) {
     const pkgJsonPath = join(appRoot, "packages", pkg, "package.json");
     if (!existsSync(pkgJsonPath)) continue;
     const pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf-8"));
-    const version = pkgJson.dependencies?.[name];
+    const version = optional ? pkgJson.optionalDependencies?.[name] : pkgJson.dependencies?.[name];
     if (version) return version;
   }
-  throw new Error(`could not find a declared version for ${name} in any workspace package.json`);
+  throw new Error(`could not find a declared ${optional ? "optional " : ""}version for ${name} in any workspace package.json`);
 }
 
 async function main() {
@@ -80,7 +107,12 @@ async function main() {
     // packages are left external, resolved normally by npm at install
     // time instead of being bundled in (avoids duplicating a full web
     // framework's worth of code into this file for no reason).
-    external: EXTERNAL_DEPS,
+    // OPTIONAL_EXTERNAL_DEPS (node-pty) also passed here, explicitly --
+    // esbuild already leaves it alone as a dynamic `require()` (see that
+    // list's own docstring), but marking it external too is cheap,
+    // correct, and removes any doubt for a future esbuild version that
+    // might analyze dynamic requires more aggressively.
+    external: [...EXTERNAL_DEPS, ...OPTIONAL_EXTERNAL_DEPS],
     // No explicit banner: esbuild already recognizes and preserves a
     // `#!`-shebang line on the entry file itself (bin.ts has one) --
     // adding one here too duplicated it, caught live by actually reading
@@ -117,6 +149,10 @@ async function main() {
   for (const dep of EXTERNAL_DEPS) {
     dependencies[dep] = await resolveDepVersion(dep);
   }
+  const optionalDependencies = {};
+  for (const dep of OPTIONAL_EXTERNAL_DEPS) {
+    optionalDependencies[dep] = await resolveDepVersion(dep, { optional: true });
+  }
 
   const publishPkgJson = {
     name: cliPkgJson.name,
@@ -132,6 +168,7 @@ async function main() {
     main: "./bin.js",
     engines: { node: ">=20" },
     dependencies,
+    optionalDependencies,
     files: ["bin.js", "ui-dist", "agents", "schemas", "config"],
     repository: cliPkgJson.repository,
     license: cliPkgJson.license,
@@ -144,7 +181,10 @@ async function main() {
     if (publishPkgJson[key] === undefined) delete publishPkgJson[key];
   }
   await writeFile(join(outDir, "package.json"), JSON.stringify(publishPkgJson, null, 2) + "\n", "utf-8");
-  console.log(`[build-publish] wrote publish/package.json (${Object.keys(dependencies).length} real npm dependencies)`);
+  console.log(
+    `[build-publish] wrote publish/package.json (${Object.keys(dependencies).length} real npm dependencies, ` +
+      `${Object.keys(optionalDependencies).length} optional)`,
+  );
 
   console.log(`[build-publish] done -- publish bundle ready at ${outDir}`);
 }

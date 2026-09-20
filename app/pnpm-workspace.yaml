@@ -5,3 +5,10 @@ allowBuilds:
   # its postinstall step just downloads/selects the right platform binary --
   # a normal, expected build step for this well-known package.
   esbuild: true
+  # node-pty's postinstall (scripts/post-install.js) chmods +x its
+  # prebuilt native spawn-helper binary -- confirmed live (Phase 4
+  # milestone 3's own investigation) that skipping it leaves node-pty
+  # loadable (require() succeeds) but broken at actual spawn time
+  # ("posix_spawnp failed", since the helper binary isn't executable).
+  # A well-known, reputable package (xterm.js's own pty backend); allowed.
+  node-pty: true

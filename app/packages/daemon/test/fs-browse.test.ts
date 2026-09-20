@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startDaemon, type DaemonHandle } from "../src/server.js";
 
 const execFileAsync = promisify(execFile);
@@ -12,6 +12,26 @@ const execFileAsync = promisify(execFile);
 describe("GET /api/fs/browse", () => {
   let daemon: DaemonHandle;
   const savedEnv = { ...process.env };
+  // Real, pre-existing gap found live during Phase 4 milestone 3, fixed
+  // repo-wide, not just for that milestone's own new test file:
+  // `daemonHome()` defaults to the real `~/.crewbench` when
+  // `CREWBENCH_HOME` isn't set -- `startDaemon()` here (and in several
+  // other daemon test files) never overrode it, so every one of these
+  // tests' daemons read (and, worse, `reattachProject()`'s own startup
+  // logic could act on) this real machine's own real
+  // `~/.crewbench/projects.json`. Confirmed as a real, active problem,
+  // not theoretical: a real `pnpm -r test` run left over 300 stale
+  // temp-directory project entries in that real file (cleaned up
+  // separately, outside this repo). Orthogonal to this file's own
+  // "defaults to os.homedir()" assertions below -- that's the fs-browse
+  // *route*'s own default starting directory, a completely different
+  // concept from `CREWBENCH_HOME`/`daemonHome()`.
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "crewbench-fsbrowse-home-"));
+    process.env.CREWBENCH_HOME = home;
+  });
 
   afterEach(async () => {
     await daemon.close();

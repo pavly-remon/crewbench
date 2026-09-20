@@ -29,6 +29,29 @@ function tokensMatch(presented: string, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Phase 4 milestone 3's own real, disclosed, narrowly-scoped exception
+ * to the header-only rule above: a browser's native `WebSocket`
+ * constructor has no mechanism to set custom request headers at all (no
+ * `Authorization` header is possible on a WS handshake from a web page,
+ * confirmed against the WHATWG spec before relying on this, not
+ * assumed) -- the embedded-terminal PTY channel (`routes/pty.ts`) is a
+ * real `WebSocket` connection, so the header-only check above can never
+ * succeed for it. Accepting `?token=` as a fallback, but *only* for this
+ * one path prefix, not generally: the token already lives in the
+ * browser's own URL (the fragment the daemon's own `crewbench ui`
+ * opens, Phase 2 Design decision 7), so putting it in a *query* string
+ * for this one same-origin request isn't a new exposure of the secret
+ * itself -- it's a different transport for something already in the
+ * page's own address bar -- but query strings can end up in proxy/server
+ * access logs in a way a header doesn't, which is why this isn't the
+ * general rule. */
+const TOKEN_QUERY_PARAM_PATHS = ["/api/tasks/", "/pty"]; // both must match -- see isPtyWebsocketPath()
+
+function isPtyWebsocketPath(url: string): boolean {
+  const path = url.split("?")[0] ?? url;
+  return path.startsWith(TOKEN_QUERY_PARAM_PATHS[0] as string) && path.endsWith(TOKEN_QUERY_PARAM_PATHS[1] as string);
+}
+
 export function createAuthHook(token: string, port: number) {
   const allowedOrigins = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
 
@@ -43,7 +66,11 @@ export function createAuthHook(token: string, port: number) {
     if (!request.url.startsWith("/api/")) return;
 
     const auth = request.headers.authorization;
-    const presented = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null;
+    let presented = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null;
+    if (!presented && isPtyWebsocketPath(request.url)) {
+      const query = request.query as Record<string, unknown>;
+      presented = typeof query.token === "string" ? query.token : null;
+    }
     if (!presented || !tokensMatch(presented, token)) {
       await reply.code(401).send({ error: "missing or invalid bearer token" });
       return;

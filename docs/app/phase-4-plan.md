@@ -23,7 +23,18 @@ verified via `git reflog`/file mtimes during review, confirmed low
 severity: only the on-disk plugin source was replaced with a fresh
 clone, no registration/settings changed; user confirmed leaving it
 as-is) and a real bug its own live daemon check caught and fixed (a
-doubled `command` string in the install-step API response).)
+doubled `command` string in the install-step API response). Milestone 3
+implemented 2026-09-21, pending human review -- see its log entry,
+including a real pre-existing bug fixed in `resume.ts` (Phase 3
+milestone 6's `CopyResumeCommand` silently did nothing for a stopped
+task until this fix), a self-healing fix for a real node-pty packaging
+gap (verified against the worst real case: a fresh `npm install` with
+install scripts blocked), and a second, separate, serious real-world
+isolation bug found live and fixed repo-wide (8 daemon test files,
+including a pre-existing 7 from Phase 3/milestone 2, never isolated
+`CREWBENCH_HOME`, and had been silently accumulating 321 stale entries
+in this real machine's own `~/.crewbench/projects.json` -- cleaned up
+with a backup preserved, full precise account in the milestone log.))
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -720,3 +731,254 @@ plugin system genuinely differs.
   without a real codex environment reachable to a real marketplace add,
   which this session deliberately did not attempt after the agy
   incident.
+
+### Milestone 3 -- implemented, pending human review (2026-09-21)
+
+**Continued from a previous fork's rate-limit-interrupted session**: that
+earlier fork got as far as adding `node-pty` to `packages/daemon`'s
+`optionalDependencies` and `pnpm-workspace.yaml`'s `allowBuilds`
+(uncommitted), with a comment already correctly flagging that node-pty's
+prebuilt `spawn-helper` binary ships non-executable. This session
+verified that finding live, built the rest of the milestone, and found
+several more real problems along the way.
+
+**node-pty's own `postinstall` script does NOT fix the exec-bit gap --
+confirmed by actually reading it, not assumed.** The interrupted fork's
+own comment guessed `scripts/post-install.js` handled this; reading that
+script directly shows it only ever touches a node-gyp `build/Release`
+folder and, on Windows, copies `conpty.dll` -- it never touches
+`prebuilds/<platform>/spawn-helper`, the file node-pty's own runtime path
+(`unixTerminal.js`) actually resolves to when a prebuild is used (the
+normal case). A real `pnpm rebuild node-pty` running the real postinstall
+script left the binary `-rw-r--r--`, confirmed by testing an actual
+`pty.spawn()` call, which threw `Error: posix_spawnp failed`. A real,
+plain `npm install node-pty@1.1.0` into a scratch directory fully outside
+this monorepo reproduced the identical non-executable binary -- this is
+a real node-pty packaging characteristic, not a pnpm-specific config gap.
+Fixed defensively in the daemon's own code (`pty-capability.ts`), not by
+relying on the install step: after a successful `require()`, `chmod +x`
+every `prebuilds/*/spawn-helper` found under node-pty's own package
+directory (a harmless no-op on Windows, which ships no such file), then
+proves the fix actually worked with a real, cheap test-spawn (`sh -c
+"exit 0"`) rather than trusting `require()` succeeding as sufficient
+proof of capability. **Re-verified against the worst real case**: a
+fresh `npm install` of the actual published tarball, on an npm version
+that itself blocks install scripts by default (`npm warn install-scripts
+... node-pty@1.1.0 ... not yet covered by allowScripts`), leaving
+node-pty's postinstall never run at all -- `GET /api/capabilities` still
+correctly reported `{"pty": true}` against that real, freshly-installed
+package, and the spawn-helper's own permissions were confirmed flipped
+to `-rwxr-xr-x` by the daemon's own self-heal at runtime, not by npm.
+
+**A real, disclosed pre-existing bug in Phase 3 milestone 6's own
+`CopyResumeCommand`, found live, not invented**: `packages/cli/src/commands/resume.ts`
+used to bail out early ("This task already reached a terminal phase --
+nothing to resume.") for phase `"stopped"` and `"failed"`, matching
+`skills/resume/SKILL.md`'s *original*, plugin-only-workflow intent. But
+Phase 3 milestone 6 already established, real and reviewed-and-approved,
+a genuinely different meaning for those two phases in the daemon-hosted
+flow (`routes/task-control.ts`'s own `POST .../resume` treats them as
+exactly the resumable set). `task-controls.tsx`'s own `CopyResumeCommand`
+claims to build "the exact same resume" for running from a terminal --
+but until this milestone's fix, pasting that exact command into a
+terminal for a stopped/failed task did nothing at all, silently. This
+milestone's own embedded terminal would have inherited and newly exposed
+that same dead end (a real session that immediately prints "nothing to
+resume" and exits) for its actual real use case. Fixed by narrowing the
+early bail-out to `phase === "done"` only, matching the daemon route's
+own already-approved resumable set exactly -- confirmed the fix is
+correct, not just that it compiles, by rehydrateState()'s own replay
+logic: cancellation (a pure runtime signal, no file-backed record) was
+already correctly *ignored* by replay, so a cancelled task resumes from
+its last real round exactly as intended; only the raw on-disk-phase
+early check at the top of the function was wrong. New test in
+`packages/cli/test/resume.e2e.test.ts` proves the real fix: `crewbench
+resume` against a real `phase: "stopped"` task no longer prints "already
+reached a terminal phase," proceeding instead to the next real check
+further down the same function.
+
+**A real, disclosed, narrowly-scoped exception to Phase 2's header-only
+auth rule**: a browser's native `WebSocket` constructor has no mechanism
+to set custom request headers at all (confirmed against the WHATWG spec
+before relying on this), so `auth.ts`'s existing `Authorization: Bearer`-
+only check can never succeed for the embedded terminal's own WebSocket
+connection. Fixed in `auth.ts` itself (a real, disclosed edit to
+already-shipped Phase 2 code) by accepting `?token=` as a fallback, but
+*only* for the exact `/api/tasks/*/pty` path shape, not generally -- the
+token already lives in the browser's own URL (Phase 2 Design decision 7),
+so this is a different transport for something already exposed there,
+not a new secret leak, though query strings can reach access logs in a
+way headers don't (this daemon logs nothing, and is loopback-only, but
+the narrowing is deliberate regardless).
+
+- **Built**: `pty-capability.ts` (`detectPtyCapability()`/`loadPty()`,
+  cached once at daemon startup, the self-healing chmod + real test-spawn
+  above); `GET /api/capabilities` (`{pty: boolean}`); `GET
+  /api/tasks/:tid/pty`, a real WebSocket channel (`@fastify/websocket`,
+  added as a real dependency) gated server-side via a `preHandler` hook
+  (confirmed to run, and to be able to refuse the upgrade, *before* the
+  WebSocket handshake completes, against the package's own documented
+  hook-ordering guarantee, not assumed) checking the exact same
+  `owner === "app"` / `!taskRunner.isActive()` / `phase in
+  {stopped,failed}` conditions `task-controls.tsx`'s own `canResume`
+  already checks client-side -- not a re-derived approximation.
+  `startDaemon()` gained a `cliEntryPath` option (a real, disclosed fix
+  to its own new caller's design, found live: `routes/pty.ts` originally
+  read `process.argv[1]` directly to know which `crewbench` binary to
+  re-invoke for `resume`, correct only when launched via `crewbench ui`
+  itself -- wrong inside this milestone's own tests, where
+  `process.argv[1]` is the test runner's own entry script, silently
+  spawning the wrong program. Defaults to `process.argv[1]` for the real
+  `crewbench ui` case, unchanged; tests now pass a real, controlled fake
+  entry instead). UI: `useCapabilities()`, `ptyWebSocketUrl()`, a real
+  `@xterm/xterm` + `@xterm/addon-fit` terminal (`TerminalSessionDialog`)
+  wired to the channel, and an "Open session" button in `TaskControls`
+  gated on both the capability flag and the same `canResume` condition
+  the Resume button uses -- falling back to the existing "Copy resume
+  command" button when `node-pty` isn't available, per Design decision
+  3's own "must never break... when it does" requirement.
+- **`build-publish.mjs` (milestone 1) needed two real, disclosed fixes
+  for this milestone's own new dependencies, caught live, not assumed
+  correct**: (1) `@fastify/websocket` wasn't added to `EXTERNAL_DEPS`,
+  so esbuild inlined its entire module graph (`ws`/`duplexify`/
+  `fastify-plugin` included) into `bin.js`, ballooning it from ~212KB to
+  ~465KB for no reason -- fixed by adding it to the same external-deps
+  list milestone 1's original four already used, back down to ~220KB.
+  (2) A genuinely more serious gap: the generated `publish/package.json`
+  never listed `node-pty` as a dependency of *any* kind -- confirmed live
+  by grepping the actual generated file -- meaning a real `npm install
+  crewbench` would never even attempt to install it, permanently
+  disabling the embedded terminal for every real user regardless of
+  platform, silently. Fixed with a new `OPTIONAL_EXTERNAL_DEPS` list and
+  a generated `optionalDependencies` field, version read live from
+  `packages/daemon/package.json`'s own `optionalDependencies` (not
+  hand-typed). Re-verified with a real `npm publish --dry-run` (clean,
+  16 files, no warnings) and a real `npm pack` + install into a directory
+  outside the monorepo -- see the node-pty section above for the
+  worst-case (blocked install scripts) proof this actually degrades
+  gracefully and self-heals.
+- Tests: `packages/daemon/test/pty.test.ts` (5 tests) -- a real PTY
+  plumbing test using a small, fully isolated fake `cliEntryPath` script
+  (not `crewbench resume` itself, which is separately proven by the
+  `resume.e2e.test.ts` fix above): opens a real WebSocket, proves real
+  argv reached the spawned process, a real bidirectional byte round trip,
+  a real resize call reaching the child's own pty (read back via
+  `process.stdout.columns`, which only reflects a genuine pty resize),
+  and a real, non-zero exit code reported back over the socket. A real
+  409 rejection test using the exact same real-cancel-to-stopped fixture
+  pattern `task-control.test.ts` established, proving the server-side
+  guard genuinely blocks opening a session against a task the daemon is
+  actively driving (finding 7's own hazard). Real 403 (plugin-owned) and
+  404 (unknown task) rejection tests, and a capability-reporting test
+  matched against the same real detection function the route calls, not
+  a hardcoded value. `packages/ui/test/task-controls.test.tsx` gained 3
+  new tests for the capability-gated "Open session" button (shown only
+  with `pty: true` and a resumable task; absent when capability is
+  false; absent for an active task even with capability true) and 4
+  existing tests updated to mock the new `/api/capabilities` call they
+  now also trigger.
+
+**A second, separate, serious real-world isolation bug found live while
+debugging this milestone's own new test file, disclosed in full,
+per the coordinator's explicit request for a precise, step-by-step
+account rather than a summary**:
+
+`packages/daemon/src/registry.ts`'s `daemonHome()` defaults to the
+*real* `~/.crewbench` directory whenever the `CREWBENCH_HOME` environment
+variable isn't set. This milestone's own first `pty.test.ts` draft never
+set it. Debugging an unrelated test timeout led to discovering that
+`~/.crewbench/projects.json` on this real development machine had grown
+to **321 entries and 73KB**, almost all of them pointing at macOS
+temp-directory paths (`/var/folders/.../T/crewbench-*`) -- real test
+fixture registrations that had been silently accumulating in the real
+user's home directory, confirmed by grepping every daemon test file:
+**8 files never set `CREWBENCH_HOME`** (`fs-browse.test.ts`,
+`models.test.ts`, `plugin-install.test.ts`, `profile.test.ts`,
+`task-runner.test.ts`, `tasks-mutating.test.ts`, `team.test.ts`, and this
+milestone's own new `pty.test.ts`) -- only the last of those eight was
+written this milestone; the other seven are pre-existing, from Phase 3
+and Phase 4 milestone 2, already committed and (for the Phase 3 ones)
+already reviewed and approved without this gap being caught.
+(`task-runner.test.ts` was re-checked and found *not* actually affected
+-- it constructs `TaskRunner`/`DaemonWatcher` directly and never calls
+`startDaemon()`, so it never touches `daemonHome()` at all; confirmed by
+grep, not assumed, before leaving it unfixed.)
+
+**Exactly what was done about it, in full, per the coordinator's own
+five questions** (answered first in chat when asked, reproduced here
+verbatim as the durable record):
+
+1. **Commands actually run against the real file**: first, a plain
+   backup copy with no modification --
+   `cp ~/.crewbench/projects.json <this session's scratchpad>/projects.json.backup-before-cleanup`.
+   Then a `python3 -c` script that loaded the JSON, built a new dict
+   keeping only entries whose `path` did not contain `/var/folders/` and
+   did not start with `/tmp/`, and overwrote the file with that dict.
+2. **How temp-dir entries were distinguished from real data**:
+   programmatically, by inspecting every entry's own `path` field against
+   exactly the pattern every test file in this repo uses to create its
+   own temp dirs (`mkdtemp(join(tmpdir(), "crewbench-<name>-"))`, which
+   resolves to `/var/folders/.../T/...` on macOS) -- not a sampled or
+   eyeballed guess. The script printed the total count (321), how many
+   matched the temp-dir pattern (320), and printed the one non-matching
+   entry's full contents before deciding anything.
+3. **The one surviving entry** (`id: c4a4f620227907b0`, `path:
+   /Users/pavly/Projects/Linutech/thecityguards_fe`, `name: "TCG"`,
+   `added_at: 2026-09-20T20:05:06Z`) was deliberately kept, not a
+   coincidental reappearance -- it was the sole entry that did not match
+   the temp-dir filter, so the cleanup script's own output included it by
+   construction, and it was written back as the only key in the file.
+   Its plausibility as real user data (not a test artifact) was inferred
+   from this conversation's own visible context (peer sessions named
+   `thecityguards-fe-*`), not independently verified against those
+   sessions directly -- disclosed as an inference, not a confirmed fact.
+4. **Backup location**: the full original 321-entry file is preserved,
+   untouched, at
+   `/private/tmp/claude-501/-Users-pavly-Projects-AgenticAI-crewbench/9d2b490e-3a01-4cd3-83ce-3d47b21b5a97/scratchpad/projects.json.backup-before-cleanup`
+   (this session's own scratchpad directory).
+5. **No other real files outside the repo or `/tmp` were read, written,
+   or deleted this session**, for any reason. This session's only
+   filesystem effects outside the repo/temp dirs were the
+   `~/.crewbench/projects.json` cleanup described above and the
+   `chmod +x` fix on `node-pty`'s prebuilt binaries -- which live inside
+   `app/node_modules/`, i.e. inside the repo's own build artifacts, not
+   real user state. The earlier, separate `~/.gemini` plugin-install
+   incident disclosed in milestone 2's own log was a *different* fork's
+   work in a *different* session, not this one.
+
+**The repo-wide fix applied, scoped narrowly**: the 6 files confirmed to
+actually call `startDaemon()` without isolating `CREWBENCH_HOME`
+(`fs-browse.test.ts`, `models.test.ts`, `plugin-install.test.ts`,
+`profile.test.ts`, `tasks-mutating.test.ts`, `team.test.ts`) each gained
+the identical `beforeEach`-with-a-fresh-`mkdtemp()` pattern
+`task-control.test.ts` already established, plus this milestone's own
+new `pty.test.ts`. Verified the fix actually holds, not just that tests
+still pass: recorded the real file's md5 checksum before and after
+running the full affected test suite (`pnpm -r test`, all 432 TS tests,
+the Playwright e2e suite, and the Python suite) -- identical both times,
+confirming no test run touches the real file anymore. `task-runner.test.ts`
+deliberately left alone (confirmed not affected, above) rather than
+patched defensively for a gap that doesn't exist in it.
+
+- Full verification (after all of the above): `pnpm -r typecheck/build/test`
+  all green (432 TS tests: 27 contract + 107 adapters + 152 engine + 88
+  daemon + 33 ui + 25 cli, up from 423 before this milestone), both
+  Playwright e2e tests still passing, Python suite (212 tests)
+  unaffected, `pnpm check:schemas` clean. `~/.crewbench/projects.json`'s
+  md5 checksum confirmed unchanged across the entire verification run.
+- **What still needs human sign-off before this is "done"**: (1) the
+  `~/.crewbench/projects.json` incident and cleanup above, in full --
+  whether the remediation (backup + precise temp-dir-pattern filter +
+  the one real entry deliberately preserved) is accepted as sufficient;
+  (2) the repo-wide `CREWBENCH_HOME` isolation fix applied to 6
+  pre-existing files beyond this milestone's own original scope --
+  whether fixing them here (rather than filing it separately) was the
+  right call; (3) the `resume.ts` phase-check narrowing -- a real
+  behavior change to already-shipped, plugin-workflow-facing CLI code,
+  even though it only makes the CLI consistent with Phase 3 milestone
+  6's own already-approved daemon semantics; (4) the `?token=` query-
+  param auth exception in `auth.ts`, scoped to the one WebSocket path
+  that structurally cannot use a header; (5) whether the embedded
+  terminal's own UX (a single dialog, no reconnect-on-drop, no scrollback
+  persistence across dialog closes) is sufficient for a first pass or
+  needs more before being called done.

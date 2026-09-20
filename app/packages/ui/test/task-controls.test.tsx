@@ -49,6 +49,7 @@ describe("TaskControls", () => {
   it("shows Cancel (not Resume) for an active task, and POSTs a bodyless cancel", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/api/capabilities")) return jsonResponse({ pty: false });
       if (url.includes("/cancel") && init?.method === "POST") {
         expect(JSON.parse(String(init.body))).toEqual({});
         return jsonResponse(baseDetail({ active: false, phase: "stopped" }));
@@ -68,6 +69,7 @@ describe("TaskControls", () => {
   it("shows Resume (not Cancel) for a stopped, inactive task, and calls resume with no body", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/api/capabilities")) return jsonResponse({ pty: false });
       if (url.includes("/resume") && init?.method === "POST") {
         expect(init.body).toBeUndefined();
         expect(new Headers(init.headers).has("Content-Type")).toBe(false);
@@ -88,6 +90,10 @@ describe("TaskControls", () => {
   it("copies a cd-and-resume one-liner to the clipboard when a project path is known", async () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal("navigator", { clipboard: { writeText } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ pty: false })),
+    );
 
     renderWithQuery(<TaskControls detail={baseDetail({ active: false, phase: "failed" })} projectPath="/repos/demo" />);
     fireEvent.click(screen.getByRole("button", { name: /copy resume command/i }));
@@ -96,10 +102,55 @@ describe("TaskControls", () => {
   });
 
   it("shows neither Cancel nor Resume for a task that's neither active nor stopped/failed", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ pty: false })),
+    );
     renderWithQuery(<TaskControls detail={baseDetail({ active: false, phase: "verifying" })} projectPath={undefined} />);
     expect(screen.queryByRole("button", { name: /^cancel$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^resume$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /copy resume command/i })).toBeInTheDocument();
+  });
+
+  it("shows 'Open session' alongside Resume when pty capability is available and the task is resumable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/capabilities")) return jsonResponse({ pty: true });
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    renderWithQuery(<TaskControls detail={baseDetail({ active: false, phase: "stopped" })} projectPath={undefined} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /open session/i })).toBeInTheDocument());
+  });
+
+  it("does not show 'Open session' when pty capability is unavailable, even for a resumable task", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/capabilities")) return jsonResponse({ pty: false });
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    renderWithQuery(<TaskControls detail={baseDetail({ active: false, phase: "stopped" })} projectPath={undefined} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^resume$/i })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /open session/i })).not.toBeInTheDocument();
+  });
+
+  it("does not show 'Open session' for an active task, even when pty capability is available", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/capabilities")) return jsonResponse({ pty: true });
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    renderWithQuery(<TaskControls detail={baseDetail({ active: true })} projectPath={undefined} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /open session/i })).not.toBeInTheDocument();
   });
 });
 

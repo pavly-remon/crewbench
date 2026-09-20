@@ -1,12 +1,21 @@
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startDaemon, type DaemonHandle } from "../src/server.js";
 
 describe("GET /api/models/:cli", () => {
   let daemon: DaemonHandle;
   const savedEnv = { ...process.env };
+  // Real, pre-existing isolation gap fixed here -- see
+  // test/fs-browse.test.ts's own comment for the full story
+  // (`daemonHome()` defaults to the real `~/.crewbench` without this).
+  let home: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "crewbench-models-home-"));
+    process.env.CREWBENCH_HOME = home;
+  });
 
   afterEach(async () => {
     await daemon.close();

@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Copy, Play, RotateCcw, XCircle } from "lucide-react";
+import { Copy, Play, RotateCcw, SquareTerminal, XCircle } from "lucide-react";
 import type { ApiTaskDetail } from "@crewbench/contract";
 import { Button } from "./button.js";
+import { TerminalSessionDialog } from "./terminal-session.js";
 import { useCancelTask, useResumeTask, useRetryRun } from "../api/tasks.js";
+import { useCapabilities } from "../api/capabilities.js";
 
 /** Copies `text` to the clipboard, best-effort -- the Clipboard API needs
  * a secure context and can throw (or simply not exist) in an embedded
@@ -41,21 +43,51 @@ function CopyResumeCommand({ taskId, projectPath }: { taskId: string; projectPat
   );
 }
 
-/** Task-level run controls (Phase 3 milestone 6): cancel (while the
- * daemon is actively driving this task), resume (once it's genuinely
- * stopped -- a real `POST .../resume` call, not just the clipboard
- * fallback below), and "copy resume command" -- a `crewbench resume
- * <id>` one-liner for running the exact same resume from a terminal
- * instead, e.g. when the daemon isn't running or the user wants to watch
- * it live outside the browser. The phase prompt's own UI bullet names
- * only "cancel, retry, copy resume command" for the agent lanes; adding
- * a real in-app Resume button here (not just the copy fallback) is a
- * disclosed interpretation -- the daemon route this milestone builds
- * would otherwise have no UI caller at all, which seemed like the wrong
- * call given every other milestone's own routes got a real UI caller. */
+/** "Open session" (Phase 4 milestone 3, Design decision 3): a real
+ * embedded terminal running `crewbench resume <id>` in a live xterm.js
+ * tab, gated on the *exact same* `canResume` condition the Resume button
+ * above already uses -- not a re-derived approximation of it (finding
+ * 7's own real hazard: opening a session against a task the daemon is
+ * already actively driving would race a second `driveTask()` loop
+ * against the first; `routes/pty.ts` enforces this server-side too, this
+ * client-side check only avoids showing a button that would just fail).
+ * Only rendered when `GET /api/capabilities` reports `pty: true` --
+ * `node-pty` genuinely failed to install/load on this machine otherwise,
+ * and `CopyResumeCommand` alone is shown instead, per Design decision
+ * 3's own "fallback: node-pty unavailable -> ... not a broken button." */
+function OpenSessionButton({ taskId, canResume }: { taskId: string; canResume: boolean }) {
+  const [open, setOpen] = useState(false);
+  if (!canResume) return null;
+  return (
+    <>
+      <Button variant="secondary" onClick={() => setOpen(true)}>
+        <SquareTerminal size={14} className="mr-1.5" />
+        Open session
+      </Button>
+      <TerminalSessionDialog open={open} onOpenChange={setOpen} taskId={taskId} />
+    </>
+  );
+}
+
+/** Task-level run controls (Phase 3 milestone 6, extended Phase 4
+ * milestone 3): cancel (while the daemon is actively driving this task),
+ * resume (once it's genuinely stopped -- a real `POST .../resume` call,
+ * not just the clipboard fallback below), "Open session" (a real
+ * embedded terminal, when `node-pty` is available on this machine), and
+ * "copy resume command" -- a `crewbench resume <id>` one-liner for
+ * running the exact same resume from a terminal instead, e.g. when the
+ * daemon isn't running, `node-pty` isn't available, or the user wants to
+ * watch it live outside the browser. The phase prompt's own UI bullet
+ * names only "cancel, retry, copy resume command" for the agent lanes;
+ * adding a real in-app Resume button here (not just the copy fallback)
+ * is a disclosed interpretation -- the daemon route this milestone
+ * builds would otherwise have no UI caller at all, which seemed like the
+ * wrong call given every other milestone's own routes got a real UI
+ * caller. */
 export function TaskControls({ detail, projectPath }: { detail: ApiTaskDetail; projectPath: string | undefined }) {
   const cancel = useCancelTask(detail.id);
   const resume = useResumeTask(detail.id);
+  const { data: capabilities } = useCapabilities();
   const canResume = !detail.active && (detail.phase === "stopped" || detail.phase === "failed");
 
   return (
@@ -72,6 +104,7 @@ export function TaskControls({ detail, projectPath }: { detail: ApiTaskDetail; p
           {resume.isPending ? "Resuming…" : "Resume"}
         </Button>
       )}
+      {capabilities?.pty && <OpenSessionButton taskId={detail.id} canResume={canResume} />}
       <CopyResumeCommand taskId={detail.id} projectPath={projectPath} />
       {cancel.isError && <p className="text-xs text-red-500">{cancel.error.message}</p>}
       {resume.isError && <p className="text-xs text-red-500">{resume.error.message}</p>}

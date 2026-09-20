@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import fastifyWebsocket from "@fastify/websocket";
 import { createAuthHook, generateToken } from "./auth.js";
 import { findOpenPort } from "./port.js";
 import { registerProjectRoutes } from "./routes/projects.js";
@@ -16,6 +17,7 @@ import { registerTaskControlRoutes } from "./routes/task-control.js";
 import { registerModelRoutes } from "./routes/models.js";
 import { registerFsBrowseRoutes } from "./routes/fs-browse.js";
 import { registerPluginInstallRoutes } from "./routes/plugin-install.js";
+import { registerCapabilityRoutes, registerPtyRoutes } from "./routes/pty.js";
 import { registerUiStatic } from "./static-ui.js";
 import { DEFAULT_PORT, loadConfig } from "./config.js";
 import { loadRegistry } from "./registry.js";
@@ -35,6 +37,20 @@ export interface StartDaemonOptions {
   /** Overrides config.json's port and the built-in default -- `crewbench
    * ui --port N`. */
   port?: number;
+  /** Phase 4 milestone 3: the real `crewbench` CLI entry file the
+   * embedded-terminal PTY channel (`routes/pty.ts`) re-invokes as
+   * `<execPath> <cliEntryPath> resume <task-id>` -- **not** read from
+   * `process.argv[1]` inside that route itself, a real bug this
+   * milestone's own test caught live: `process.argv[1]` is whichever
+   * script launched *this* process, which is `crewbench`'s own `bin.js`
+   * when started via `crewbench ui`, but is the test runner's own entry
+   * script when `startDaemon()` is called from a test (or, in principle,
+   * from any other embedder of this package) -- silently spawning the
+   * wrong program. Defaults to `process.argv[1]` (correct for the real
+   * `crewbench ui` case, unchanged behavior for every existing caller),
+   * with an explicit override so tests can point it at a real,
+   * fully-controlled fake CLI entry instead. */
+  cliEntryPath?: string;
 }
 
 /** Builds and starts the daemon: binds 127.0.0.1 only (never 0.0.0.0, per
@@ -58,6 +74,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // daemon shutdown legitimately means "every stream ends now."
   const app = Fastify({ logger: false, forceCloseConnections: true });
   app.addHook("onRequest", createAuthHook(token, port));
+  // Registered before every route (per @fastify/websocket's own README:
+  // "it needs to be registered before all routes in order to be able to
+  // intercept websocket connections"), so routes/pty.ts's `{ websocket:
+  // true }` route can exist at all.
+  await app.register(fastifyWebsocket);
 
   const watcher = new DaemonWatcher();
   const taskRunner = new TaskRunner(watcher, config.concurrency ?? {});
@@ -91,6 +112,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   registerModelRoutes(app);
   registerFsBrowseRoutes(app);
   registerPluginInstallRoutes(app);
+  registerCapabilityRoutes(app);
+  const cliEntryPath = options.cliEntryPath ?? (process.argv[1] as string);
+  registerPtyRoutes(app, watcher, taskRunner, cliEntryPath);
   await registerUiStatic(app);
 
   await app.listen({ host: "127.0.0.1", port });
