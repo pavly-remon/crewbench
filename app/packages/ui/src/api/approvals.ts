@@ -35,14 +35,6 @@ export function useApprovalsInbox() {
   return query;
 }
 
-export function useTaskApprovals(taskId: string | undefined) {
-  return useQuery({
-    queryKey: ["tasks", taskId, "approvals"],
-    queryFn: () => apiFetch<ApiPendingApproval[]>(`/api/tasks/${taskId}/approvals`),
-    enabled: Boolean(taskId),
-  });
-}
-
 export function useResolveApproval(taskId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({

@@ -4,14 +4,19 @@ import { ApiPendingApprovalSchema, ApiResolveApprovalRequestSchema } from "@crew
 import type { DaemonWatcher } from "../watcher.js";
 import type { TaskRunner } from "../task-runner.js";
 
-/** `GET /api/approvals`, `GET /api/tasks/:tid/approvals`, `POST
- * /api/tasks/:tid/approvals/:aid` (Phase 3 milestone 5). Every pending
- * approval this daemon knows about lives purely in-memory, inside the
- * `HttpApprovalProvider` of whichever task's `driveTask()` loop is
- * currently blocked on it (`TaskRunner.listPendingApprovals()`/
- * `listAllPendingApprovals()`, built in milestone 1, wired up here for
- * the first time) -- there is no on-disk "pending approvals" file to
- * read instead. A daemon restart doesn't lose the underlying *task*
+/** `GET /api/approvals`, `POST /api/tasks/:tid/approvals/:aid` (Phase 3
+ * milestone 5). Every pending approval this daemon knows about lives
+ * purely in-memory, inside the `HttpApprovalProvider` of whichever
+ * task's `driveTask()` loop is currently blocked on it
+ * (`TaskRunner.listAllPendingApprovals()`, wired up here for the first
+ * time) -- there is no on-disk "pending approvals" file to read instead.
+ * **No `GET /api/tasks/:tid/approvals`**: an earlier draft of this
+ * milestone added one for symmetry with the global listing, but nothing
+ * in the UI calls it (only the global inbox is wired up) -- dropped in
+ * human review rather than shipped as unused surface; re-add if a real
+ * caller needs it (`TaskRunner.listPendingApprovals(taskId)`, built in
+ * milestone 1, is still there to build it on). A daemon restart doesn't
+ * lose the underlying *task*
  * state (its `state.json` phase still says it's waiting, and
  * `reattachProject()` picks it back up, re-reaching the same
  * `askApproval()` call and producing a fresh pending approval with a new
@@ -62,25 +67,6 @@ export function registerApprovalRoutes(app: FastifyInstance, watcher: DaemonWatc
       }),
     );
     await reply.send(ApiPendingApprovalSchema.array().parse(enriched.filter((row) => row !== null)));
-  });
-
-  app.get<{ Params: { tid: string } }>("/api/tasks/:tid/approvals", async (request, reply) => {
-    const location = watcher.resolveTask(request.params.tid);
-    if (!location) {
-      await reply.code(404).send({ error: `no such task: ${request.params.tid}` });
-      return;
-    }
-    const state = await loadState(location.taskDir);
-    const pending = taskRunner.listPendingApprovals(request.params.tid).map((r) => ({
-      task_id: request.params.tid,
-      project_id: location.projectId,
-      title: state.title,
-      id: r.id,
-      kind: r.kind,
-      payload: r.payload,
-      requested_at: r.requestedAt,
-    }));
-    await reply.send(ApiPendingApprovalSchema.array().parse(pending));
   });
 
   app.post<{ Params: { tid: string; aid: string }; Body: unknown }>("/api/tasks/:tid/approvals/:aid", async (request, reply) => {

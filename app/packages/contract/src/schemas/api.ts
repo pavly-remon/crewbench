@@ -432,12 +432,11 @@ export const ApiResolveApprovalRequestSchema = z.discriminatedUnion("decision", 
 export type ApiResolveApprovalRequest = z.infer<typeof ApiResolveApprovalRequestSchema>;
 
 /** Phase 3 milestone 5. One row of `GET /api/approvals` (the global
- * "needs you" inbox) or `GET /api/tasks/:tid/approvals` (one task's own
- * pending list) -- `task_id`/`project_id`/`title` are only meaningful on
- * the global listing (enriched by `routes/approvals.ts` from
- * `TaskRunner.listAllPendingApprovals()` plus a `state.json` read), kept
- * on both shapes so the UI's per-kind card components take one type
- * regardless of which listing produced them. */
+ * "needs you" inbox -- the only listing endpoint; see `routes/
+ * approvals.ts`'s own docstring for why a per-task listing wasn't kept),
+ * enriched by `routes/approvals.ts` from `TaskRunner.listAllPendingApprovals()`
+ * plus a `state.json` read. `task_id`/`project_id`/`title` are carried on
+ * every row for the UI's per-kind card components to use directly. */
 export const ApiPendingApprovalSchema = z
   .object({
     task_id: z.string(),

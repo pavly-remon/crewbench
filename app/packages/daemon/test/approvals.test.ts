@@ -80,7 +80,7 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs = 15_000): Promi
   }
 }
 
-describe("approvals: GET /api/approvals, GET /api/tasks/:tid/approvals, POST .../approvals/:aid (Phase 3 milestone 5)", () => {
+describe("approvals: GET /api/approvals, POST /api/tasks/:tid/approvals/:aid (Phase 3 milestone 5)", () => {
   let daemon: DaemonHandle;
   let home: string;
   const savedEnv = { ...process.env };
@@ -147,11 +147,6 @@ describe("approvals: GET /api/approvals, GET /api/tasks/:tid/approvals, POST ...
       return true;
     });
     expect(pendingKind).toBe("commit");
-
-    // Same row, via the per-task listing too.
-    const perTaskRes = await fetch(url(`/api/tasks/${taskId}/approvals`), { headers });
-    const perTaskRows = (await perTaskRes.json()) as Array<{ id: string; kind: string }>;
-    expect(perTaskRows.some((r) => r.id === pendingId && r.kind === "commit")).toBe(true);
 
     const resolveRes = await fetch(url(`/api/tasks/${taskId}/approvals/${pendingId}`), {
       method: "POST",

@@ -1,6 +1,6 @@
 # Phase 3 — Interactive UI (create, scope, approve, control)
 
-Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review; milestone 4 done -- reviewed and approved 2026-09-20, including its disclosed scope limits (team settings edits roles only, no per-task loop override, no resume-abandoned-scoping path) and the new `POST /api/tasks/:tid/lineup` endpoint added beyond the plan's literal bullet; milestone 5 implemented 2026-09-20, pending human review -- see its log entry)
+Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review; milestone 4 done -- reviewed and approved 2026-09-20, including its disclosed scope limits (team settings edits roles only, no per-task loop override, no resume-abandoned-scoping path) and the new `POST /api/tasks/:tid/lineup` endpoint added beyond the plan's literal bullet; milestone 5 done -- reviewed and approved 2026-09-20, including its disclosed scope call (generic fallback card for the six never-issued approval kinds) and one post-review change (dropped the unused `GET /api/tasks/:tid/approvals` endpoint and its dead UI hook))
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md` and
@@ -858,7 +858,7 @@ text.
   accepted for a similar reason (no cross-package dependency in that
   direction).
 
-### Milestone 5 -- implemented, pending human review (2026-09-20)
+### Milestone 5 -- done (reviewed and approved 2026-09-20)
 
 **Not marked "done" by this session**, same disclosure as milestones 3-4's
 own entries: everything below was actually built, run, and verified the
@@ -993,17 +993,30 @@ rather than pretending to exercise something that doesn't exist.
   suite (212 tests) unaffected; `pnpm check:schemas` clean (no
   `schemas/*.json` covers `events.jsonl`, so the two new event types
   needed no Python-side regeneration).
-- **What still needs human sign-off before this is "done"**: (1) whether
-  the six never-actually-issued `ApprovalKind`s deserve their generic
-  fallback card as built, or whether the milestone should instead have
-  built literal bespoke UI for all nine regardless of reachability
-  (judged against actually building fake UI for capabilities that don't
-  exist yet, per this repo's own anti-padding norm); (2) whether `GET
-  /api/tasks/:tid/approvals` (built for symmetry/completeness, not asked
-  for by the plan's own bullet) is worth keeping or should be dropped
-  since nothing in the UI currently calls it (only the global inbox is
-  wired up); (3) the `integrate`/`cleanup_worktree` test's own
-  worktree-on-state.json workaround -- confirming this is an acceptable
-  way to have proven those two real before a real "worktree mode" for
-  app-owned tasks exists, versus deferring that proof to whichever future
-  milestone actually adds one.
+
+**Human review (2026-09-20)**: all three open items resolved.
+
+1. **Generic fallback card for the six never-issued `ApprovalKind`s: kept
+   as built.** Building bespoke UI for capabilities with zero callers
+   anywhere in this codebase would be padding, not correctness -- the
+   generic card is already schema-correct the moment a real caller
+   exists, per its own docstring.
+2. **`GET /api/tasks/:tid/approvals`: dropped**, along with its route
+   handler, its UI hook (`api/approvals.ts`'s `useTaskApprovals()`,
+   unused -- confirmed by grep, no import anywhere), and the test
+   coverage that exercised it. Nothing in the UI called it; keeping
+   unused surface area around "for symmetry" isn't a reason on its own.
+   `TaskRunner.listPendingApprovals(taskId)` (the milestone-1-shipped
+   method it was built on) is untouched and still there to build a real
+   per-task listing on if a future caller actually needs one.
+   `routes/approvals.ts` and `ApiPendingApprovalSchema`'s docstrings
+   updated to match; `pnpm -r typecheck/build/test` reverified green
+   after the removal (387 TS tests, same count -- one sub-assertion
+   inside an existing test removed, not a whole test).
+3. **The `integrate`/`cleanup_worktree` test's manual worktree-on-
+   state.json workaround: accepted as sufficient proof for this
+   milestone.** It genuinely proves the pause/resolve mechanics work (a
+   real merge, a real worktree removal) -- building an actual "worktree
+   mode" for app-owned tasks is a real, separate feature for whichever
+   future milestone needs it, not something this one should invent just
+   to make its own test setup less manual.
