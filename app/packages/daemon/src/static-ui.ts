@@ -4,18 +4,34 @@ import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 
-/** Where `packages/ui`'s Vite build lands relative to this file, in this
- * repo's monorepo dev layout (`app/packages/daemon/src` and
- * `app/packages/ui/dist` are siblings under `app/packages/`) --
- * `CREWBENCH_UI_DIST` overrides it, same override pattern every other
- * "where do I find my files" lookup in this app uses
- * (`CREWBENCH_ROOT`/`CREWBENCH_HOME`). Phase 4's packaged npm install
- * will need its own resolution strategy (the UI ships bundled with the
- * published package, not two directories up from a source checkout) --
- * out of scope here, same boundary Phase 1's `findRoot()` already drew
- * for the plugin root. */
+/** Where the built UI lands relative to this file, resolved for either
+ * layout this module can actually run from (Phase 4 milestone 1):
+ *
+ * 1. **The published/bundled `crewbench` package**
+ *    (`packages/cli/scripts/build-publish.mjs`): esbuild inlines this
+ *    entire module into one file at `publish/bin.js`, and that script
+ *    copies `packages/ui/dist` to `publish/ui-dist` as a direct sibling
+ *    of it -- so `import.meta.url` here resolves to `publish/bin.js`'s
+ *    own location, and `ui-dist` sits right next to it.
+ * 2. **This repo's monorepo dev layout** (unbundled, `tsc -b`'s own
+ *    per-package output): this file compiles to
+ *    `packages/daemon/dist/static-ui.js`, two directories above
+ *    `packages/ui/dist` (`packages/daemon/dist` and `packages/ui/dist`
+ *    are siblings under `packages/`) -- the same path this function
+ *    always used before this milestone.
+ *
+ * Tries the packaged (bundled) layout first since it's a plain sibling
+ * check, falls back to the dev layout -- no environment flag needed,
+ * both branches are cheap `existsSync` checks. `CREWBENCH_UI_DIST`
+ * overrides either one, same override pattern every other "where do I
+ * find my files" lookup in this app uses
+ * (`CREWBENCH_ROOT`/`CREWBENCH_HOME`), unchanged by this milestone --
+ * still what the daemon/UI test suites set explicitly rather than
+ * relying on either real layout existing on disk. */
 function defaultUiDist(): string {
   const here = dirname(fileURLToPath(import.meta.url));
+  const packaged = join(here, "ui-dist");
+  if (existsSync(join(packaged, "index.html"))) return packaged;
   return join(here, "..", "..", "ui", "dist");
 }
 

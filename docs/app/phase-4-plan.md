@@ -9,7 +9,8 @@ tokenless-URL approach, keeping Phase 2's "never persisted" token
 principle unchanged. Open question 5 — confirming "crewbench" as the
 actual package name — stays open until immediately before the real,
 non-dry-run publish step in milestone 1, since availability is a
-point-in-time fact, not a reservation.)
+point-in-time fact, not a reservation. Milestone 1 implemented
+2026-09-20, pending human review -- see its log entry.)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -383,4 +384,127 @@ question 5 stays open by design (see its own entry).
 
 ## Milestone log
 
-No milestone work has started yet.
+### Milestone 1 -- implemented, pending human review (2026-09-20)
+
+**"crewbench" reconfirmed available on npm** immediately before this
+work (`https://registry.npmjs.org/crewbench` still a real `404`, not
+assumed carried over from the plan's own earlier check).
+
+- **Built**: `packages/cli/scripts/build-publish.mjs`, a new script
+  (`pnpm --filter @crewbench/cli build:publish`) that esbuild-bundles
+  `packages/cli/src/bin.ts` -- inlining the real source of
+  `@crewbench/{adapters,contract,daemon,engine}` (workspace packages,
+  never published) while keeping genuine npm dependencies (`zod`,
+  `fastify`, `@fastify/static`, `chokidar` -- confirmed the complete set
+  by grepping every actual `from "<pkg>"` import across all five
+  packages, not assumed) external -- into `packages/cli/publish/bin.js`,
+  a single file. Copies `packages/ui/dist` to `publish/ui-dist` and the
+  repo-root `agents/`/`schemas/`/`config/` directories to `publish/`
+  alongside it. `static-ui.ts`'s `defaultUiDist()` gained a real second
+  branch (Design decision 2, as planned): try the packaged `ui-dist`
+  sibling first, fall back to the existing monorepo-relative path if it
+  isn't there -- `CREWBENCH_UI_DIST` (what every existing test already
+  sets explicitly) is untouched either way.
+- **A real, disclosed deviation from the plan's literal wording**:
+  the plan said "remove `private: true`, add a `files` field" to
+  `packages/cli/package.json` directly. That file's own `dependencies`
+  are `workspace:*` references pnpm needs for this package's ordinary
+  `tsc -b` dev build and test suite to resolve at all -- removing them
+  breaks local dev, keeping them makes the file unpublishable (`npm`
+  has no registry range called `workspace:*`; a real `npm install` of a
+  package.json still carrying one fails outright, confirmed by reading
+  npm's own resolution behavior, not assumed). Resolved by generating a
+  **separate, minimal `package.json` inside `publish/` itself** --
+  `build-publish.mjs`'s own job, not a second copy of the source file --
+  with only the four real npm dependencies (versions read live from each
+  workspace package's own `package.json`, not hand-typed) and a `files`
+  allowlist (`bin.js`, `ui-dist`, `agents`, `schemas`, `config`). The
+  source `packages/cli/package.json` keeps `private: true` and its
+  `workspace:*` deps completely unchanged -- it was never the thing this
+  milestone actually publishes.
+- **Two real bugs, caught live by actually reading and running the
+  output, not assumed correct**:
+  1. An explicit `banner: { js: "#!/usr/bin/env node" }` esbuild option
+     duplicated the shebang -- `bin.ts`'s own source already has one,
+     and esbuild already preserves an entry file's real shebang on its
+     own. First build produced a real, broken double-shebang `bin.js`;
+     caught by reading the first two lines of the actual output file
+     before trusting it, not by assuming the option was needed. Fixed
+     by removing the explicit banner entirely.
+  2. `npm publish --dry-run`'s own real output flagged
+     `"bin[crewbench]" script name bin.js was invalid and removed` --
+     npm normalizes a `bin` path with a leading `./` by silently
+     stripping it, and the generated `package.json` had `"./bin.js"`.
+     Reproduced the exact fix with `npm pkg fix` against a scratch copy
+     to confirm the real cause before changing anything, then fixed the
+     generator itself to emit `"bin.js"` (no leading `./`) so nothing
+     downstream needs npm's own auto-correction to produce a clean
+     publish.
+- **Real, live end-to-end verification, the actual milestone 1 claim,
+  proven standalone -- not just that files exist**: `pnpm --filter
+  @crewbench/ui build` + `build:publish`, then from `publish/`: `npm
+  publish --dry-run` (clean, no warnings after the bin-path fix, 16
+  files / 235.6 kB packed / 827.0 kB unpacked -- no source, no tests, no
+  secrets in the tarball contents list); `npm pack` produced a real
+  `crewbench-0.1.0.tgz`; installed with a plain `npm install
+  <tarball>` into a fresh, empty directory *outside* the monorepo
+  entirely (`/tmp/crewbench-install-test`, no relation to this repo's
+  own `node_modules` or path structure); ran the real installed
+  `./node_modules/.bin/crewbench` binary directly:
+  - `--help` printed the real usage text.
+  - `doctor` produced real, correct per-CLI reports for all four CLIs
+    (this machine's own real claude/codex/agy/copilot installs, actually
+    detected -- `findRoot()` genuinely resolved the bundled
+    `agents/`+`schemas/` siblings from inside `node_modules/crewbench/`,
+    with zero code changes to `root.ts` needed, exactly as Design
+    decision 1's reasoning predicted).
+  - `ui --port 41777 --no-open` started a real daemon; `curl`ing `/`
+    returned the real bundled `index.html`, and a direct request for the
+    real built JS asset filename (`assets/index-CiQ_4_QW.js`) returned
+    200 with the correct byte size -- confirmed the installed
+    package directory has no `ui-dist` fallback path to the monorepo at
+    all (`ls node_modules/crewbench/` shows only `agents/ bin.js
+    config/ package.json schemas/ ui-dist/`), so this wasn't reachable
+    by accidental proximity.
+  - `team show`, run from a fresh throwaway git repo, printed the real
+    default lineup from the bundled `config/defaults.json`
+    (`defaultsPath()`), confirming that resolution path too.
+- **CI**: `.github/workflows/ci-node.yml` gained a new `package-smoke`
+  job on the existing 3-OS matrix (not a new workflow file, per finding
+  11) that runs the same sequence in CI: build, `build:publish`, `npm
+  publish --dry-run` (never a real publish -- no step in this job omits
+  `--dry-run`, and no registry credentials are referenced or needed),
+  `npm pack`, install into `$RUNNER_TEMP` (outside the checkout
+  entirely), then run the installed binary for real. `doctor`'s own exit
+  code is deliberately not treated as pass/fail (none of the 4 real
+  CLIs are installed on a GitHub-hosted runner, so `doctorCommand.ts`'s
+  own `allOk` is genuinely false there by design) -- instead the step
+  greps the real captured output for all four CLIs' own report lines, so
+  a genuine crash or a missing-root error would still fail the job,
+  while an expected "not installed" report doesn't. Not yet run for
+  real in CI (this session has no way to trigger a GitHub Actions run) --
+  flagged below as needing a real CI run, not just local verification,
+  before this is trusted cross-platform.
+- Full local verification: `pnpm -r typecheck/build/test` all green
+  (412 TS tests, unchanged from before this milestone), both Playwright
+  e2e tests still passing, Python suite (212 tests) unaffected. One
+  `test/lineup.test.ts` flake under full parallel `pnpm -r test` load
+  (a filesystem-watcher-debounce timeout, the same known flake class
+  seen in earlier phases -- confirmed by rerunning that file alone,
+  passed cleanly, not a real regression from this milestone's changes).
+- Added `app/packages/cli/publish/` to `app/.gitignore` -- a real build
+  output directory, same treatment as `dist/`, never meant to be
+  committed.
+- **What still needs human sign-off before this is "done"**: (1) a real
+  GitHub Actions run of the new `package-smoke` job on all three OSes --
+  this session verified the exact same sequence locally on macOS only,
+  and Windows/Linux runner quirks (path separators, npm's bin-shim
+  generation, `$RUNNER_TEMP` under `shell: bash`) are real, disclosed,
+  unverified risk until a real CI run confirms them; (2) the
+  generated-`publish/package.json` approach as the resolution to the
+  plan's `workspace:*` conflict, a real deviation from the plan's
+  literal wording, described above -- confirming this is the right
+  shape before later milestones (e.g. the release workflow, milestone 5)
+  build on top of it; (3) whether `packages/cli/publish/`'s exact
+  directory name and structure is worth locking in now or still open to
+  change before a real publish ever happens.

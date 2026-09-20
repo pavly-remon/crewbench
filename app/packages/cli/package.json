@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "build:publish": "node scripts/build-publish.mjs",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "test": "vitest run"
   },
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "24.13.5",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "vitest": "5.0.1"
   }

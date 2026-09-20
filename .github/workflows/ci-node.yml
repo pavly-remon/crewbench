@@ -37,6 +37,73 @@ jobs:
       - run: pnpm test
       - run: pnpm typecheck
 
+  package-smoke:
+    # Phase 4 milestone 1: proves the actual published-package claim, not
+    # just that the bundle builds. `npm publish --dry-run` never touches
+    # the real registry (no --dry-run omitted, ever, in this job); `npm
+    # pack` + a real `npm install` of that tarball into a clean directory
+    # outside the workspace + running the installed binary for real is
+    # what actually proves a fresh `npm i -g crewbench` would work, on
+    # each of the 3 OSes this repo already tests against (finding 11 in
+    # docs/app/phase-4-plan.md -- extending the existing matrix, not a
+    # second parallel workflow).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @crewbench/cli build:publish
+      - name: npm publish --dry-run (never a real publish)
+        working-directory: app/packages/cli/publish
+        run: npm publish --dry-run
+      - name: npm pack
+        working-directory: app/packages/cli/publish
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: install the packed tarball into a clean directory
+        shell: bash
+        run: |
+          set -eu
+          install_dir="$RUNNER_TEMP/crewbench-install-smoke"
+          mkdir -p "$install_dir"
+          cd "$install_dir"
+          npm init -y >/dev/null
+          tarball=$(ls "$RUNNER_TEMP"/crewbench-*.tgz)
+          npm install "$tarball"
+      - name: run the installed binary for real
+        shell: bash
+        run: |
+          set -eu
+          install_dir="$RUNNER_TEMP/crewbench-install-smoke"
+          cd "$install_dir"
+          bin="./node_modules/.bin/crewbench"
+          "$bin" --help
+          # `doctor` legitimately exits non-zero here -- none of the 4
+          # real CLIs are installed on this runner, so `allOk` is false
+          # by design (doctorCommand.ts). That's not what this step is
+          # proving: the real claim is that the *installed, standalone*
+          # binary resolves its own bundled schemas/agents/config
+          # (findRoot()) and produces a real per-CLI report for all four
+          # names, not that this runner happens to have them logged in.
+          # A crash, a missing-root error, or a truncated report would
+          # still fail this step via the grep checks below.
+          output=$("$bin" doctor || true)
+          echo "$output"
+          for cli in claude codex agy copilot; do
+            echo "$output" | grep -q "^$cli: " || { echo "missing $cli's own doctor report line"; exit 1; }
+          done
+
   check-schemas:
     # Fails if the checked-in root schemas/*.json drifted from what the zod
     # schemas in app/packages/contract would generate -- the zod schema is
