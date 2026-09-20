@@ -496,3 +496,48 @@ export const ApiRetryRunRequestSchema = z
   })
   .strict();
 export type ApiRetryRunRequest = z.infer<typeof ApiRetryRunRequestSchema>;
+
+/** `GET /api/models/:cli` -- the lineup/team editors' model dropdown.
+ * `checked: false` means this CLI has no known way to list its own
+ * models non-interactively today (`@crewbench/adapters`'
+ * `listAvailableModels()`'s own docstring has the real, re-verified
+ * story -- only `agy` currently does); the UI falls back to today's
+ * free-text model input for every other `checked: false` CLI rather than
+ * inventing a static list that would go stale. */
+export const ApiAvailableModelsSchema = z
+  .object({
+    cli: ApiCliSchema,
+    checked: z.boolean(),
+    available: z.array(z.string()),
+    error: z.string().nullable(),
+  })
+  .strict();
+export type ApiAvailableModels = z.infer<typeof ApiAvailableModelsSchema>;
+
+/** `GET /api/fs/browse?path=` -- the "Add project" dialog's directory
+ * browser (replacing free-text path entry). Directories only (no files
+ * -- nothing here ever needs to pick a file), dotfiles excluded (matches
+ * the common file-picker convention; a project that itself lives at a
+ * dot-prefixed path is a real, disclosed edge case this doesn't cover).
+ * `is_git_repo` doesn't gate navigation or selection -- a real repo can
+ * sit anywhere in the tree the user needs to browse through, and
+ * `POST /api/projects` already validates it's a git repo when actually
+ * added (`registry.ts`) -- it's shown only so the UI can hint which
+ * folders are likely the right one to pick. */
+export const ApiFsBrowseEntrySchema = z
+  .object({
+    name: z.string(),
+    path: z.string(),
+    is_git_repo: z.boolean(),
+  })
+  .strict();
+export type ApiFsBrowseEntry = z.infer<typeof ApiFsBrowseEntrySchema>;
+
+export const ApiFsBrowseResponseSchema = z
+  .object({
+    path: z.string(),
+    parent: z.string().nullable(),
+    entries: z.array(ApiFsBrowseEntrySchema),
+  })
+  .strict();
+export type ApiFsBrowseResponse = z.infer<typeof ApiFsBrowseResponseSchema>;

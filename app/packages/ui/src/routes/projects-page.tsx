@@ -4,11 +4,17 @@ import { FolderGit2, Plus } from "lucide-react";
 import { Card } from "../components/card.js";
 import { Button } from "../components/button.js";
 import { Dialog } from "../components/dialog.js";
+import { FolderBrowserDialog } from "../components/folder-browser-dialog.js";
 import { useAddProject, useProjects } from "../api/projects.js";
 
+/** Path is chosen through the folder browser (`FolderBrowserDialog`),
+ * never typed -- a real absolute path only the server can resolve (see
+ * that component's own docstring for why a browser page can't do this
+ * itself). The field showing it is display-only. */
 function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
+  const [browserOpen, setBrowserOpen] = useState(false);
   const addProject = useAddProject();
 
   const submit = (e: React.FormEvent) => {
@@ -26,37 +32,54 @@ function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title="Add project">
-      <form onSubmit={submit} className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1 text-sm">
-          Path
-          <input
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="/path/to/repo"
-            className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
-            required
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          Display name (optional)
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
-          />
-        </label>
-        {addProject.isError && <p className="text-sm text-red-500">{addProject.error.message}</p>}
-        <div className="mt-2 flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" disabled={addProject.isPending}>
-            {addProject.isPending ? "Adding…" : "Add"}
-          </Button>
-        </div>
-      </form>
-    </Dialog>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange} title="Add project">
+        <form onSubmit={submit} className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1 text-sm">
+            {/* Not a <label>: it would wrap both the read-only path
+                display and the Browse button, and a <label> containing
+                more than one interactive-ish element gets its whole text
+                content computed as the accessible *name* of whichever
+                control is inside -- the Browse button would announce as
+                "Path No folder chosen yet", not "Browse…". Caught by
+                this dialog's own test querying the button by its real
+                name. */}
+            <span>Path</span>
+            <div className="flex gap-2">
+              <p
+                className={
+                  "flex-1 truncate rounded-md border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-2 py-1.5 text-sm " +
+                  (path ? "" : "text-[var(--color-fg-muted)]")
+                }
+              >
+                {path || "No folder chosen yet"}
+              </p>
+              <Button type="button" variant="secondary" onClick={() => setBrowserOpen(true)}>
+                Browse…
+              </Button>
+            </div>
+          </div>
+          <label className="flex flex-col gap-1 text-sm">
+            Display name (optional)
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
+            />
+          </label>
+          {addProject.isError && <p className="text-sm text-red-500">{addProject.error.message}</p>}
+          <div className="mt-2 flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={addProject.isPending || !path}>
+              {addProject.isPending ? "Adding…" : "Add"}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+      <FolderBrowserDialog open={browserOpen} onOpenChange={setBrowserOpen} onSelect={setPath} />
+    </>
   );
 }
 

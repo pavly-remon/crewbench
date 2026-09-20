@@ -9,7 +9,18 @@ const execFileAsync = promisify(execFile);
  * only agy's was confirmed (`agy models`, real output inspected); `claude
  * --help`, `codex --help` and `copilot help commands` show no equivalent
  * for any of the other three. Ported from
- * crewbench_env.py's MODEL_LIST_COMMANDS. */
+ * crewbench_env.py's MODEL_LIST_COMMANDS.
+ *
+ * Re-verified 2026-09-20 against real installed binaries (not just
+ * re-reading this comment) for the app's own model-picker dropdown
+ * (`GET /api/models/:cli`): `claude --help`'s `--model` flag only
+ * documents a few alias examples inline ("fable", "opus", "sonnet"), not
+ * an enumerable, machine-readable list, and no subcommand lists models;
+ * `codex --help` likewise has `-m, --model <MODEL>` with no listing
+ * subcommand anywhere in its command tree; `copilot --help` and
+ * `copilot help commands` both confirm `/model` is an *interactive*
+ * slash command usable only inside a live TUI session, not a
+ * non-interactive CLI invocation this could shell out to. Still true. */
 const MODEL_LIST_COMMANDS: Partial<Record<Cli, string[]>> = { agy: ["models"] };
 
 export interface CheckModelResult {
@@ -41,6 +52,23 @@ async function listModels(cli: Cli, cliPath: string): Promise<{ ids: string[] | 
     const e = err as { stdout?: string; stderr?: string; message?: string };
     return { ids: null, error: (e.stderr || e.stdout || e.message || String(err)).trim() };
   }
+}
+
+export interface AvailableModelsResult {
+  checked: boolean;
+  available: string[];
+  error: string | null;
+}
+
+/** The app's own model-picker dropdown (`GET /api/models/:cli`, not part
+ * of the original doctor/check-model flow this file was built for) needs
+ * the plain list without also checking one specific model against it --
+ * this is `listModels()` above, made public and never-throwing the same
+ * way `checkModel()` already is, rather than that private helper growing
+ * a second call site with its own error handling. */
+export async function listAvailableModels(cli: Cli, cliPath: string): Promise<AvailableModelsResult> {
+  const { ids, error } = await listModels(cli, cliPath);
+  return { checked: ids !== null, available: ids ?? [], error };
 }
 
 /** Whether `model` is a real id this CLI currently lists, plus the closest

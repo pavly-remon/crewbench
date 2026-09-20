@@ -32,6 +32,7 @@ describe("TeamSettingsPage", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/api/doctor")) return jsonResponse({ reports: [], checked_at: "2026-01-01T00:00:00Z" });
+      if (url.includes("/api/models/")) return jsonResponse({ cli: "claude", checked: false, available: [], error: null });
       if (url.includes("/api/projects/p1/team") && init?.method === "PUT") {
         putBody = JSON.parse(String(init.body));
         return jsonResponse(putBody);

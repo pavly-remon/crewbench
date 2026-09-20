@@ -62,6 +62,7 @@ describe("LineupStepPage", () => {
         });
       }
       if (url.includes("/api/doctor")) return jsonResponse({ reports: [{ cli: "codex", installed: true, version: "1", config_dir: null, config_dir_writable: null, network_ok: true, network_detail: null, logged_in: true, auth_detail: null, ok: true, errors: [] }], checked_at: "2026-01-01T00:00:00Z" });
+      if (url.includes("/api/models/")) return jsonResponse({ cli: url.split("/").pop(), checked: false, available: [], error: null });
       if (url.includes("/api/tasks/t1/lineup") && init?.method === "POST") {
         submittedBody = JSON.parse(String(init.body));
         return jsonResponse({ ...TASK_DETAIL, lineup: (submittedBody as { roles: unknown }).roles });
@@ -92,6 +93,7 @@ describe("LineupStepPage", () => {
       if (url.endsWith("/api/tasks/t1")) return jsonResponse(TASK_DETAIL);
       if (url.includes("/api/projects/p1/team")) return jsonResponse({});
       if (url.includes("/api/doctor")) return jsonResponse({ reports: [], checked_at: "2026-01-01T00:00:00Z" });
+      if (url.includes("/api/models/")) return jsonResponse({ cli: url.split("/").pop(), checked: false, available: [], error: null });
       throw new Error(`unexpected fetch: ${url} ${init?.method}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -103,5 +105,30 @@ describe("LineupStepPage", () => {
     const permissionSelects = screen.getAllByDisplayValue("safe");
     fireEvent.change(permissionSelects[0] as HTMLSelectElement, { target: { value: "skip" } });
     expect(screen.getByText(/bypasses this role's own permission prompts/i)).toBeInTheDocument();
+  });
+
+  it("shows a real model dropdown for a role using agy, since agy is the one CLI this app can genuinely list models for", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/tasks/t1")) return jsonResponse(TASK_DETAIL);
+      if (url.includes("/api/projects/p1/team")) return jsonResponse({ roles: { developer: { cli: "agy", model: "gemini-3.8-flash-high" } } });
+      if (url.includes("/api/doctor")) return jsonResponse({ reports: [], checked_at: "2026-01-01T00:00:00Z" });
+      if (url.includes("/api/models/agy")) {
+        return jsonResponse({ cli: "agy", checked: true, available: ["gemini-3.8-flash-high", "claude-sonnet-4-6"], error: null });
+      }
+      if (url.includes("/api/models/")) return jsonResponse({ cli: url.split("/").pop(), checked: false, available: [], error: null });
+      throw new Error(`unexpected fetch: ${url} ${init?.method}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderLineupPage();
+    await screen.findByText(/Lineup: Fix login redirect/i);
+
+    // A real <select> with the fetched ids as its own <option>s, not the
+    // free-text input + cheap/strong tier buttons every other CLI still
+    // gets.
+    await waitFor(() => expect(screen.getByRole("option", { name: "claude-sonnet-4-6" })).toBeInTheDocument());
+    expect(screen.getByDisplayValue("gemini-3.8-flash-high").tagName).toBe("SELECT");
+    expect(screen.queryByTitle(/use the cheap tier for agy/i)).not.toBeInTheDocument();
   });
 });

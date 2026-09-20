@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import type { ApiCli, ApiDoctorReport, ApiEffort, RoleKey, Team } from "@crewbench/contract";
 import { ROLE_KEYS } from "@crewbench/contract";
+import { useAvailableModels } from "../api/models.js";
 import { resolveModelTier, type LineupRoleValue } from "../lib/lineup-defaults.js";
 
 const CLI_OPTIONS: ApiCli[] = ["claude", "codex", "agy", "copilot"];
@@ -22,6 +23,73 @@ function DoctorBadge({ report }: { report: ApiDoctorReport | undefined }) {
     <span title={report.errors.join("; ") || "doctor: not ok"} className="text-red-500">
       <XCircle size={14} />
     </span>
+  );
+}
+
+/** The model field: a real dropdown of this CLI's actual available
+ * models when the daemon can genuinely enumerate them (`checked: true`,
+ * today only ever `agy` -- see `@crewbench/adapters`'
+ * `listAvailableModels()`'s own docstring, re-verified against the real
+ * installed binaries), otherwise today's free-text input plus the
+ * cheap/strong tier quick-picks. Deliberately not a static hardcoded
+ * model list for the other three CLIs -- that would drift out of date
+ * the moment any of them ships a new model, silently steering users
+ * toward a name that no longer exists; the free-text field already lets
+ * anyone type an exact model name today, tier buttons included. */
+function ModelField({ value, team, onChange }: { value: LineupRoleValue; team: Team | undefined; onChange: (next: LineupRoleValue) => void }) {
+  const { data, isLoading } = useAvailableModels(value.cli, true);
+  const hasRealList = Boolean(data?.checked && data.available.length > 0);
+
+  if (hasRealList) {
+    // The role's current value may not be one of the listed ids (e.g.
+    // switched CLI mid-edit, or a value carried over from team defaults
+    // that predates this list) -- kept as a real, selectable option
+    // rather than silently dropped, so switching to this dropdown never
+    // discards an already-valid choice out from under the user.
+    const options = data!.available.includes(value.model) ? data!.available : [value.model, ...data!.available];
+    return (
+      <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
+        Model
+        <select
+          value={value.model}
+          onChange={(e) => onChange({ ...value, model: e.target.value })}
+          className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
+        >
+          {options.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  return (
+    <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
+      Model
+      <div className="flex gap-1">
+        <input
+          value={value.model}
+          onChange={(e) => onChange({ ...value, model: e.target.value })}
+          placeholder={isLoading ? "loading model list…" : undefined}
+          className="w-full min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
+        />
+      </div>
+      <div className="flex gap-1">
+        {(["cheap", "strong"] as const).map((tier) => (
+          <button
+            key={tier}
+            type="button"
+            title={`use the ${tier} tier for ${value.cli}`}
+            onClick={() => onChange({ ...value, model: resolveModelTier(tier, value.cli, team) })}
+            className="rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+          >
+            {tier}
+          </button>
+        ))}
+      </div>
+    </label>
   );
 }
 
@@ -60,29 +128,7 @@ function RoleRow({
             ))}
           </select>
         </label>
-        <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
-          Model
-          <div className="flex gap-1">
-            <input
-              value={value.model}
-              onChange={(e) => onChange({ ...value, model: e.target.value })}
-              className="w-full min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
-            />
-          </div>
-          <div className="flex gap-1">
-            {(["cheap", "strong"] as const).map((tier) => (
-              <button
-                key={tier}
-                type="button"
-                title={`use the ${tier} tier for ${value.cli}`}
-                onClick={() => onChange({ ...value, model: resolveModelTier(tier, value.cli, team) })}
-                className="rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-              >
-                {tier}
-              </button>
-            ))}
-          </div>
-        </label>
+        <ModelField value={value} team={team} onChange={onChange} />
         <label className="flex flex-col gap-1 text-xs">
           Effort
           <select
