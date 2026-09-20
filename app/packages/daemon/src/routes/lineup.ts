@@ -54,7 +54,7 @@ export function registerLineupRoutes(app: FastifyInstance, watcher: DaemonWatche
     const freshState = await loadState(location.taskDir);
     await taskRunner.startTask(state.id, location.taskDir, location.projectPath, freshState);
 
-    const detail = await buildTaskDetail(location);
+    const detail = await buildTaskDetail(location, taskRunner);
     await reply.send(ApiTaskDetailSchema.parse(detail));
   });
 }

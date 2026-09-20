@@ -6,6 +6,7 @@ import { ApiFinalizeScopingRequestSchema, ApiScopingMessageRequestSchema, ApiTas
 import type { Cli, Effort } from "@crewbench/adapters";
 import type { DaemonWatcher } from "../watcher.js";
 import { buildTaskDetail } from "../task-detail.js";
+import type { TaskRunner } from "../task-runner.js";
 import { startSse, writeSseEvent } from "../sse.js";
 
 /** `POST /api/tasks/:tid/scoping/messages` and `.../scoping/finalize`
@@ -15,7 +16,7 @@ import { startSse, writeSseEvent } from "../sse.js";
  * ever reaches state the daemon can see, and the daemon must never
  * resolve/continue a conversation it didn't start (same ownership rule
  * Design decision 5 applies everywhere else). */
-export function registerScopingRoutes(app: FastifyInstance, watcher: DaemonWatcher): void {
+export function registerScopingRoutes(app: FastifyInstance, watcher: DaemonWatcher, taskRunner: TaskRunner): void {
   app.post<{ Params: { tid: string }; Body: unknown }>("/api/tasks/:tid/scoping/messages", async (request, reply) => {
     const location = watcher.resolveTask(request.params.tid);
     if (!location) {
@@ -140,7 +141,7 @@ export function registerScopingRoutes(app: FastifyInstance, watcher: DaemonWatch
     await setField(location.taskDir, "title", spec.title);
     await setField(location.taskDir, "scoping_session_id", null);
 
-    const detail = await buildTaskDetail(location);
+    const detail = await buildTaskDetail(location, taskRunner);
     await reply.send(ApiTaskDetailSchema.parse(detail));
   });
 }

@@ -5,6 +5,7 @@ import { loadState, rehydrateState } from "@crewbench/engine";
 import type { ApiRoleUsage, ApiTaskDetail, DispatchEnvelope } from "@crewbench/contract";
 import type { TaskLocation } from "./watcher.js";
 import { resolveLoopSettings } from "./loop-settings.js";
+import type { TaskRunner } from "./task-runner.js";
 
 async function readJsonSafe<T>(path: string): Promise<T | null> {
   if (!existsSync(path)) return null;
@@ -120,7 +121,7 @@ async function collectGitWarnings(taskDir: string): Promise<string[]> {
  * through the exact engine `rehydrateState()` already uses for `crewbench
  * resume` (Phase 1 milestone 6) -- one source of truth for "what actually
  * happened round by round," not a second parallel reconstruction. */
-export async function buildTaskDetail(location: TaskLocation): Promise<ApiTaskDetail> {
+export async function buildTaskDetail(location: TaskLocation, taskRunner: TaskRunner): Promise<ApiTaskDetail> {
   const state = await loadState(location.taskDir);
   const loop = await resolveLoopSettings(location.projectPath);
   // Real bug, caught live by Phase 3 milestone 3's own task-creation
@@ -147,6 +148,32 @@ export async function buildTaskDetail(location: TaskLocation): Promise<ApiTaskDe
     hasLineup || hasRoundOne
       ? await rehydrateState(location.taskDir, loop)
       : { phase: state.phase, round: state.round, stuckReason: null, rounds: [], issueRegistry: [] };
+  // Phase 3 milestone 6, a second real gap found live: `rehydrated`
+  // above is purely `runs/*.result.json` file replay -- correct for
+  // every stopped/failed reason that a live `driveTask()` loop's own
+  // `reduce()` also derives from those same files (gate failure, max
+  // rounds, a declined commit; replay independently reaches the
+  // identical transition), but blind to a *cancellation*, which is a
+  // pure runtime signal with no corresponding file for replay to ever
+  // find (see `drive.ts`'s own cancellation-branch docstring). Without
+  // this override, a cancelled task's `phase` stays whatever mid-round
+  // value replay last saw -- never `"stopped"` -- forever, since nothing
+  // about the files on disk changes once cancelled. `state.json`'s own
+  // `phase`/`stuck_reason` (written directly by that same cancellation
+  // branch) are the real, out-of-band source of truth here instead --
+  // but only trusted when this daemon isn't actively driving the task
+  // right now (`!taskRunner.isActive`): while a loop is genuinely
+  // running, `state.phase` is stale by design (only written at
+  // `driveTask()`'s own start and on cancellation, not every iteration --
+  // replay is deliberately preferred for a *live* task, same reasoning
+  // as the lineup/round-one guard above), so this must never fire for
+  // one that's still actually in flight.
+  const rehydratedIsTerminal = rehydrated.phase === "done" || rehydrated.phase === "stopped" || rehydrated.phase === "failed";
+  const onDiskIsTerminal = state.phase === "stopped" || state.phase === "failed";
+  if (!taskRunner.isActive(state.id) && onDiskIsTerminal && !rehydratedIsTerminal) {
+    rehydrated.phase = state.phase;
+    rehydrated.stuckReason = (state.stuck_reason as string | null | undefined) ?? rehydrated.stuckReason;
+  }
   const usage = await aggregateUsage(location.taskDir);
   const warnings = await collectGitWarnings(location.taskDir);
 
@@ -191,5 +218,6 @@ export async function buildTaskDetail(location: TaskLocation): Promise<ApiTaskDe
     spec,
     owner: state.owner ?? "plugin",
     warnings,
+    active: taskRunner.isActive(state.id),
   };
 }

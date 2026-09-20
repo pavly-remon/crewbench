@@ -5,6 +5,7 @@ import { ApiCreateTaskRequestSchema, ApiTaskDetailSchema } from "@crewbench/cont
 import { getProject } from "../registry.js";
 import type { DaemonWatcher } from "../watcher.js";
 import { buildTaskDetail } from "../task-detail.js";
+import type { TaskRunner } from "../task-runner.js";
 
 /** `POST /api/projects/:pid/tasks` (Phase 3 milestone 3) -- creates an
  * app-owned task in the `"scoping"` phase, title defaulted from the raw
@@ -14,7 +15,7 @@ import { buildTaskDetail } from "../task-detail.js";
  * right after -- this endpoint's only job is to get a real `taskDir` on
  * disk, addressable by id, before that conversation's `scoping_session_id`
  * has anywhere to persist to. */
-export function registerMutatingTaskRoutes(app: FastifyInstance, watcher: DaemonWatcher): void {
+export function registerMutatingTaskRoutes(app: FastifyInstance, watcher: DaemonWatcher, taskRunner: TaskRunner): void {
   app.post<{ Params: { pid: string }; Body: unknown }>("/api/projects/:pid/tasks", async (request, reply) => {
     const project = await getProject(request.params.pid);
     if (!project) {
@@ -39,7 +40,7 @@ export function registerMutatingTaskRoutes(app: FastifyInstance, watcher: Daemon
     // POST .../scoping/messages against this same task id.
     watcher.registerTask(project.id, project.path, taskId);
 
-    const detail = await buildTaskDetail({ projectId: project.id, projectPath: project.path, taskDir });
+    const detail = await buildTaskDetail({ projectId: project.id, projectPath: project.path, taskDir }, taskRunner);
     await reply.code(201).send(ApiTaskDetailSchema.parse(detail));
   });
 }

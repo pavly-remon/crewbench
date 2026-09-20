@@ -12,6 +12,7 @@ import { registerTeamRoutes } from "./routes/team.js";
 import { registerProfileRoutes } from "./routes/profile.js";
 import { registerLineupRoutes } from "./routes/lineup.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
+import { registerTaskControlRoutes } from "./routes/task-control.js";
 import { registerUiStatic } from "./static-ui.js";
 import { DEFAULT_PORT, loadConfig } from "./config.js";
 import { loadRegistry } from "./registry.js";
@@ -74,15 +75,16 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 
   await registerProjectRoutes(app, watcher, taskRunner);
   registerEventRoutes(app, watcher);
-  registerTaskRoutes(app, watcher);
-  registerMutatingTaskRoutes(app, watcher);
-  registerScopingRoutes(app, watcher);
+  registerTaskRoutes(app, watcher, taskRunner);
+  registerMutatingTaskRoutes(app, watcher, taskRunner);
+  registerScopingRoutes(app, watcher, taskRunner);
   registerDoctorRoutes(app);
   registerUsageRoutes(app);
   registerTeamRoutes(app);
   registerProfileRoutes(app);
   registerLineupRoutes(app, watcher, taskRunner);
   registerApprovalRoutes(app, watcher, taskRunner);
+  registerTaskControlRoutes(app, watcher, taskRunner);
   await registerUiStatic(app);
 
   await app.listen({ host: "127.0.0.1", port });

@@ -120,6 +120,24 @@ export const TaskStateSchema = z
     scoping_cli: z.union([z.string(), z.null()]).optional(),
     scoping_model: z.union([z.string(), z.null()]).optional(),
     scoping_effort: z.union([z.string(), z.null()]).optional(),
+    /** Phase 3 milestone 6 addition, not previously planned: real,
+     * pre-existing gap found live while building `POST .../cancel` --
+     * `FullEngineState.stuckReason` (`types.ts`) was never itself
+     * persisted anywhere on disk; every existing "stopped"/"failed"
+     * outcome (gate failure, max rounds, declined commit) is naturally
+     * re-derivable by `rehydrateState()`'s own file replay independently
+     * reaching the same `reduce()` transition that produced it in the
+     * first place, so nothing needed a persisted copy before now.
+     * Cancellation breaks that pattern: it's an out-of-band signal (an
+     * `AbortSignal`, Design addition this milestone) with no
+     * corresponding `runs/*.result.json` file for replay to ever
+     * reconstruct it from -- without a real persisted field, a cancelled
+     * task's "stopped, cancelled by user" outcome is invisible to
+     * anything that reads state purely through replay (i.e. every daemon
+     * route today). Optional/additive; `null`/absent whenever the reason
+     * a task is stopped genuinely is re-derivable from files, same as
+     * before this field existed. */
+    stuck_reason: z.union([z.string(), z.null()]).optional(),
     rounds: z.array(TaskRoundSchema),
     usage: z.record(z.string(), RoleUsageSchema),
     notes: z.array(z.string()),

@@ -25,6 +25,9 @@ import { HttpApprovalProvider } from "./approval-provider.js";
 interface ActiveTask {
   approvals: HttpApprovalProvider;
   promise: Promise<void>;
+  /** Phase 3 milestone 6's cancel control -- one per active task,
+   * signaled by `cancelTask()`. */
+  controller: AbortController;
 }
 
 interface StatusEntry {
@@ -91,6 +94,24 @@ export class TaskRunner {
     return this.active.get(taskId)?.approvals.resolve(approvalId, decision) ?? false;
   }
 
+  /** Phase 3 milestone 6: signals the active task's `driveTask()` loop
+   * (`DriveTaskParams.cancelSignal`, checked once per iteration) to stop
+   * before its next command rather than continuing to another round.
+   * Returns whether a live loop was actually there to signal -- `false`
+   * means `routes/task-control.ts` has no in-process loop to rely on for
+   * persisting the cancelled outcome, and must write `state.json`'s
+   * `phase` itself instead. Does **not** kill any in-flight subprocess on
+   * its own (`cancelSignal` can't interrupt an `await` already in
+   * progress -- see `DriveTaskParams.cancelSignal`'s own docstring); the
+   * caller does that separately via the engine's real `cancelRun()`
+   * against `status.json`'s pid. */
+  cancelTask(taskId: string): boolean {
+    const entry = this.active.get(taskId);
+    if (!entry) return false;
+    entry.controller.abort();
+    return true;
+  }
+
   /** Starts a task for the very first time, once its lineup has actually
    * been chosen (Phase 3 milestone 4's `POST /api/tasks/:tid/lineup`,
    * after `setField(taskDir, "lineup", ...)` has already persisted it) --
@@ -115,14 +136,15 @@ export class TaskRunner {
    * promise. */
   private start(taskId: string, params: DriveTaskParams): void {
     const approvals = params.approvals as HttpApprovalProvider;
-    const promise = driveTask(params)
+    const controller = new AbortController();
+    const promise = driveTask({ ...params, cancelSignal: controller.signal })
       .catch((err: unknown) => {
         console.error(`task ${taskId}: driveTask() failed:`, err instanceof Error ? err.message : err);
       })
       .finally(() => {
         this.active.delete(taskId);
       });
-    this.active.set(taskId, { approvals, promise });
+    this.active.set(taskId, { approvals, promise, controller });
   }
 
   /** Rebuilds `DriveTaskParams` purely from what's already on disk --

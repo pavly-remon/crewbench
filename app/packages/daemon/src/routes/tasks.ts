@@ -6,6 +6,7 @@ import { ApiDiffSchema, ApiRunLogSchema, ApiTaskDetailSchema } from "@crewbench/
 import { loadState } from "@crewbench/engine";
 import type { DaemonWatcher } from "../watcher.js";
 import { buildTaskDetail } from "../task-detail.js";
+import type { TaskRunner } from "../task-runner.js";
 import { computeDiff } from "../diff.js";
 
 const MAX_LOG_READ_BYTES = 1_000_000;
@@ -20,14 +21,14 @@ const IMAGE_CONTENT_TYPES: Record<string, string> = {
   ".jpeg": "image/jpeg",
 };
 
-export function registerTaskRoutes(app: FastifyInstance, watcher: DaemonWatcher): void {
+export function registerTaskRoutes(app: FastifyInstance, watcher: DaemonWatcher, taskRunner: TaskRunner): void {
   app.get<{ Params: { tid: string } }>("/api/tasks/:tid", async (request, reply) => {
     const location = watcher.resolveTask(request.params.tid);
     if (!location) {
       await reply.code(404).send({ error: `no such task: ${request.params.tid}` });
       return;
     }
-    const detail = await buildTaskDetail(location);
+    const detail = await buildTaskDetail(location, taskRunner);
     await reply.send(ApiTaskDetailSchema.parse(detail));
   });
 

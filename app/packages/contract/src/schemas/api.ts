@@ -200,6 +200,18 @@ export const ApiTaskDetailSchema = z
      * explicitly, not left `undefined`, so the UI never has to treat
      * "field missing" as its own third case. */
     owner: z.enum(["plugin", "app"]),
+    /** Phase 3 milestone 6 addition: whether this daemon process is
+     * currently driving this task in-process right now
+     * (`TaskRunner.isActive()`) -- not derivable from `phase` alone (a
+     * `"stopped"`/`"failed"` task is definitely not active, but an
+     * `"implementing"`/`"fixing"`/etc. task could be either genuinely
+     * mid-flight *or* sitting idle because its `driveTask()` loop died
+     * without reaching a terminal phase, e.g. an uncaught error `start()`
+     * only logs -- see its own docstring). The UI's cancel/resume/retry
+     * controls (milestone 6) use this, not `phase`, to decide which
+     * control makes sense to offer. Always `false` for a `"plugin"`-owned
+     * task -- `TaskRunner` never drives one (Design decision 5). */
+    active: z.boolean(),
   })
   .catchall(z.unknown());
 export type ApiTaskDetail = z.infer<typeof ApiTaskDetailSchema>;
@@ -449,3 +461,38 @@ export const ApiPendingApprovalSchema = z
   })
   .strict();
 export type ApiPendingApproval = z.infer<typeof ApiPendingApprovalSchema>;
+
+/** `POST /api/tasks/:tid/cancel` (Phase 3 milestone 6). `run` is
+ * optional: omitted, the daemon cancels every run `runs/status.json`
+ * currently marks `"running"` for this task (there can genuinely be two
+ * at once -- `dispatch_verification` always runs tester and
+ * code-reviewer in parallel, `runner.ts`); given, only that one run is
+ * killed. Either way, cancelling always also stops the task's own
+ * `driveTask()` loop from starting anything further (`TaskRunner.
+ * cancelTask()`) -- `run` only controls which in-flight *subprocess*
+ * gets killed immediately versus left to exit on its own before the loop
+ * notices the cancellation, not whether the task itself keeps going. */
+export const ApiCancelTaskRequestSchema = z
+  .object({
+    run: z.string().optional(),
+  })
+  .strict();
+export type ApiCancelTaskRequest = z.infer<typeof ApiCancelTaskRequestSchema>;
+
+/** `POST /api/tasks/:tid/retry-run` (Phase 3 milestone 6, confirmed open
+ * question 2). Scoped to the four dispatched-or-checked steps a fix-loop
+ * round is actually made of -- `developer`/`gate`/`tester`/
+ * `code-reviewer` -- not `ui-ux` (the one-time design dispatch, a
+ * different, non-per-round kind of step this milestone doesn't extend
+ * retry to; see `routes/task-control.ts`'s own docstring). `run` must
+ * name the task's own *current* (highest-numbered) round -- retrying an
+ * earlier one isn't rejected because it's unsafe, but because it would
+ * silently mean "redo every round after this one too," a surprising,
+ * expensive operation this milestone doesn't try to make predictable;
+ * see `routes/task-control.ts` for the real reasoning. */
+export const ApiRetryRunRequestSchema = z
+  .object({
+    run: z.string().regex(/^(developer|gate|tester|code-reviewer)-r\d+$/, "run must be one of developer/gate/tester/code-reviewer, e.g. developer-r2"),
+  })
+  .strict();
+export type ApiRetryRunRequest = z.infer<typeof ApiRetryRunRequestSchema>;

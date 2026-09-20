@@ -70,6 +70,21 @@ export interface DriveTaskParams {
    * gating (`runner.ts`) applies across the whole daemon process, not
    * just within one task's own dispatches. */
   limiter?: ConcurrencyLimiter;
+  /** Phase 3 milestone 6's cancel control -- omitted by `crewbench run`/
+   * `resume` (no HTTP caller to cancel from; a terminal `Ctrl-C` already
+   * kills the whole process, no in-band signal needed), set by the
+   * daemon's `TaskRunner` to one `AbortController`'s signal per active
+   * task. Checked once per loop iteration, *between* commands, not
+   * inside one -- this can't interrupt an `await dispatchRole(...)`
+   * already in flight (finding 3 in this plan's own "Three real
+   * findings" section: no live handle exists to interrupt with before a
+   * dispatch's process exits). A caller that wants an in-flight
+   * subprocess killed immediately, not just the loop stopped before its
+   * *next* command, does that separately via `cancelRun()` against the
+   * real pid already recorded in `status.json` (`runner.ts`, made real by
+   * Phase 3 milestone 1's `onSpawn` fix) -- `routes/task-control.ts` does
+   * both together. */
+  cancelSignal?: AbortSignal;
 }
 
 function buildParams(role: RoleName, p: DriveTaskParams, round: number, handoff: string) {
@@ -143,8 +158,67 @@ export async function driveTask(p: DriveTaskParams): Promise<void> {
   let state = p.state;
   await setField(p.taskDir, "phase", state.phase);
   await setField(p.taskDir, "round", state.round);
+  // Clears any `stuck_reason` left over from a *previous* run of this
+  // task that ended cancelled -- resume()/retry-run() both call
+  // `driveTask()` fresh from here, and a stale "cancelled by user" from
+  // before must not keep showing on a task that's actively running again
+  // (see the cancellation branch below for why this field exists at all).
+  await setField(p.taskDir, "stuck_reason", null);
 
+  const TERMINAL_PHASES = new Set(["done", "stopped", "failed"]);
   for (;;) {
+    // Phase 3 milestone 6: a cancellation always wins over whatever
+    // `decide()` would otherwise return next -- forcing `phase: "stopped"`
+    // here, rather than adding a new `Command`/`decide()` case, reuses
+    // the engine's *existing* "stopped" terminal path unchanged (the same
+    // one gate-failure/stuck-detection already produce in `reduce.ts`):
+    // the very next `decide(state)` call below returns
+    // `{type:"finish", outcome:"stopped", ...}` on its own, so
+    // `driveTask()`'s own `finish` branch summarizes and breaks exactly
+    // as it already does for every other "stopped" cause. Skipped once
+    // already terminal so a cancel racing the loop's own natural finish
+    // doesn't overwrite a real `"done"`/`"failed"` outcome that beat it
+    // there. **Persisted here explicitly, not left to the loop's own
+    // trailing `setField()` calls**: a real, pre-existing gap found while
+    // building this (not introduced by it) is that every `break` in this
+    // loop -- including the `finish` branch just below, and the earlier
+    // commit-decline branch -- exits *before* reaching those trailing
+    // calls, so a state reached only via a `break` is never actually
+    // written. That's harmless for a *successful* commit (reduce()
+    // already persisted `phase: "done"` in the *previous* iteration,
+    // before this one's `finish` no-ops over already-correct data) and
+    // for gate-failure/stuck-detection (`reduce()` sets `"stopped"`
+    // inside the `run_gate`/`dispatch_verification` branches themselves,
+    // which don't `break`) -- but a cancellation reaches "stopped" for
+    // the first time in a *fresh* iteration that goes straight to
+    // `finish`, with no earlier iteration to have persisted it. Writing
+    // it here, not fixing the loop's broader break/persist gap (the
+    // commit-decline case genuinely never persists "stopped" either,
+    // confirmed by reading it, but that's Phase 1 behavior this
+    // milestone didn't touch and isn't the scoped fix here).
+    //
+    // Also persists `stuck_reason` itself (a new, additive `TaskState`
+    // field, `@crewbench/contract`'s own docstring has the full story):
+    // a second real, deeper gap found live while building this --
+    // `FullEngineState.stuckReason` was, before this, purely an
+    // in-memory value `rehydrateState()` re-derives by replaying
+    // `runs/*.result.json` files through the same `reduce()` transitions
+    // the live loop uses. That works for every *other* stopped reason
+    // (gate failure, max rounds, a declined commit) because replay
+    // independently arrives at the identical transition from the same
+    // files. Cancellation has no file for replay to ever find -- it's a
+    // pure runtime signal -- so without a real persisted field here,
+    // `packages/daemon/src/task-detail.ts`'s `buildTaskDetail()` (which
+    // reports `phase`/`stuck_reason` from `rehydrateState()`'s replay,
+    // not this loop's own in-memory `state`) would show a cancelled task
+    // as still mid-round forever, since replay has no way to know it was
+    // cancelled. `task-detail.ts` reads this field back to override
+    // exactly that case -- see its own docstring.
+    if (p.cancelSignal?.aborted && !TERMINAL_PHASES.has(state.phase)) {
+      state = { ...state, phase: "stopped", stuckReason: "cancelled by user" };
+      await setField(p.taskDir, "phase", state.phase);
+      await setField(p.taskDir, "stuck_reason", state.stuckReason);
+    }
     const commands = decide(state);
     const command = commands[0];
     if (!command) break;

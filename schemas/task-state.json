@@ -136,6 +136,12 @@
         "null"
       ]
     },
+    "stuck_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "rounds": {
       "type": "array",
       "items": {
