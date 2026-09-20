@@ -537,3 +537,26 @@ about what was actually run. Fixed: `.github/workflows/ci-node.yml` and
 this log's own build:publish reference both now say `pnpm --filter
 crewbench build:publish`. Re-pushed; a second real CI run is what
 actually closes sign-off item (1) above, not this local fix alone.
+
+**Second real CI run: `package-smoke` genuinely green on all three
+OSes** (macOS, Linux, Windows) — sign-off item (1) is now closed for
+real, not just locally on macOS.
+
+**A separate, pre-existing, out-of-scope failure found live in that same
+run, disclosed rather than silently ignored or silently fixed**:
+`test (windows-latest)` — the existing, unrelated build/test/typecheck
+job this milestone didn't touch — fails on Windows, and was already
+failing identically on a CI run from *before* this milestone started
+(`35532923463`, triggered by this session's earlier folder-picker/model-
+dropdown commit, confirmed by direct comparison). Real failures inside
+`packages/engine`'s test suite: `spawn EFTYPE` errors from
+`chat-runner.ts`/`runner.ts` spawning the fake-CLI test fixtures,
+`git.test.ts`/`worktree.test.ts` timeouts, and an `EPERM` on a
+`.status.lock` file under `runner.test.ts`'s parallel-dispatch race
+test — a real, substantial Windows-specific gap in `packages/engine`'s
+process-spawning and file-locking code, nothing to do with CLI
+packaging or this milestone's own changes. Not this milestone's to fix
+(wrong package, wrong scope, and worth its own dedicated investigation
+rather than a drive-by patch here) — flagging it now since this is the
+first time in this app's build that CI has actually been watched run-by-
+run on all three OSes, and Windows has apparently never genuinely passed.
