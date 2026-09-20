@@ -49,13 +49,39 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("5 recent")).toBeInTheDocument();
   });
 
-  it("shows an empty state when no projects are registered", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify([]), { status: 200 })),
-    );
+  it("shows the onboarding wizard instead of the project grid when no projects are registered (Phase 4 milestone 2)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/projects")) return new Response(JSON.stringify([]), { status: 200 });
+      if (url.includes("/api/doctor")) {
+        return new Response(
+          JSON.stringify({
+            reports: [
+              { cli: "claude", installed: true, version: "1", config_dir: null, config_dir_writable: null, network_ok: true, network_detail: null, logged_in: true, auth_detail: null, ok: true, errors: [] },
+              { cli: "codex", installed: false, version: null, config_dir: null, config_dir_writable: null, network_ok: null, network_detail: null, logged_in: null, auth_detail: null, ok: false, errors: ["not installed"] },
+            ],
+            checked_at: "2026-01-01T00:00:00Z",
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
     renderProjectsPage();
-    await waitFor(() => expect(screen.getByText(/no projects registered yet/i)).toBeInTheDocument());
+
+    await screen.findByText(/welcome to crewbench/i);
+    // Step 1: doctor status for every CLI, both installed and not --
+    // "claude" appears twice (step 1's status row, step 3's install
+    // offer), "codex" (not installed) only once, in step 1.
+    await waitFor(() => expect(screen.getAllByText("claude").length).toBeGreaterThan(0));
+    expect(screen.getAllByText("codex")).toHaveLength(1);
+    // Step 3: an install-plugin offer only for the CLI doctor reports
+    // installed -- not for codex, which isn't.
+    expect(screen.getAllByRole("button", { name: /install plugin/i })).toHaveLength(1);
+    // No project-grid page heading -- this replaces the whole page, not
+    // a banner on top of it.
+    expect(screen.queryByRole("heading", { name: /^projects$/i })).not.toBeInTheDocument();
   });
 
   it("picks a project path through the folder browser, not by typing -- there is no free-text path input at all", async () => {

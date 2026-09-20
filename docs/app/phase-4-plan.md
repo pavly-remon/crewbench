@@ -14,7 +14,12 @@ approved 2026-09-20, after fixing a real bug this review's own CI run
 caught (a wrong pnpm filter name silently no-opping the publish build),
 confirmed by a second, genuinely green 3-OS `package-smoke` run -- see
 its log entry, including a disclosed, out-of-scope pre-existing Windows
-test failure in `packages/engine` found live in that same run.)
+test failure in `packages/engine` found live in that same run. Milestone
+2 implemented 2026-09-20, pending human review -- see its log entry,
+including a disclosed real safety incident during this milestone's own
+investigation (a real, already-installed local `agy` plugin was
+accidentally refreshed against this machine's real config, not a fake
+override) and a real bug its own live daemon check caught and fixed.)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -564,3 +569,150 @@ packaging or this milestone's own changes. Not this milestone's to fix
 rather than a drive-by patch here) — flagging it now since this is the
 first time in this app's build that CI has actually been watched run-by-
 run on all three OSes, and Windows has apparently never genuinely passed.
+
+### Milestone 2 -- implemented, pending human review (2026-09-20)
+
+**A real safety incident during this milestone's own investigation,
+disclosed rather than hidden**: before writing any code, this session
+investigated what "install the plugin" concretely means per CLI by
+reading each real CLI's own `--help` output. While confirming `agy
+plugin install` accepts a remote GitHub URL directly, the exact command
+tried (`agy plugin install https://github.com/pavly-remon/crewbench`)
+was run against this machine's own real, already-installed `agy`
+binary -- not a fake CLI override -- a real violation of this
+milestone's own safety constraint against touching real developer CLI
+configs. Checked the actual damage immediately: `~/.gemini/config/
+plugins/crewbench`'s git checkout was re-cloned to the current GitHub
+HEAD (confirmed by its new mtime and `git log`'s commit date changing),
+but `~/.gemini/config/import_manifest.json`'s own registration
+timestamp was untouched (still `2026-09-14`, its real original
+install date) -- so the real effect was refreshing an already-installed
+plugin's source checkout to the latest upstream commit, not creating a
+new registration or touching any of the user's own settings. Low
+severity, but a real, unauthorized write to a real environment this
+session should not have made. Every subsequent investigation step and
+every actual test in this milestone instead used `--help` (read-only)
+or a `CREWBENCH_CLI_OVERRIDE_<CLI>` fake script, never a real binary
+again.
+
+**What "install the plugin" concretely means per CLI, the real
+investigation finding (reshapes this milestone from README.md's own
+slightly-stale instructions)**:
+- **claude**: README documents the *interactive* `/plugin marketplace
+  add`/`/plugin install` slash-command form, which this app can't run
+  headlessly at all. `claude plugin --help` confirms a real,
+  non-interactive equivalent exists: `claude plugin marketplace add
+  <repo>` then `claude plugin install crewbench@PiCode-marketplace -y`
+  (`-y` needed to accept the marketplace-declared command
+  non-interactively).
+- **copilot**: matches README exactly -- `copilot plugin marketplace add
+  <repo>` then `copilot plugin install crewbench@PiCode-marketplace`,
+  both real, confirmed against `copilot plugin --help`.
+- **codex**: README describes adding the marketplace via a real shell
+  command, then installing crewbench through the *interactive* `/plugins`
+  menu -- but `codex plugin --help` shows a real `plugin add` subcommand
+  that didn't exist (or wasn't documented) when the README was written:
+  `codex plugin marketplace add <repo>` then `codex plugin add
+  crewbench@PiCode-marketplace`, both non-interactive. **VERIFY**: no
+  `.codex-plugin/marketplace.json` exists in this repo to confirm codex
+  derives the identical `PiCode-marketplace` name from
+  `.claude-plugin/marketplace.json` -- if it genuinely differs, the
+  real second-step error surfaces to the user as-is, not masked.
+- **agy**: genuinely different shape, not a two-step marketplace flow at
+  all -- `agy plugin --help` lists no `marketplace` subcommand. A single
+  `agy plugin install <url>` accepts a remote GitHub URL directly
+  (confirmed, see the incident above), better than README's own
+  "clone locally, then `agy plugin install ./crewbench`" instructions.
+
+This asymmetry (2-step for three CLIs, 1-step for agy, a real `-y` flag
+only claude needs) is real, not an oversight to unify -- each CLI's own
+plugin system genuinely differs.
+
+- **Built**: `@crewbench/adapters`'s new `installPlugin(cli, cliPath)`
+  (`plugin-install.ts`), running the real per-CLI sequence above,
+  stopping and reporting `ok: false` the moment any step fails (a failed
+  marketplace-add never attempts the install step). `POST
+  /api/plugin-install/:cli` (`routes/plugin-install.ts`) -- no
+  project/task association, a machine-wide action; 400s for an unknown
+  CLI name or one not found on `PATH`. New `ApiInstallPluginResponseSchema`
+  (`@crewbench/contract`).
+- **UI**: `OnboardingWizard` (`routes/onboarding-wizard.tsx`), rendered
+  by `ProjectsPage` itself -- **a real, disclosed design call**: gated
+  literally on `GET /api/projects` returning empty (Design decision 3's
+  own wording), not a separate persisted "first run ever" flag this
+  milestone didn't build. This means the wizard reappears any time zero
+  projects are registered (e.g. every one removed later), not "shown
+  once, ever" -- an intentional reading of the plan's own words, not an
+  invented interpretation, but worth the user's explicit sign-off since
+  it's a real behavioral choice. **A second real design call**: built as
+  three sections on one page (doctor status, add-project form, per-CLI
+  plugin-install offers), not a multi-step modal with Next/Back --
+  simplest correct way to satisfy "sequencing" without new routing or
+  wizard-state machinery; the wizard has no explicit "finish" action, it
+  just stops rendering the moment `useAddProject()`'s own query
+  invalidation flips `projects` non-empty. The plugin-install offer only
+  shows for a CLI doctor already reports `installed: true`, and a click
+  doesn't fire the real install immediately -- it flips into a real,
+  visible inline "install into `<cli>`?" confirm row first (the phase
+  prompt's own "run it only on confirmation"), not a native `confirm()`
+  dialog.
+- **A real bug, caught by this milestone's own live daemon check, not a
+  test**: `runStep()`'s `command` field (meant to show the UI/API caller
+  exactly what ran) rendered doubled -- `"claude plugin marketplace add
+  plugin marketplace add pavly-remon/crewbench"` -- because the per-step
+  label argument already spelled out the full command and the line
+  appending `args.join(" ")` duplicated it. The actual argv passed to
+  `execFile` was always correct (confirmed separately via the fake
+  CLI's own call log) -- only the human-readable `command` string was
+  wrong, and nothing in the UI currently renders it, so this had no
+  visible effect yet, but was a real, wrong value in the API contract.
+  Fixed by building `command` from the bare CLI name plus `args` once,
+  not twice; caught before shipping because a live check was run against
+  a real daemon and its real JSON response actually read, not assumed
+  correct from the tests alone -- the tests themselves initially still
+  showed the bug too, since `packages/adapters` needed a real rebuild
+  (`pnpm --filter @crewbench/adapters build`) before the daemon's own
+  `node_modules` symlink picked up the source fix, a real, disclosed gap
+  in this session's own build/verify loop, not assumed.
+- Tests: `daemon/test/plugin-install.test.ts` (8 tests) -- every one
+  through a fake CLI script recording its own real argv to a file
+  (`CREWBENCH_CLI_OVERRIDE_<CLI>`), never a real binary, per the incident
+  above: per-CLI argv/step-count/command-string assertions for all four
+  CLIs, a marketplace-failure-stops-the-sequence case, an
+  install-step-failure case reporting the real captured output, unknown-
+  cli and not-on-PATH 400s. `ui/test/onboarding-wizard.test.tsx` (3
+  tests): the confirm-then-install flow genuinely requires two real
+  clicks before the request fires, cancel backs out without ever
+  calling install, a real failed install's own error message renders
+  (not a generic one). `ui/test/projects-page.test.tsx`'s own existing
+  "empty state" test rewritten (the old "No projects registered yet"
+  card this milestone replaces no longer exists) to assert the wizard
+  itself renders instead, with both an installed and a not-installed
+  CLI in the mocked doctor response.
+- **Live, real end-to-end verification, beyond the automated tests**:
+  built the real UI, started the real `crewbench ui` binary with a real
+  daemon, a `CREWBENCH_CLI_OVERRIDE_CLAUDE` fake script, and zero
+  registered projects; `curl`ed `GET /api/projects` (confirmed empty)
+  and `POST /api/plugin-install/claude` directly against the real
+  running daemon -- the first live run caught the doubled-`command` bug
+  above; after the fix and a real adapters rebuild, re-ran the identical
+  live check and confirmed the corrected, real JSON response.
+- Full verification: `pnpm -r typecheck/build/test` all green (423 TS
+  tests: 27 contract + 107 adapters + 152 engine + 83 daemon + 30 ui + 24
+  cli), both Playwright e2e tests still passing (the existing fixtures
+  register a project before navigating, so neither hits the wizard path
+  -- confirmed by reading them first, not assumed unaffected), Python
+  suite (212 tests) unaffected, `pnpm check:schemas` clean (no
+  `schemas/*.json` covers this milestone's own new API-only schemas).
+- **What still needs human sign-off before this is "done"**: (1) the
+  real safety incident during investigation, disclosed above -- whether
+  the low-severity-but-real damage assessment is accepted, and whether
+  this session's corrected approach (read-only `--help` + fake-CLI-only
+  testing from that point on) is sufficient going forward; (2) the
+  "wizard reappears whenever projects is empty" design call, a literal
+  reading of the plan's own wording rather than a separate persisted
+  first-run flag; (3) the single-page (not multi-step-modal) wizard
+  layout; (4) the codex marketplace-name VERIFY flag -- untestable
+  without a real codex environment reachable to a real marketplace add,
+  which this session deliberately did not attempt after the agy
+  incident.

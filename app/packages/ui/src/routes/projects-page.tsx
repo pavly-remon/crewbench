@@ -5,6 +5,7 @@ import { Card } from "../components/card.js";
 import { Button } from "../components/button.js";
 import { Dialog } from "../components/dialog.js";
 import { FolderBrowserDialog } from "../components/folder-browser-dialog.js";
+import { OnboardingWizard } from "./onboarding-wizard.js";
 import { useAddProject, useProjects } from "../api/projects.js";
 
 /** Path is chosen through the folder browser (`FolderBrowserDialog`),
@@ -87,6 +88,17 @@ export function ProjectsPage() {
   const { data: projects, isLoading, isError, error } = useProjects();
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  // Phase 4 milestone 2, Design decision 3: the first-run wizard replaces
+  // this whole page's content while there are genuinely zero registered
+  // projects -- see OnboardingWizard's own docstring for why this is
+  // gated on live query data, not a separate persisted "have I onboarded
+  // before" flag. It naturally stops rendering the moment the wizard's
+  // own "add a project" step succeeds, since that flips `projects` non-
+  // empty on the very next render.
+  if (!isLoading && !isError && projects?.length === 0) {
+    return <OnboardingWizard />;
+  }
+
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -99,11 +111,6 @@ export function ProjectsPage() {
 
       {isLoading && <p className="text-sm text-[var(--color-fg-muted)]">Loading projects…</p>}
       {isError && <p className="text-sm text-red-500">{error.message}</p>}
-      {!isLoading && !isError && projects?.length === 0 && (
-        <Card className="text-center text-sm text-[var(--color-fg-muted)]">
-          No projects registered yet. Add one to see its tasks here.
-        </Card>
-      )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {projects?.map((project) => (

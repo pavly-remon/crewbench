@@ -541,3 +541,29 @@ export const ApiFsBrowseResponseSchema = z
   })
   .strict();
 export type ApiFsBrowseResponse = z.infer<typeof ApiFsBrowseResponseSchema>;
+
+/** `POST /api/plugin-install/:cli` (Phase 4 milestone 2) -- the
+ * onboarding wizard's "install the plugin" step, run only when the user
+ * confirms it (the phase prompt's own "run it only on confirmation" --
+ * this POST *is* that confirmed action, there is no separate two-step
+ * server-side confirmation). One row per real shell command the install
+ * actually ran, in order, so the UI can show exactly what happened
+ * rather than a single opaque pass/fail. */
+export const ApiInstallPluginStepSchema = z
+  .object({
+    command: z.string(),
+    ok: z.boolean(),
+    output: z.string(),
+  })
+  .strict();
+export type ApiInstallPluginStep = z.infer<typeof ApiInstallPluginStepSchema>;
+
+export const ApiInstallPluginResponseSchema = z
+  .object({
+    cli: ApiCliSchema,
+    ok: z.boolean(),
+    steps: z.array(ApiInstallPluginStepSchema),
+    error: z.string().nullable(),
+  })
+  .strict();
+export type ApiInstallPluginResponse = z.infer<typeof ApiInstallPluginResponseSchema>;

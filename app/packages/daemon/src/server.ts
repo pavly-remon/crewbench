@@ -15,6 +15,7 @@ import { registerApprovalRoutes } from "./routes/approvals.js";
 import { registerTaskControlRoutes } from "./routes/task-control.js";
 import { registerModelRoutes } from "./routes/models.js";
 import { registerFsBrowseRoutes } from "./routes/fs-browse.js";
+import { registerPluginInstallRoutes } from "./routes/plugin-install.js";
 import { registerUiStatic } from "./static-ui.js";
 import { DEFAULT_PORT, loadConfig } from "./config.js";
 import { loadRegistry } from "./registry.js";
@@ -89,6 +90,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   registerTaskControlRoutes(app, watcher, taskRunner);
   registerModelRoutes(app);
   registerFsBrowseRoutes(app);
+  registerPluginInstallRoutes(app);
   await registerUiStatic(app);
 
   await app.listen({ host: "127.0.0.1", port });
