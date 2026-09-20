@@ -1,6 +1,6 @@
 # Phase 3 — Interactive UI (create, scope, approve, control)
 
-Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 implemented, pending human review -- see its log entry)
+Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review, see its log entry)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md` and
@@ -453,7 +453,7 @@ correct because it looked plausible.
   milestone's only schema change, `config.json`'s `concurrency` field,
   has no Python-side file to generate).
 
-### Milestone 3 -- implemented, pending human review (2026-09-20)
+### Milestone 3 -- done (reviewed and approved 2026-09-20)
 
 **Not marked "done" by this session.** Everything below was actually
 built, run, and verified the ways described -- but unlike milestones 1-2,
