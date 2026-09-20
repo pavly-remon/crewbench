@@ -1,6 +1,6 @@
 # Phase 3 — Interactive UI (create, scope, approve, control)
 
-Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review; milestone 4 done -- reviewed and approved 2026-09-20, including its disclosed scope limits (team settings edits roles only, no per-task loop override, no resume-abandoned-scoping path) and the new `POST /api/tasks/:tid/lineup` endpoint added beyond the plan's literal bullet; milestone 5 done -- reviewed and approved 2026-09-20, including its disclosed scope call (generic fallback card for the six never-issued approval kinds) and one post-review change (dropped the unused `GET /api/tasks/:tid/approvals` endpoint and its dead UI hook))
+Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review; milestone 4 done -- reviewed and approved 2026-09-20, including its disclosed scope limits (team settings edits roles only, no per-task loop override, no resume-abandoned-scoping path) and the new `POST /api/tasks/:tid/lineup` endpoint added beyond the plan's literal bullet; milestone 5 done -- reviewed and approved 2026-09-20, including its disclosed scope call (generic fallback card for the six never-issued approval kinds) and one post-review change (dropped the unused `GET /api/tasks/:tid/approvals` endpoint and its dead UI hook); milestone 6 (the last milestone) implemented 2026-09-20, pending human review -- see its log entry, including an honest assessment of whether Phase 3's overall goal is actually met)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md` and
@@ -1020,3 +1020,174 @@ rather than pretending to exercise something that doesn't exist.
    mode" for app-owned tasks is a real, separate feature for whichever
    future milestone needs it, not something this one should invent just
    to make its own test setup less manual.
+
+### Milestone 6 -- implemented, pending human review (2026-09-20)
+
+The last milestone of Phase 3. Picked up from a previous session that got
+cut off mid-work by a rate limit -- its uncommitted daemon-side work
+(cancel/resume/retry-run routes, mostly complete) was diagnosed, fixed,
+and finished here rather than restarted; the rest (UI controls, the
+Playwright e2e test) built fresh.
+
+- **Daemon**: `POST /api/tasks/:tid/cancel` (`{run?}` -- a specific run,
+  or every run `status.json` currently marks `"running"`), `.../resume`,
+  `.../retry-run` (`{run}`, confirmed open question 2's semantics --
+  clears that run's result file and every later step in the same round,
+  letting the existing replay-from-files architecture re-enter it
+  naturally, no bespoke one-off dispatch call needed).
+- **What "resume" concretely means, confirmed by reading the code, not
+  assumed**: genuinely distinct from `TaskRunner.reattachProject()`'s
+  automatic restart-time reattach, which deliberately skips any
+  terminal-phase task -- a `"stopped"`/`"failed"` task is *supposed* to
+  stay stopped until a person says otherwise. `POST .../resume` is that
+  deliberate signal: it rebuilds `DriveTaskParams` fresh from disk
+  (`buildParams()` -> `rehydrateState()`) and restarts `driveTask()`,
+  exactly like starting a brand-new task, just from a task that already
+  has a lineup. Resuming a task stopped for a *file-backed* reason (gate
+  failing after max rounds) replays into that same stopped conclusion
+  again by itself -- a real no-op by design, not a bug; pairing it with
+  `retry-run` first (which does change what's on disk) is what actually
+  unsticks that case.
+- **Two real bugs found and fixed in the cancel/resume/retry-run flow
+  while getting the previous session's tests to actually pass** (not
+  just typecheck -- they were still failing when picked up):
+  1. **A race in the cancel route**: it killed the in-flight subprocess
+     (`cancelRun()`, which polls up to every 200ms for the process to
+     die) *before* signaling the loop's `AbortController` -- easily
+     enough time for the killed dispatch's own promise to resolve and
+     for `driveTask()`'s loop to race straight into dispatching the
+     *next* command (gate, then verification) before the signal was ever
+     set. First reproduced live (a cancelled task kept running gate and
+     verification anyway), then fixed by signaling first, killing
+     second -- the signal is synchronous and returns instantly, well
+     before the kill's first `SIGTERM` even sends.
+  2. **A deeper gap**: cancellation is a pure runtime signal with no
+     corresponding `runs/*.result.json` file, so `rehydrateState()`'s
+     file-replay (which `buildTaskDetail()` prefers over `state.json`'s
+     own `phase` for every reason a task stops that replay can
+     independently re-derive from the same files) has no way to ever
+     learn a task was cancelled -- its `phase` looked stuck mid-round
+     through the API forever. Fixed with a new, additive `TaskState`
+     field (`stuck_reason`) that `drive.ts` now actually persists on
+     cancellation, and `buildTaskDetail()` reads back to override
+     replay's phase, but only when the daemon isn't actively driving the
+     task and the on-disk phase disagrees with what replay thinks.
+- **UI**: task-level Cancel (while active)/Resume (once stopped or
+  failed)/"copy resume command" controls in the task-detail header, and a
+  per-lane Retry button that only ever renders for a run that's actually
+  retryable right now (the task's current round, task not active) rather
+  than showing a control that would just 400. A real, in-app Resume
+  button is a disclosed interpretation beyond the phase prompt's literal
+  "cancel, retry, copy resume command" UI bullet -- the daemon's real
+  `/resume` route would otherwise have no UI caller at all.
+- **The Playwright e2e test -- this milestone's actual centerpiece, and
+  the thing that caught the most significant bug found in this entire
+  phase**: a new `e2e/full-flow.spec.ts`, with its own isolated daemon
+  (own port, own `CREWBENCH_HOME`, own fake-`claude` override -- doesn't
+  touch the existing shared fixture in `fixture-server.ts`/
+  `global-setup.ts`, to avoid any risk to the already-passing
+  `board-to-detail.spec.ts`), drives create -> a real two-turn scoping
+  conversation -> finalize -> lineup -> a real fix round (developer,
+  gate, tester, code-reviewer) -> a real commit approval, entirely
+  through the real UI against a real daemon, with one fake CLI standing
+  in for `claude` across every role (the phase prompt's own "fake CLIs"
+  wording -- one was enough here since the fixture project's team
+  defaults every role to `claude` and nothing about this flow is
+  CLI-specific).
+  - **A real, previously-invisible bug this test found live, not by
+    inspection**: resolving the commit approval through the UI, the
+    task-detail page's phase badge stayed on `"awaiting_commit"`
+    forever, even though the daemon's own console genuinely logged
+    `Committed <sha>.` / `<title>: done.` -- the commit and the finish
+    both genuinely happened. Root-caused with a standalone repro script
+    (bypassing the browser, hitting the daemon's HTTP API directly, and
+    finally reading `state.json` straight off disk) before touching any
+    code: `state.json`'s raw `phase` field genuinely said `"done"`, but
+    `GET /api/tasks/:tid` kept reporting `"awaiting_commit"`, because
+    `rehydrateState()`'s file replay (`resume.ts`) has *no branch at all*
+    for "the commit approval was approved" -- that's an approval-flow
+    decision, not something any `runs/*.result.json` file ever records,
+    so replay's own ceiling for a completed task is "verification
+    finished," never higher. This is the exact same class of gap as the
+    cancellation bug above (replay blind to anything that isn't
+    file-backed) -- my own earlier fix for cancellation only extended
+    `buildTaskDetail()`'s on-disk-phase override to `"stopped"`/
+    `"failed"`, not `"done"`, and missed this. **Every task that
+    completes normally through a resolved commit approval hits this**,
+    not an edge case -- it simply had no test before this milestone that
+    resolved a real commit approval over HTTP and then re-checked the
+    API's own reported phase afterward (`task-control.test.ts`'s own
+    retry-run test reaches the same pending-commit-approval point but
+    never resolves it). Fixed by extending the same on-disk-phase
+    override to include `"done"`. Verified fixed with the same
+    standalone repro script before touching the Playwright test at all,
+    then confirmed via the real e2e test itself passing.
+  - **Does not reach `integrate`** -- not a shortcut taken to make the
+    test easier, the same real, disclosed gap milestone 5's own log
+    already found: `integrate`/`cleanup_worktree` approvals only fire
+    when `p.worktree && p.branch` are both set (`drive.ts`), and
+    `TaskRunner.buildParams()` never sets either for an app-owned task --
+    there is no worktree mode for one today. After the commit approval
+    resolves, the loop finishes straight to `"done"`; there is no
+    integrate step to reach without this milestone inventing worktree
+    support it doesn't own. Confirmed by reading the code before writing
+    the test, not discovered by the test failing to get there.
+- Tests: `task-control.test.ts`'s three previously-failing tests (cancel,
+  resume, retry-run -- all real subprocess-level, proving a genuine kill,
+  a genuine re-entry into `driveTask()`, and a genuine re-dispatch
+  respectively) now pass reliably (run 3x in a row); two more real,
+  pre-existing test bugs found and fixed while getting there (not
+  implementation bugs): `/resume` calls reused a shared `headers` object
+  that always carried `Content-Type: application/json` even with no
+  body, which Fastify's default JSON parser rejects outright
+  (`FST_ERR_CTP_EMPTY_JSON_BODY`) -- a real gap in the test, not the
+  route or the real client (`lib/api.ts`'s `apiFetch()` only sets that
+  header `if (init.body ...)`); and a file-existence assertion checked
+  the wrong directory (`taskDir`, the `.crewbench/tasks/<id>` metadata
+  dir, instead of `repo`, the actual project root the fake CLI writes
+  relative to -- app-owned tasks have no worktree, so `cwd` is the
+  project root directly). New `task-controls.test.tsx` (8 tests) for the
+  UI controls. New `full-flow.spec.ts` e2e test, run 3x standalone plus
+  once alongside the existing e2e test to confirm no cross-file
+  interference from its own isolated daemon/env handling.
+- Full verification: `pnpm -r typecheck/build/test` all green (402 TS
+  tests: 27 contract + 107 adapters + 152 engine + 67 daemon + 25 ui + 24
+  cli), both Playwright e2e tests passing (run multiple times, reliably
+  green), Python suite (212 tests) unaffected, `pnpm check:schemas`
+  clean.
+- **Honest assessment of Phase 3's overall goal ("make the UI a full
+  replacement for the plugin workflow"), based on what was actually
+  found while building this milestone, not a guess**: the *core* loop --
+  create a task, scope it in a real chat with the lead, pick a lineup,
+  watch a real fix round run, resolve approvals, and cancel/resume/retry
+  -- is now genuinely real and daemon-hosted, proven end-to-end through
+  the real UI by this milestone's own e2e test, not just unit-tested in
+  isolation. That said, "full replacement" has real, disclosed gaps this
+  phase leaves open, not hidden:
+  1. **No worktree/branch isolation for app-owned tasks.** The plugin
+     workflow's own worktree mode (isolated branch per task, `integrate`
+     to bring it back, `cleanup_worktree` after) has no equivalent here
+     at all -- every app-owned task runs in-place in the project root.
+     A user who wants that isolation still needs the CLI/plugin.
+  2. **Six of nine `ApprovalKind`s are still never actually issued**
+     (milestone 5's own finding, unchanged by this milestone) --
+     `confirm_profile`/`lineup` are real UI flows built on a *different*
+     mechanism (milestone 4's own pages), `design` is decided outside
+     `driveTask()` entirely, `dirty_tree`/`worktree_setup` are CLI-
+     terminal pre-flight concepts that don't apply to a daemon-hosted
+     task, and `push` has no implementation anywhere in this codebase.
+  3. **An abandoned scoping conversation has no resume path** (milestone
+     4's own disclosed gap, still true) -- a task left mid-scoping (spec
+     never finalized) has nothing in the UI to pick that conversation
+     back up.
+  4. **Team settings only edits the role roster**, not `tiers`/`loop`/
+     `workspace`/`confirm_lineup` (milestone 4's own disclosed scope
+     limit, still true).
+  None of these are new to this milestone -- they're the accumulated,
+  honestly-disclosed scope limits from milestones 3-6 -- but "full
+  replacement for the plugin workflow" is not yet a fully accurate claim
+  with them still open. The core interactive loop this phase's own goal
+  statement names first ("create a task, scope it... pick the lineup,
+  then watch it run, answer approvals, and cancel, resume or retry") is
+  genuinely done and proven; the plugin's own worktree-isolation
+  workflow specifically is not replicated at all.

@@ -148,28 +148,45 @@ export async function buildTaskDetail(location: TaskLocation, taskRunner: TaskRu
     hasLineup || hasRoundOne
       ? await rehydrateState(location.taskDir, loop)
       : { phase: state.phase, round: state.round, stuckReason: null, rounds: [], issueRegistry: [] };
-  // Phase 3 milestone 6, a second real gap found live: `rehydrated`
-  // above is purely `runs/*.result.json` file replay -- correct for
-  // every stopped/failed reason that a live `driveTask()` loop's own
-  // `reduce()` also derives from those same files (gate failure, max
-  // rounds, a declined commit; replay independently reaches the
-  // identical transition), but blind to a *cancellation*, which is a
-  // pure runtime signal with no corresponding file for replay to ever
-  // find (see `drive.ts`'s own cancellation-branch docstring). Without
-  // this override, a cancelled task's `phase` stays whatever mid-round
-  // value replay last saw -- never `"stopped"` -- forever, since nothing
-  // about the files on disk changes once cancelled. `state.json`'s own
-  // `phase`/`stuck_reason` (written directly by that same cancellation
-  // branch) are the real, out-of-band source of truth here instead --
-  // but only trusted when this daemon isn't actively driving the task
-  // right now (`!taskRunner.isActive`): while a loop is genuinely
-  // running, `state.phase` is stale by design (only written at
-  // `driveTask()`'s own start and on cancellation, not every iteration --
-  // replay is deliberately preferred for a *live* task, same reasoning
-  // as the lineup/round-one guard above), so this must never fire for
-  // one that's still actually in flight.
+  // Phase 3 milestone 6, two real gaps found live -- `rehydrated` above
+  // is purely `runs/*.result.json` file replay, correct for every
+  // reason a live `driveTask()` loop's own `reduce()` also derives from
+  // those same files (gate failure, max rounds; replay independently
+  // reaches the identical transition), but blind to anything that
+  // isn't file-backed:
+  //   1. *Cancellation* -- a pure runtime signal (an `AbortSignal`) with
+  //      no corresponding file for replay to ever find (`drive.ts`'s own
+  //      cancellation-branch docstring). Caught first, fixed first.
+  //   2. **A genuinely bigger one, found live by this milestone's own
+  //      new e2e test actually resolving a real commit approval and then
+  //      checking the API's reported phase afterward -- something
+  //      nothing before this milestone ever did**: `rehydrateState()`'s
+  //      replay loop (`resume.ts`) only ever processes
+  //      developer/gate/tester/reviewer results -- it has no branch for
+  //      "the commit approval was approved" at all, because that's an
+  //      approval-flow decision, not a file `runs/` ever holds. A task
+  //      that completes an entirely normal, successful round and gets
+  //      its commit approved genuinely reaches `phase: "done"` in
+  //      `driveTask()`'s own in-memory state and correctly persists it
+  //      to `state.json` (confirmed directly on disk, not assumed) --
+  //      but `buildTaskDetail()` kept reporting `"awaiting_commit"`
+  //      forever afterward, since replay's own ceiling for that task is
+  //      "verification finished," and nothing ever re-derives past it.
+  //      Every task that finishes normally hits this, not just an edge
+  //      case -- it just had no test exercising the full resolve-then-
+  //      recheck path before now.
+  // `state.json`'s own `phase`/`stuck_reason` (written directly by
+  // `driveTask()` itself, both on cancellation and on a real
+  // `commit.approved` transition) are the real, out-of-band source of
+  // truth for both cases -- but only trusted when this daemon isn't
+  // actively driving the task right now (`!taskRunner.isActive`): while
+  // a loop is genuinely running, `state.phase` is stale by design (only
+  // written at specific points, not every iteration -- replay is
+  // deliberately preferred for a *live* task, same reasoning as the
+  // lineup/round-one guard above), so this must never fire for one
+  // that's still actually in flight.
   const rehydratedIsTerminal = rehydrated.phase === "done" || rehydrated.phase === "stopped" || rehydrated.phase === "failed";
-  const onDiskIsTerminal = state.phase === "stopped" || state.phase === "failed";
+  const onDiskIsTerminal = state.phase === "done" || state.phase === "stopped" || state.phase === "failed";
   if (!taskRunner.isActive(state.id) && onDiskIsTerminal && !rehydratedIsTerminal) {
     rehydrated.phase = state.phase;
     rehydrated.stuckReason = (state.stuck_reason as string | null | undefined) ?? rehydrated.stuckReason;
