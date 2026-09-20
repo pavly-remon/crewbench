@@ -9,8 +9,12 @@ tokenless-URL approach, keeping Phase 2's "never persisted" token
 principle unchanged. Open question 5 — confirming "crewbench" as the
 actual package name — stays open until immediately before the real,
 non-dry-run publish step in milestone 1, since availability is a
-point-in-time fact, not a reservation. Milestone 1 implemented
-2026-09-20, pending human review -- see its log entry.)
+point-in-time fact, not a reservation. Milestone 1 done -- reviewed and
+approved 2026-09-20, after fixing a real bug this review's own CI run
+caught (a wrong pnpm filter name silently no-opping the publish build),
+confirmed by a second, genuinely green 3-OS `package-smoke` run -- see
+its log entry, including a disclosed, out-of-scope pre-existing Windows
+test failure in `packages/engine` found live in that same run.)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -384,7 +388,7 @@ question 5 stays open by design (see its own entry).
 
 ## Milestone log
 
-### Milestone 1 -- implemented, pending human review (2026-09-20)
+### Milestone 1 -- done (reviewed and approved 2026-09-20)
 
 **"crewbench" reconfirmed available on npm** immediately before this
 work (`https://registry.npmjs.org/crewbench` still a real `404`, not
