@@ -391,7 +391,9 @@ work (`https://registry.npmjs.org/crewbench` still a real `404`, not
 assumed carried over from the plan's own earlier check).
 
 - **Built**: `packages/cli/scripts/build-publish.mjs`, a new script
-  (`pnpm --filter @crewbench/cli build:publish`) that esbuild-bundles
+  (`pnpm --filter crewbench build:publish` -- `packages/cli`'s own
+  package name is the unscoped `"crewbench"`, not `@crewbench/cli`; see
+  this log's own "real CI failure" entry below) that esbuild-bundles
   `packages/cli/src/bin.ts` -- inlining the real source of
   `@crewbench/{adapters,contract,daemon,engine}` (workspace packages,
   never published) while keeping genuine npm dependencies (`zod`,
@@ -508,3 +510,30 @@ assumed carried over from the plan's own earlier check).
   build on top of it; (3) whether `packages/cli/publish/`'s exact
   directory name and structure is worth locking in now or still open to
   change before a real publish ever happens.
+
+**Human review (2026-09-20)**: independently re-verified every claim
+above (typecheck/build/test rerun clean, `npm publish --dry-run` output
+inspected directly, a real `npm pack` + install into a directory outside
+the monorepo + `--help`/`doctor`/`ui` all run for real, `ui`'s served
+HTML confirmed to have no path back to the monorepo) — all held up. Then
+pushed to trigger the actual unverified claim from item (1) above: a real
+GitHub Actions run.
+
+**A real bug found by that first CI run, not caught by this session's
+own local verification**: `package-smoke` failed on every OS. Root
+cause: `packages/cli`'s own `package.json` name is the unscoped
+`"crewbench"` (it's the published npm package name, unlike every other
+workspace package's `@crewbench/*` name) — but both the CI step and this
+log's own prose used `pnpm --filter @crewbench/cli build:publish`, which
+matches *zero* workspace projects. pnpm doesn't error on that; it prints
+"Scope: 0 of 7 workspace projects" and exits 0, so the step showed green
+while doing nothing, and `packages/cli/publish/` was never created — the
+very next step then failed trying to `cd` into a directory that didn't
+exist. This session's own local verification never caught it because it
+ran `node scripts/build-publish.mjs` directly from inside
+`packages/cli`, never through the `pnpm --filter` form CI actually uses
+— a real gap in how "verified locally" was scoped, not a false claim
+about what was actually run. Fixed: `.github/workflows/ci-node.yml` and
+this log's own build:publish reference both now say `pnpm --filter
+crewbench build:publish`. Re-pushed; a second real CI run is what
+actually closes sign-off item (1) above, not this local fix alone.

@@ -64,7 +64,15 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm --filter @crewbench/cli build:publish
+      # packages/cli's own package.json name is the unscoped "crewbench"
+      # (it's the published npm package name, not an internal @crewbench/*
+      # workspace name like every other package here) -- a real bug this
+      # job's own name had, caught live: `--filter @crewbench/cli` matches
+      # zero workspace projects and pnpm exits 0 silently ("Scope: 0 of 7
+      # workspace projects"), so this step looked green while doing
+      # nothing at all, and the next step then failed on a publish/
+      # directory that was never created.
+      - run: pnpm --filter crewbench build:publish
       - name: npm publish --dry-run (never a real publish)
         working-directory: app/packages/cli/publish
         run: npm publish --dry-run
