@@ -1,6 +1,8 @@
 # Phase 3 — Interactive UI (create, scope, approve, control)
 
-Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review; milestone 4 done -- reviewed and approved 2026-09-20, including its disclosed scope limits (team settings edits roles only, no per-task loop override, no resume-abandoned-scoping path) and the new `POST /api/tasks/:tid/lineup` endpoint added beyond the plan's literal bullet; milestone 5 done -- reviewed and approved 2026-09-20, including its disclosed scope call (generic fallback card for the six never-issued approval kinds) and one post-review change (dropped the unused `GET /api/tasks/:tid/approvals` endpoint and its dead UI hook); milestone 6 (the last milestone) implemented 2026-09-20, pending human review -- see its log entry, including an honest assessment of whether Phase 3's overall goal is actually met)
+Status: **done** (reviewed and approved 2026-09-19 through 2026-09-20; all six milestones done and reviewed/approved -- see each milestone's own log entry for its disclosed deviations, bug fixes, and scope calls). Milestone 6 (the last milestone) reviewed and approved 2026-09-20: cancel/resume/retry-run task control, run controls in the UI, and a real end-to-end Playwright test proving create -> scope -> lineup -> run -> commit approval through the real UI against a real daemon.
+
+**Phase 3's goal is met for its core claim, not for "full replacement" literally.** The interactive loop the goal statement names first -- create a task, scope it in a chat, pick the lineup, watch it run, answer approvals, cancel/resume/retry -- is genuinely real, daemon-hosted, and proven end-to-end (not just unit-tested). Four real, disclosed gaps remain open, carried forward from milestones 3-6, not hidden: (1) no worktree/branch isolation for app-owned tasks -- the plugin's own isolated-branch workflow has no equivalent here, every app-owned task runs in-place; (2) six of nine `ApprovalKind`s are never actually issued by any code path today; (3) an abandoned scoping conversation has no resume path in the UI; (4) team settings only edits the role roster, not `tiers`/`loop`/`workspace`/`confirm_lineup`. None of these block the core loop; whether they warrant a follow-up phase is an open decision for whoever picks this up next, not something this phase's own scope obligates.
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md` and
@@ -1021,7 +1023,7 @@ rather than pretending to exercise something that doesn't exist.
    future milestone needs it, not something this one should invent just
    to make its own test setup less manual.
 
-### Milestone 6 -- implemented, pending human review (2026-09-20)
+### Milestone 6 -- done (reviewed and approved 2026-09-20)
 
 The last milestone of Phase 3. Picked up from a previous session that got
 cut off mid-work by a rate limit -- its uncommitted daemon-side work
