@@ -135,6 +135,30 @@ wrote something, etc.).
 `data`: `{ "warning": string }` — the exact warning text, same as what
 lands in the envelope's `warnings` array.
 
+### `approval.requested` / `approval.resolved`
+Added in `app/`'s Phase 3 milestone 5 (the approvals inbox) —
+**not emitted by the plugin**, same reason as `run.queued`/`run.dequeued`:
+the Python dispatch script has no `ApprovalProvider`/`requestApproval()`
+concept, its own approvals are the Team Lead's terminal prompts.
+Emitted by `app/packages/engine/src/drive.ts`'s `askApproval()`, around
+every real approval point `driveTask()` reaches (`commit`, `integrate`,
+`cleanup_worktree` — the only three `ApprovalKind`s (`app/packages/
+engine/src/approvals.ts`) any caller of `driveTask()` actually issues as
+of this milestone; the other six names in `APPROVAL_KINDS`
+—`confirm_profile`, `lineup`, `design`, `dirty_tree`, `worktree_setup`,
+`push`— are either handled outside the approvals system entirely (the
+app's own profile/lineup pages) or not implemented as a real pause point
+anywhere in this codebase yet, so neither event type ever fires for
+them). `approval.requested` fires when `driveTask()` calls
+`p.approvals.request()`, before it's resolved; `approval.resolved` fires
+once a real decision comes back, whichever `ApprovalProvider` supplied
+it (terminal or HTTP).
+`data` (`approval.requested`): `{ "id": string, "kind": string, "payload": unknown }`
+— `id`/`kind`/`payload` straight off the `ApprovalRequest`.
+`data` (`approval.resolved`): `{ "id": string, "kind": string, "decision": "yes"|"no"|"custom" }`
+— the resolved `ApprovalDecision`'s own `decision` field, not its
+(potentially large/free-form) `data` payload.
+
 ## Not yet emitted
 
 `lib/dispatch.md`'s reporting step (§7, usage summary) and the fix-loop's

@@ -386,3 +386,67 @@ export const ApiLineupRequestSchema = z
   })
   .strict();
 export type ApiLineupRequest = z.infer<typeof ApiLineupRequestSchema>;
+
+/** Phase 3 milestone 5. Local copy of `@crewbench/engine`'s
+ * `approvals.ts`'s `APPROVAL_KINDS` -- duplicated, not imported, same
+ * reason `ApiCliSchema` above duplicates `@crewbench/adapters`' CLI
+ * names: this package has no dependency on `@crewbench/engine`. Every
+ * kind is listed (not just the three `driveTask()` actually issues
+ * today -- `commit`/`integrate`/`cleanup_worktree`, see
+ * `routes/approvals.ts`'s own docstring), since a pending approval's
+ * `kind` on the wire can only be one of these by construction on the
+ * engine side, and a client should be able to render *something*
+ * sensible for a kind it doesn't have bespoke UI for. */
+export const ApiApprovalKindSchema = z.enum([
+  "confirm_profile",
+  "lineup",
+  "design",
+  "dirty_tree",
+  "worktree_setup",
+  "commit",
+  "push",
+  "integrate",
+  "cleanup_worktree",
+]);
+export type ApiApprovalKind = z.infer<typeof ApiApprovalKindSchema>;
+
+/** Phase 3 milestone 5. The body of `POST /api/tasks/:tid/approvals/:aid`
+ * -- structurally identical to `@crewbench/engine`'s `ApprovalDecision`
+ * (duplicated for the same package-boundary reason as `ApiApprovalKindSchema`
+ * above), passed straight through to `TaskRunner.resolveApproval()`.
+ * **There is deliberately no field here capable of expressing "auto" /
+ * "always allow"**: `auto` is a parameter to `@crewbench/engine`'s own
+ * `resolveApproval()`, never derived from a caller's `ApprovalDecision`,
+ * and `packages/engine/src/drive.ts`'s `askApproval()` -- the only
+ * caller for every real approval point -- passes `auto: false`
+ * unconditionally. So `NEVER_AUTO_RESOLVABLE`'s `commit`/`push`
+ * restriction (docs/app/CONTEXT.md's non-negotiable principle 3) can't
+ * be bypassed through this API at all, for any kind, by construction --
+ * not because of extra validation code here, but because there is no
+ * shape a client could send that would mean "always allow." */
+export const ApiResolveApprovalRequestSchema = z.discriminatedUnion("decision", [
+  z.object({ decision: z.literal("yes"), data: z.unknown().optional() }).strict(),
+  z.object({ decision: z.literal("no"), data: z.unknown().optional() }).strict(),
+  z.object({ decision: z.literal("custom"), data: z.unknown() }).strict(),
+]);
+export type ApiResolveApprovalRequest = z.infer<typeof ApiResolveApprovalRequestSchema>;
+
+/** Phase 3 milestone 5. One row of `GET /api/approvals` (the global
+ * "needs you" inbox) or `GET /api/tasks/:tid/approvals` (one task's own
+ * pending list) -- `task_id`/`project_id`/`title` are only meaningful on
+ * the global listing (enriched by `routes/approvals.ts` from
+ * `TaskRunner.listAllPendingApprovals()` plus a `state.json` read), kept
+ * on both shapes so the UI's per-kind card components take one type
+ * regardless of which listing produced them. */
+export const ApiPendingApprovalSchema = z
+  .object({
+    task_id: z.string(),
+    project_id: z.string(),
+    title: z.string(),
+    id: z.string(),
+    kind: ApiApprovalKindSchema,
+    payload: z.unknown(),
+    requested_at: z.string(),
+  })
+  .strict();
+export type ApiPendingApproval = z.infer<typeof ApiPendingApprovalSchema>;

@@ -2,6 +2,7 @@ import { Link, Outlet, useParams } from "@tanstack/react-router";
 import { Moon, Sun, SunMoon } from "lucide-react";
 import { useTheme } from "../lib/theme.js";
 import { cn } from "../lib/cn.js";
+import { ApprovalInbox } from "./approval-inbox.js";
 
 function ThemeToggle() {
   const [theme, setTheme] = useTheme();
@@ -72,7 +73,10 @@ export function Layout() {
             Health
           </Link>
         </nav>
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          <ApprovalInbox />
+          <ThemeToggle />
+        </div>
       </header>
       <main className="flex-1 p-4">
         <Outlet />

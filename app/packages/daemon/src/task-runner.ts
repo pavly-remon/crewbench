@@ -65,6 +65,28 @@ export class TaskRunner {
     return this.active.get(taskId)?.approvals.listPending() ?? [];
   }
 
+  /** Every pending approval across every currently active, app-owned
+   * task in this daemon process (Phase 3 milestone 5's global "needs
+   * you" inbox, `GET /api/approvals`) -- iterates `this.active` rather
+   * than needing a separate index, since a pending approval only ever
+   * exists inside an in-flight `driveTask()` loop's own
+   * `HttpApprovalProvider`, and `this.active` already tracks exactly
+   * that set. Purely in-memory, like `HttpApprovalProvider` itself: a
+   * daemon restart loses no *state* (the task's own `state.json`/`phase`
+   * on disk is what actually says "waiting on an approval" -- see
+   * `routes/approvals.ts`'s docstring), just the in-flight
+   * `driveTask()` call that would re-request the same approval again
+   * once reattach resumes it. */
+  listAllPendingApprovals(): Array<{ taskId: string; request: ApprovalRequest }> {
+    const result: Array<{ taskId: string; request: ApprovalRequest }> = [];
+    for (const [taskId, entry] of this.active) {
+      for (const request of entry.approvals.listPending()) {
+        result.push({ taskId, request });
+      }
+    }
+    return result;
+  }
+
   resolveApproval(taskId: string, approvalId: string, decision: ApprovalDecision): boolean {
     return this.active.get(taskId)?.approvals.resolve(approvalId, decision) ?? false;
   }

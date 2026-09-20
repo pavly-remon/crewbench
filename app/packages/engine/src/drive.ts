@@ -9,6 +9,7 @@ import type { ConcurrencyLimiter } from "./concurrency.js";
 import { reduce, type FullEngineState } from "./reduce.js";
 import { runGate } from "./gate.js";
 import { setField } from "./task-store.js";
+import { appendEvent } from "./contract-fs.js";
 import { summarizeTask } from "./summary.js";
 import type { ReviewerResult, TesterResult } from "./types.js";
 
@@ -109,11 +110,24 @@ function logRunResult(role: string, envelope: { ok: boolean; error: string | nul
  * real decision reaching a real provider (terminal or HTTP), never an
  * automated bypass (see `DriveTaskParams.yes`'s docstring for how `--yes`
  * actually skips the commit approval instead: by never calling this at
- * all for that one kind, not by resolving it automatically). */
+ * all for that one kind, not by resolving it automatically).
+ *
+ * Phase 3 milestone 5: also appends `approval.requested`/`approval.
+ * resolved` to `events.jsonl` around the real request/resolve, the
+ * actual signal the daemon's inbox and desktop notifications react to
+ * (see `docs/app/contract/events.md`'s entry for both -- neither event
+ * type existed before this milestone; `packages/daemon/src/watcher.ts`
+ * previously documented their absence explicitly, corrected alongside
+ * this). This is the one real, disclosed edit to already-shipped Phase 3
+ * milestone-1 code this milestone makes, per docs/app/CONTEXT.md's
+ * working-agreement norm of flagging changes to shipped code rather than
+ * touching it quietly. */
 async function askApproval(p: DriveTaskParams, kind: Parameters<typeof requestApproval>[0], payload: unknown): Promise<ApprovalDecision> {
   const request = requestApproval(kind, payload);
+  await appendEvent(p.taskDir, "approval.requested", { id: request.id, kind: request.kind, payload: request.payload });
   const decision = await p.approvals.request(request);
   resolveApproval(request, decision, { auto: false });
+  await appendEvent(p.taskDir, "approval.resolved", { id: request.id, kind: request.kind, decision: decision.decision });
   return decision;
 }
 

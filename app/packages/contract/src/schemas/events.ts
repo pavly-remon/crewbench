@@ -108,6 +108,36 @@ export const GitWarningEventSchema = EventBase.extend({
   data: z.object({ warning: z.string() }),
 });
 
+/** Added in Phase 3 milestone 5 -- `docs/app/phase-2-plan.md`'s open
+ * question 4 proposed an `approval.*` event type before it existed
+ * anywhere; Phase 2 milestone 2 corrected that (see
+ * `packages/daemon/src/watcher.ts`'s old comment, removed alongside this
+ * addition) since nothing emitted one at the time -- every approval
+ * before this milestone was resolved purely via terminal prompts,
+ * in-memory, never logged. This milestone makes `commit`/`integrate`/
+ * `cleanup_worktree` (the only `ApprovalKind`s any caller of
+ * `driveTask()` actually issues today -- see `packages/engine/src/
+ * approvals.ts`) real, addressable HTTP pending-approval points, which
+ * needs a real signal on the wire for the UI's inbox/notifications to
+ * react to, not just a resolved `ApprovalDecision` nobody ever heard
+ * about. `kind` is `string`, not `ApprovalKind`, deliberately: this
+ * package has no dependency on `@crewbench/engine` (same reason
+ * `schemas/api.ts`'s `ApiCliSchema` duplicates `@crewbench/adapters`'
+ * CLI names instead of importing them) -- `packages/engine/src/drive.ts`
+ * is the only writer and always passes a real `ApprovalKind`. **Not
+ * emitted by the plugin**, same as `run.queued`/`run.dequeued`: the
+ * Python dispatch script has no `ApprovalProvider`/`requestApproval()`
+ * concept of its own, approvals there are the Team Lead's own terminal
+ * prompts. */
+export const ApprovalRequestedEventSchema = EventBase.extend({
+  type: z.literal("approval.requested"),
+  data: z.object({ id: z.string(), kind: z.string(), payload: z.unknown() }),
+});
+export const ApprovalResolvedEventSchema = EventBase.extend({
+  type: z.literal("approval.resolved"),
+  data: z.object({ id: z.string(), kind: z.string(), decision: z.enum(["yes", "no", "custom"]) }),
+});
+
 export const CrewbenchEventSchema = z.discriminatedUnion("type", [
   TaskCreatedEventSchema,
   TaskPhaseChangedEventSchema,
@@ -122,6 +152,8 @@ export const CrewbenchEventSchema = z.discriminatedUnion("type", [
   RunToolErrorEventSchema,
   GateFinishedEventSchema,
   GitWarningEventSchema,
+  ApprovalRequestedEventSchema,
+  ApprovalResolvedEventSchema,
 ]);
 export type CrewbenchEvent = z.infer<typeof CrewbenchEventSchema>;
 export type CrewbenchEventType = CrewbenchEvent["type"];

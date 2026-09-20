@@ -1,6 +1,6 @@
 # Phase 3 — Interactive UI (create, scope, approve, control)
 
-Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review; milestone 4 done -- reviewed and approved 2026-09-20, including its disclosed scope limits (team settings edits roles only, no per-task loop override, no resume-abandoned-scoping path) and the new `POST /api/tasks/:tid/lineup` endpoint added beyond the plan's literal bullet)
+Status: **in progress** (reviewed and approved 2026-09-19: design decisions 1-3 and open questions 1-3 confirmed with the recommended approach; milestones 1-2 done; milestone 3 done -- reviewed and approved 2026-09-20, including its disclosed deviations (lead-CLI/model picker as a stand-in for the not-yet-built lineup step, line-level not token-level streaming, and the two bug fixes' narrow scope), plus two follow-up fixes made during that review; milestone 4 done -- reviewed and approved 2026-09-20, including its disclosed scope limits (team settings edits roles only, no per-task loop override, no resume-abandoned-scoping path) and the new `POST /api/tasks/:tid/lineup` endpoint added beyond the plan's literal bullet; milestone 5 implemented 2026-09-20, pending human review -- see its log entry)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
 `docs/app/contract/events.md`, `docs/app/phase-1-plan.md` and
@@ -857,3 +857,153 @@ text.
   milestone 3's own `ApiCliSchema` vs. `CliNameSchema` split already
   accepted for a similar reason (no cross-package dependency in that
   direction).
+
+### Milestone 5 -- implemented, pending human review (2026-09-20)
+
+**Not marked "done" by this session**, same disclosure as milestones 3-4's
+own entries: everything below was actually built, run, and verified the
+ways described, but this entry hasn't had a live human review yet, and
+it includes real, disclosed judgment calls beyond the plan's literal
+text.
+
+**The actual scope, established by reading the code before building
+anything, not assumed from the phase prompt's wording**: `APPROVAL_KINDS`
+(`packages/engine/src/approvals.ts`) lists nine kinds, but grepping the
+whole codebase for real callers of `requestApproval()` found exactly one
+call site -- `drive.ts`'s `askApproval()` -- issuing exactly three of
+them: `commit` (unconditionally, once `driveTask()` reaches
+`request_commit_approval`), `integrate` and `cleanup_worktree` (both
+gated behind `p.worktree && p.branch`, which is never set for an
+app-owned/daemon-driven task today -- `TaskRunner.buildParams()` never
+creates a worktree, confirmed by reading it, not assumed). The other six
+-- `confirm_profile`, `lineup`, `design`, `dirty_tree`, `worktree_setup`,
+`push` -- are either real UI flows built on a *different* mechanism
+entirely (Phase 3 milestone 4's profile/lineup pages, not the approvals
+system), decided by a plain `confirm()` outside `driveTask()`
+(`design`), CLI-terminal worktree pre-flight steps that happen before
+`driveTask()` is ever called and, for an app-owned task, never happen at
+all (`dirty_tree`/`worktree_setup`), or have no implementation anywhere
+in this codebase at all (`push` -- no git push call exists in
+`worktree.ts` today). This milestone makes all nine kinds *addressable*
+over HTTP generically (the resolve route and every UI card dispatch on
+`kind` with no kind-specific server logic), but only proves the three
+real ones live end-to-end, and discloses the other six's real status
+rather than pretending to exercise something that doesn't exist.
+
+- **Daemon**: `POST /api/tasks/:tid/approvals/:aid` (resolves via
+  `TaskRunner.resolveApproval()`, built in milestone 1, wired to an HTTP
+  route for the first time here), plus `GET /api/approvals` (the global
+  inbox, new `TaskRunner.listAllPendingApprovals()` enriched with
+  project id/task title from a fresh `loadState()` read) and `GET
+  /api/tasks/:tid/approvals` (one task's own pending list, same shape).
+  All three live in a new `routes/approvals.ts`.
+- **A real, necessary addition beyond the plan's literal milestone 5
+  bullet, disclosed rather than silently added**: two new event types,
+  `approval.requested`/`approval.resolved` (`docs/app/contract/
+  events.md`, `packages/contract/src/schemas/events.ts`), emitted from
+  `drive.ts`'s `askApproval()` around every real approval point. Before
+  this milestone, *nothing* emitted an `approval.*` event anywhere --
+  `watcher.ts`'s own comment said so explicitly, since Phase 1's
+  approvals were resolved purely in-memory via terminal prompts. Without
+  this, the inbox would have no live signal to react to at all beyond
+  polling, and Design decision 8's "notifications triggered off events
+  the UI already receives over its existing SSE connections" would have
+  nothing to trigger off. Added to the global feed's allowlist
+  (`watcher.ts`, replacing its own now-outdated "approval.* is
+  deliberately absent" comment with the corrected story). **Not emitted
+  by the plugin**, same as `run.queued`/`run.dequeued` -- documented in
+  `events.md` the same way.
+- **`ApiResolveApprovalRequestSchema` has no field capable of expressing
+  "auto"/"always allow", for any kind** -- satisfying the phase prompt's
+  "commit/push get no always-allow option, enforced server-side" by
+  construction rather than by extra validation code: `auto` is a
+  parameter to `@crewbench/engine`'s `resolveApproval()`, never derived
+  from an `ApprovalDecision`, and `askApproval()` -- the only real caller
+  -- passes `auto: false` unconditionally. There is no shape a client
+  could send through this API that would mean "always allow" for any
+  kind, so `NEVER_AUTO_RESOLVABLE`'s `commit`/`push` restriction can't be
+  bypassed through it at all. Confirmed this is actually true by reading
+  every call site, not asserted from the schema alone.
+- **UI**: a global `ApprovalInbox` (badge + panel, mounted once in
+  `Layout`'s header, matching the phase prompt's "global" wording -- not
+  per-project or per-task), kept live by invalidating on the same
+  `approval.*` events over the existing global SSE feed (`useApprovalsInbox()`,
+  same "refetch on signal" pattern `useGlobalEvents()` already
+  established for the task board), plus a 30s polling fallback. One card
+  component per kind (`ApprovalCard`, dispatching on `approval.kind`):
+  bespoke renders for `commit` (commit message field + the real diff via
+  the existing `useTaskDiff()`/`DiffViewer` from task-detail-page, reused
+  not reinvented, plus the approval's own `diffStat` payload),
+  `integrate` (merge/cherry-pick/leave choice), and `cleanup_worktree`
+  (remove-worktree confirmation); a generic fallback card (kind + raw
+  payload + yes/no) for the other six kinds, so the component is already
+  correct the moment a future change makes one of them real, rather than
+  omitting them or crashing on them. **No card, for any kind, renders an
+  "always allow" control** -- not a special case for commit/push, simply
+  what every card looks like, since no such capability exists anywhere
+  in this codebase for the daemon to honor.
+- **Desktop notifications** (Design decision 8): `useApprovalNotifications()`,
+  browser `Notification` API only, opt-in (a button in the inbox panel
+  requests permission; state persisted to `localStorage`, wrapped in
+  try/catch per this app's existing browser-storage discipline), fires
+  off the same `pending` list `useApprovalsInbox()` already fetches --
+  no second subscription, no daemon-side push mechanism of any kind. The
+  first render of a nonempty pending list seeds "already seen" without
+  notifying (so opening the app with approvals already pending from
+  before this session doesn't fire a burst of stale notifications) --
+  only a newly-appearing id after that fires one.
+- Tests: daemon route tests (`test/approvals.test.ts`) reusing
+  `packages/cli/test/commit-flow.e2e.test.ts`'s own fake-CLI fixture
+  (the one existing fixture in this codebase that reaches a real
+  `request_commit_approval` through a real `driveTask()` loop) driven
+  through the daemon's HTTP surface instead of the CLI's terminal one --
+  a real developer/tester/reviewer round genuinely pauses at `commit`,
+  addressable via `GET /api/approvals`/`GET .../tasks/:tid/approvals`
+  and resolvable via `POST .../approvals/:aid`, proven by a real git
+  commit landing in the repo, not by inspecting in-memory state. A
+  second test proves `integrate`/`cleanup_worktree` the same way, using
+  a real git worktree this test creates directly (`createWorktree()`,
+  the same primitive a future "worktree mode" lineup option would
+  eventually automate) and writes onto `state.json` before submitting
+  the lineup -- the real, disclosed workaround for `TaskRunner` never
+  creating one itself yet -- confirming a real merge and a real
+  worktree removal, not mocked ones. A third test confirms
+  `approval.requested`/`approval.resolved` actually land in
+  `events.jsonl`. 400/404 tests for a malformed decision body and an
+  unknown approval id. UI tests (`test/approval-inbox.test.tsx`): badge
+  count from a mocked `GET /api/approvals`, resolving a commit card
+  actually POSTs `{decision, data}` and the card disappears, and the
+  generic-card fallback renders for a kind with no bespoke UI.
+- **Real, live end-to-end verification, beyond the automated tests**: a
+  real built `crewbench ui` binary was started against a real repo and
+  the same fake-CLI fixture, driven purely over `curl` plus a
+  backgrounded `curl -N` tailing the real global SSE feed -- project add,
+  task create, finalize, lineup submit; confirmed `GET /api/approvals`
+  showed the real pending `commit` approval (`diffStat: null`, since no
+  worktree exists for this task, matching the disclosed gap above, not a
+  bug); confirmed the live SSE tail actually received a real
+  `approval.requested` frame as it happened, not just after the fact;
+  resolved it over `POST .../approvals/:aid`; confirmed a real `git log`
+  showed the new commit, the live SSE tail received `approval.resolved`,
+  and `GET /api/approvals` was empty again afterward. No errors in the
+  daemon's own log across the whole sequence; shut down cleanly.
+- Full verification: `pnpm -r typecheck/build/test` all green (387 TS
+  tests: 27 contract + 107 adapters + 152 engine + 60 daemon + 17 ui + 24
+  cli), plus the Playwright e2e suite (1 test, still passing); Python
+  suite (212 tests) unaffected; `pnpm check:schemas` clean (no
+  `schemas/*.json` covers `events.jsonl`, so the two new event types
+  needed no Python-side regeneration).
+- **What still needs human sign-off before this is "done"**: (1) whether
+  the six never-actually-issued `ApprovalKind`s deserve their generic
+  fallback card as built, or whether the milestone should instead have
+  built literal bespoke UI for all nine regardless of reachability
+  (judged against actually building fake UI for capabilities that don't
+  exist yet, per this repo's own anti-padding norm); (2) whether `GET
+  /api/tasks/:tid/approvals` (built for symmetry/completeness, not asked
+  for by the plan's own bullet) is worth keeping or should be dropped
+  since nothing in the UI currently calls it (only the global inbox is
+  wired up); (3) the `integrate`/`cleanup_worktree` test's own
+  worktree-on-state.json workaround -- confirming this is an acceptable
+  way to have proven those two real before a real "worktree mode" for
+  app-owned tasks exists, versus deferring that proof to whichever future
+  milestone actually adds one.

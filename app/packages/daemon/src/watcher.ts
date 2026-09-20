@@ -15,12 +15,15 @@ export interface TaskLocation {
  * cross-project board feed (`GET /api/events`) -- per-token/per-tool-call
  * noise (`run.message`/`run.tool_call`/`run.tool_error`) only matters
  * inside a specific agent lane's own per-task stream, not the board.
- * `approval.*` is deliberately absent: no such event type is actually
- * emitted to events.jsonl anywhere in this codebase today (Phase 1's
- * approvals are resolved purely in-memory via terminal prompts, never
- * persisted as an event) -- docs/app/phase-2-plan.md's open question 4
- * proposed including it before this milestone confirmed it doesn't
- * exist; noting the correction here rather than silently dropping it. */
+ * `approval.*` **was** deliberately absent through Phase 3 milestone 4:
+ * no such event type was emitted to events.jsonl anywhere in this
+ * codebase (Phase 1's approvals were resolved purely in-memory via
+ * terminal prompts, never persisted as an event) -- docs/app/
+ * phase-2-plan.md's open question 4 proposed including it before Phase 2
+ * milestone 2 confirmed it didn't exist yet. Phase 3 milestone 5 (the
+ * approvals inbox) is what actually makes it real -- see
+ * `packages/engine/src/drive.ts`'s `askApproval()` and
+ * `docs/app/contract/events.md`'s entry for both event types. */
 const GLOBAL_EVENT_TYPES = new Set<CrewbenchEvent["type"]>([
   "task.created",
   "task.phase_changed",
@@ -34,6 +37,11 @@ const GLOBAL_EVENT_TYPES = new Set<CrewbenchEvent["type"]>([
   // of a separate queue-status channel.
   "run.queued",
   "run.dequeued",
+  // Phase 3 milestone 5: the actual signal the global inbox (badge
+  // count + panel) and desktop notifications react to -- see this
+  // file's own docstring above.
+  "approval.requested",
+  "approval.resolved",
 ]);
 
 export interface GlobalEvent {
