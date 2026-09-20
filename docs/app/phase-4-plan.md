@@ -1,6 +1,15 @@
 # Phase 4 — Packaging, install, multi-project polish
 
-Status: **draft — awaiting review**
+Status: **in progress** (reviewed and approved 2026-09-20: design
+decisions 1-9 and open questions 1-4 confirmed with the recommended
+approach — bundle-and-publish-one-package via esbuild, background
+service in scope for this phase's first pass, embedded terminal in
+scope with graceful node-pty fallback, `/crewbench:open` ships the
+tokenless-URL approach, keeping Phase 2's "never persisted" token
+principle unchanged. Open question 5 — confirming "crewbench" as the
+actual package name — stays open until immediately before the real,
+non-dry-run publish step in milestone 1, since availability is a
+point-in-time fact, not a reservation.)
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -345,42 +354,33 @@ fields), `scripts/bump_version.py` (app package versions), `README.md`,
 
 ## Open questions
 
-None confirmed yet — this plan hasn't been reviewed. All five need an
-explicit answer before the milestone(s) they block start.
+Confirmed 2026-09-20 with the recommended approach for 1-4. Open
+question 5 stays open by design (see its own entry).
 
 1. **Bundle-and-publish-one-package vs. publish-all-five-with-real-versions**
-   (Design decision 1, finding 1). Proposing the bundled, single-package
-   route (new `esbuild` devDependency) as simpler and lower ongoing
-   operational risk — confirming before milestone 1 starts, since
-   reversing this after publishing means redoing the packaging story
-   from scratch, not a small follow-up.
+   (Design decision 1, finding 1) — **confirmed: bundle via esbuild**,
+   publishing only `crewbench`; the other four packages stay `private`.
 2. **Whether `/crewbench:open`'s tokenless-URL approach (Design
-   decision 6) is an acceptable tradeoff**, or whether a new, narrowly-
-   scoped local token-discovery file is worth building and reviewing as
-   its own real security decision instead — this genuinely changes
-   Phase 2's own "never persisted" principle if the answer is the
-   latter, so it needs an explicit, not implied, yes.
-3. **Whether background-service installation (scope item 4, itself
-   marked "(optional)" in the phase prompt) is in scope for this
-   phase's first pass, or worth deferring.** It's the one scope item
-   whose failure mode is OS-specific and hardest to test symmetrically
-   across all three platforms (a systemd user unit, launchd, and Windows
-   Task Scheduler each have real, different edge cases), and it now has
-   a real prerequisite fix (Design decision 4) attached to it that
-   wasn't in the original phase prompt at all.
+   decision 6) is an acceptable tradeoff** — **confirmed: yes**, ships
+   as designed. Phase 2's "never persisted" token principle stays
+   unchanged; no new discovery file.
+3. **Whether background-service installation (scope item 4) is in scope
+   for this phase's first pass** — **confirmed: in scope**, with its
+   prerequisite fix (Design decision 4's registry locking + daemon
+   singleton check) done first, per the plan.
 4. **Whether the embedded terminal (scope item 3) is worth its
    `node-pty` native-module cross-platform risk for a first packaged
-   release**, versus shipping with just the existing "copy resume
-   command" fallback initially and adding the real terminal in a later
-   pass — `docs/app/CONTEXT.md`'s own stack section already anticipated
-   `node-pty` as optional-and-must-degrade-gracefully, so the
-   infrastructure expectation exists either way; this is a scope/timing
-   question, not a design one.
+   release** — **confirmed: in scope**, built as a true optional
+   dependency with the existing "copy resume command" button as the
+   real fallback when `node-pty` isn't available, per Design decision 3
+   in the milestone log below.
 5. **Confirming `crewbench` as the actual package name to publish**
    before milestone 1's real (non-dry-run) publish step — available as
    of this check (finding 2), but that's a point-in-time fact, not a
    reservation, and this is genuinely hard to undo once published.
+   Deliberately left open until immediately before that real publish
+   step, not resolved now.
 
 ## Milestone log
 
-No milestone work has started. This plan has not been reviewed.
+No milestone work has started yet.
