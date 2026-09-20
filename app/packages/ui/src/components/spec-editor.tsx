@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 import type { TaskSpec } from "@crewbench/contract";
 import { Button } from "./button.js";
@@ -21,6 +21,17 @@ export function SpecEditor({
 }) {
   const [criteria, setCriteria] = useState<string[]>(spec.acceptance_criteria);
   const [newCriterion, setNewCriterion] = useState("");
+
+  // If the conversation continues after the panel first appears and the
+  // lead proposes a revised draft, `spec` gets a new identity from
+  // `useScopingChat`'s `setDraftSpec` -- resync the editable list to it,
+  // otherwise the "live" panel only stays live until the user's first
+  // edit. This does discard any in-progress manual edits when a new
+  // draft lands, which is the right tradeoff here: the alternative is
+  // silently diverging from what the lead most recently proposed.
+  useEffect(() => {
+    setCriteria(spec.acceptance_criteria);
+  }, [spec]);
 
   const addCriterion = () => {
     const trimmed = newCriterion.trim();

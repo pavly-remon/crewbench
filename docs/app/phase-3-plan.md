@@ -601,3 +601,27 @@ deliberately doesn't have). Flagging that honestly rather than writing
   above are scoped narrowly to this milestone's own new call sites --
   worth a second look for any other reader of either field this session
   didn't find.
+
+**Follow-up fix, applied after human review (2026-09-20)**: `SpecEditor`
+seeded its editable criteria list from `spec.acceptance_criteria` with
+`useState`'s initializer only, so a revised draft spec arriving from a
+later scoping turn (a new `spec` object from `useScopingChat`'s
+`setDraftSpec`) never reached the already-open editor -- the "live"
+panel only stayed live until the user's first edit, or until a page
+reload. Fixed with a `useEffect` keyed on `spec` that resyncs `criteria`
+whenever a new draft's identity changes; this does discard any
+in-progress manual edits when a new draft lands, a deliberate tradeoff
+(reflecting the lead's latest proposal beats silently diverging from
+it). New regression test
+(`test/scoping-chat-page.test.tsx`, "resyncs the editable criteria list
+when a follow-up turn revises the draft spec") drives two real scoping
+turns with different mocked specs and confirms the second's criteria
+replace the first's in the rendered list. Also added explicit
+`cleanup()` in this test file's `afterEach` (this package's vitest
+config has no `globals: true`, so `@testing-library/react`'s automatic
+per-test cleanup never registers -- a second `it()` block without it
+leaked the first test's DOM, causing `getByPlaceholderText` to find two
+elements; `projects-page.test.tsx`'s existing multi-test file happened
+not to collide on any query, masking the same latent gap). Full
+`pnpm -r typecheck`/`test` reverified green after this change (358 TS
+tests: ui now 9, others unchanged from the count above).

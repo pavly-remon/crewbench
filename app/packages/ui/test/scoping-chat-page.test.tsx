@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +44,7 @@ function renderScopingPage(taskId = "t1", text = "Fix the login redirect bug") {
 
 describe("ScopingChatPage", () => {
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
   });
 
@@ -74,5 +75,35 @@ describe("ScopingChatPage", () => {
     await waitFor(() => expect(screen.getByText("Fix login redirect")).toBeInTheDocument());
     expect(screen.getByText("Redirects to /dashboard")).toBeInTheDocument();
     expect(screen.getByText("Fix the login redirect bug")).toBeInTheDocument(); // the user's own first message, echoed in the transcript
+  });
+
+  it("resyncs the editable criteria list when a follow-up turn revises the draft spec", async () => {
+    const REVISED_SPEC = { ...VALID_SPEC, acceptance_criteria: ["Redirects to /dashboard", "Shows a success toast"] };
+    let turn = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/scoping/messages")) {
+        turn += 1;
+        const spec = turn === 1 ? VALID_SPEC : REVISED_SPEC;
+        void init;
+        return sseResponse([{ type: "done", ok: true, error: null, reply: "ok", session_id: "s1", spec }]);
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderScopingPage();
+
+    await screen.findByText(/Scoping: Fix the login redirect bug/i);
+    fireEvent.change(screen.getByPlaceholderText("e.g. sonnet"), { target: { value: "m1" } });
+    fireEvent.click(screen.getByRole("button", { name: /start scoping/i }));
+    await waitFor(() => expect(screen.getByText("Redirects to /dashboard")).toBeInTheDocument());
+    expect(screen.queryByText("Shows a success toast")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Reply to the lead…"), { target: { value: "also show a toast" } });
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+
+    await waitFor(() => expect(screen.getByText("Shows a success toast")).toBeInTheDocument());
+    expect(screen.getByText("Redirects to /dashboard")).toBeInTheDocument();
   });
 });
