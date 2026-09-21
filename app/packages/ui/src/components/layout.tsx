@@ -3,6 +3,7 @@ import { Moon, Sun, SunMoon } from "lucide-react";
 import { useTheme } from "../lib/theme.js";
 import { cn } from "../lib/cn.js";
 import { ApprovalInbox } from "./approval-inbox.js";
+import { UpdateBanner } from "./update-banner.js";
 
 function ThemeToggle() {
   const [theme, setTheme] = useTheme();
@@ -24,6 +25,7 @@ export function Layout() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <UpdateBanner />
       <header className="flex h-14 items-center justify-between border-b border-[var(--color-border)] px-4">
         <nav className="flex items-center gap-4 text-sm">
           <Link to="/" className="font-semibold tracking-tight">

@@ -1,12 +1,22 @@
 # crewbench
 
-A plugin for Claude Code, GitHub Copilot CLI, Antigravity CLI (`agy`) and
-Codex CLI that runs a task through a five-role dev team: a Team Lead that scopes and
+Runs a task through a five-role dev team — a Team Lead that scopes and
 delegates, plus Developer, Tester, Code Reviewer, and (opt-in) UI/UX
 Designer roles. Each role can run on its own CLI, model and reasoning
-effort.
+effort, across Claude Code, GitHub Copilot CLI, Antigravity CLI (`agy`)
+and Codex CLI.
 
-## Install
+Two ways to run it, sharing the same on-disk task state (`.crewbench/`)
+— use either, or both, on the same project:
+
+- **The plugin** (below): slash commands (`/crewbench:new-task`, ...)
+  inside Claude Code, Copilot CLI, Antigravity, or Codex.
+- **The app** (`docs/app/CONTEXT.md`; jump to [The app](#the-app)): a
+  standalone `crewbench` CLI and local web UI — no host CLI required,
+  can create/scope/run/watch a task entirely from the terminal or a
+  browser.
+
+## Install (plugin)
 
 Claude Code:
 
@@ -36,6 +46,9 @@ codex plugin marketplace add pavly-remon/crewbench
 ```
 
 then install `crewbench` from the `PiCode` marketplace in `/plugins`.
+
+Want the standalone app instead (or as well)? See [The app](#the-app)
+below.
 
 ## Commands
 
@@ -404,6 +417,104 @@ installed or written to without asking first:
   `.crewbench/tasks/<task-id>/screenshots/` and listed in the final
   report. Playwright itself is never installed automatically.
 
+## The app
+
+A standalone `crewbench` CLI and local web UI, sharing the exact same
+`.crewbench/` on-disk task format the plugin above uses — no host CLI
+required to run a task. Full design/build history:
+`docs/app/CONTEXT.md` and `docs/app/phase-{0,1,2,3,4}-plan.md`.
+
+### Install
+
+```
+npm i -g crewbench
+```
+
+or run it without installing:
+
+```
+npx crewbench ui
+```
+
+Requires Node.js 20+. At least one of Claude Code, Codex CLI, Copilot
+CLI, or Antigravity CLI (`agy`) installed and logged in — the app drives
+those same CLIs, the same way the plugin does; it's never a separate
+model account and never calls a model API directly.
+
+### Quick start
+
+```
+crewbench ui
+```
+
+opens a local web page (`http://127.0.0.1:4287` by default) with a
+first-run wizard: it checks which of the four CLIs are installed and
+logged in, walks you through adding your first project (pick the folder
+— no path to type), and offers to install the plugin above into any CLI
+it found. From there: create a task, scope it in a chat with the lead,
+confirm the lineup, and watch the fix round run live.
+
+Prefer the terminal? `crewbench run "<task description>"` runs the same
+workflow headlessly, no browser involved — same flags as `/crewbench:new-task`
+(`--yes`, `--design`, `--rounds N`, `--dev cli[:model]`, `--review cli[:model]`).
+`crewbench doctor`, `crewbench status`, `crewbench resume [task-id]`, and
+`crewbench team [show]` mirror their `/crewbench:*` plugin equivalents.
+
+### Running at login
+
+```
+crewbench service install
+```
+
+registers the daemon to start automatically at login (launchd on macOS,
+a systemd user unit on Linux, Task Scheduler on Windows) — so `crewbench
+ui`'s own URL is already live without running it by hand first.
+`crewbench service uninstall` removes it. Running `crewbench ui` by hand
+while the service is already up is safe: the daemon refuses to start a
+second instance on the same port and just points you at the one already
+running.
+
+### Settings
+
+The web UI's own Settings page edits `~/.crewbench/config.json` directly
+— port, per-CLI concurrency limits, a machine-wide default lineup, and
+notification/theme defaults. Nothing here is required; every field has a
+sensible built-in default.
+
+### Embedded terminal
+
+A resumable task's own detail page has an "Open session" button that
+opens a real terminal (`crewbench resume <task-id>`, running right in
+the browser tab) when this machine can support it (`node-pty`, an
+optional native dependency) — falls back to a plain "copy resume
+command" button everywhere else, never a broken button.
+
+### `/crewbench:open`
+
+From inside the plugin, `/crewbench:open [task-id]` opens that task (or
+just the app's front page) in your browser, if `crewbench ui` is already
+running somewhere on this machine. It can only open the page — it has no
+way to log a fresh tab in for you (the app's own auth token is
+never written to disk, on purpose), so keep the tab `crewbench ui`
+already opened around if you want to jump between tasks without
+re-authenticating.
+
+### Troubleshooting
+
+`crewbench doctor` (or the web UI's own Health page) reports one line
+per CLI; here's what each real failure actually means and how to fix it:
+
+| What `doctor` says | What it means | Fix |
+|---|---|---|
+| `<cli> is not installed or not on PATH` | The app looked for `<cli>`'s real binary on your `PATH` and didn't find it. | Install that CLI, or ignore it if you don't plan to use it in your lineup. |
+| `could not read <cli>'s version` | Found the binary, but `<cli> --version` itself failed or timed out. | Try running `<cli> --version` yourself — whatever error it gives you is the real cause. |
+| `<cli>'s config dir (...) isn't writable from here` | The app needs to read (and sometimes refresh) that CLI's own login there; the directory doesn't exist and can't be created, or exists but isn't writable. | Fix the directory's permissions, or run that CLI once by hand first so it creates its own config dir normally. |
+| `host sandbox blocks network — the <cli> child can't reach its API` | A network connection to that CLI's own API host was refused, timed out, or errored. | If you're running inside a sandboxed environment (a container, a restricted shell), allow outbound network access to that host; otherwise check your own network/firewall/VPN. |
+| `<cli> does not appear to be logged in` | The app's own login check for that CLI came back negative — see the accompanying detail for exactly which check and what it returned. | Run that CLI's own login command (e.g. `claude auth login`, `codex login`) outside any sandbox, then retry `crewbench doctor`. |
+
+None of these block `crewbench ui` itself from starting — they only
+affect whether a given CLI is usable in a task's lineup.
+
 ## Upgrading from 2.x
 
 `.crewbench/team.json` keeps working exactly as before — nothing to
@@ -433,7 +544,8 @@ to configure anything to keep your old workflow working. See
 | `plugin.json` | Antigravity CLI (also read by Copilot CLI) |
 | `.codex-plugin/`, `.agents/plugins/` | Codex CLI |
 | `skills/`, `agents/`, `lib/`, `config/`, `schemas/`, `bin/` | all |
-| `tests/`, `.github/workflows/`, `scripts/`, `docs/` | dev-only: pytest suite, CI, maintenance scripts, compatibility matrix — not needed at runtime |
+| `app/` | The app (see [The app](#the-app)) — `pnpm` workspace: `packages/{contract,adapters,engine,daemon,ui,cli}`. Only `packages/cli` is ever published (as `crewbench` on npm); the rest are bundled into it at publish time. |
+| `tests/`, `.github/workflows/`, `scripts/`, `docs/` | dev-only: pytest + vitest suites, CI, maintenance scripts, compatibility matrix, design docs — not needed at runtime |
 
 In a project using crewbench, `.crewbench/` holds `team.json`,
 `project.json` and `project.md` (all committable), plus an

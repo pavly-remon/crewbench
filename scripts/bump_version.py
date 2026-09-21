@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
-"""Bump the version in all three plugin manifests together.
+"""Bump the version in all plugin manifests and the published app package
+together.
 
 Usage:
   python3 scripts/bump_version.py <new-version>
 
-Updates plugin.json, .claude-plugin/plugin.json and .codex-plugin/
+Updates plugin.json, .claude-plugin/plugin.json, .codex-plugin/
 plugin.json's "version" field to <new-version> (must look like
 `MAJOR.MINOR.PATCH`), then runs check_manifests.py as a sanity check.
-Stdlib only.
+
+Phase 4 milestone 5 (Design decision 8): also bumps
+`app/packages/cli/package.json` -- the one package this repo actually
+publishes to npm (Phase 4 milestone 1's own bundle-not-multi-publish
+decision: `app/packages/{contract,adapters,engine,daemon}/package.json`
+stay `"private": true` and are never independently versioned or
+published -- esbuild inlines their real source directly into the `cli`
+package's own bundle at publish time, so they have no real external
+version identity to bump. Confirmed by reading
+`app/packages/cli/scripts/build-publish.mjs` directly, not assumed).
+One shared version number across the plugin manifests and the npm
+package, matching how the three plugin manifests already share one
+today. Stdlib only.
 """
 import json
 import re
@@ -16,7 +29,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFESTS = ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]
+PLUGIN_MANIFESTS = ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]
+APP_MANIFESTS = ["app/packages/cli/package.json"]
+MANIFESTS = PLUGIN_MANIFESTS + APP_MANIFESTS
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 

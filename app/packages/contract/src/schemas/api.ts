@@ -567,3 +567,21 @@ export const ApiInstallPluginResponseSchema = z
   })
   .strict();
 export type ApiInstallPluginResponse = z.infer<typeof ApiInstallPluginResponseSchema>;
+
+/** `GET /api/update-check` (Phase 4 milestone 5, Design decision 7) --
+ * `current: null` means this daemon process couldn't determine its own
+ * version (the real, disclosed case for an unbundled monorepo dev
+ * checkout with no reachable `package.json` -- see `update-check.ts`'s
+ * own docstring), not that no version exists; `update_available` is
+ * always `false` when either `current` or `latest` is `null`, never
+ * guessed. */
+export const ApiUpdateCheckResponseSchema = z
+  .object({
+    current: z.string().nullable(),
+    latest: z.string().nullable(),
+    update_available: z.boolean(),
+    error: z.string().nullable(),
+    checked_at: z.string(),
+  })
+  .strict();
+export type ApiUpdateCheckResponse = z.infer<typeof ApiUpdateCheckResponseSchema>;

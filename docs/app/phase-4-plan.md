@@ -1227,3 +1227,269 @@ twice more during this milestone's own work.
   daemon-suite flakiness under load noted above -- not new, not this
   milestone's to fix, but worth being aware it's real and was directly
   observed multiple times this session.
+
+### Milestone 5 -- implemented, pending human review (2026-09-21)
+
+This is the last milestone of Phase 4.
+
+**A real correction to Design decision 6's own guessed URL shape, found
+by actually reading the router, not assumed**: that decision proposed
+`http://127.0.0.1:<port>/projects/<id>/tasks/<task-id>`. Reading
+`packages/ui/src/router.tsx` directly shows the real task-detail route is
+`/tasks/$taskId` -- no `/projects/<id>` prefix at all. `/crewbench:open`
+and its underlying probe script both build the real route
+(`/tasks/<task-id>`), not the plan's own guessed one.
+
+- **`/crewbench:open [task-id]` (Design decision 6) and the port-
+  discovery problem finding 9 flagged as real and unsolved**: new
+  `bin/crewbench_daemon_probe.py` (stdlib-only, Python 3.9-compatible --
+  this machine's own `python3 --version`, confirmed rather than assumed,
+  and no other `bin/*.py` script here uses PEP 604 `X | None` syntax, so
+  neither does this one). Discovery order: (1) `~/.crewbench/config.json`'s
+  own `port` field, a real, non-secret, already-on-disk file (unlike the
+  token, which stays genuinely undiscoverable, unchanged); (2) a fallback
+  scan of `4287..4287+49` -- the daemon's own real default port and
+  `findOpenPort()`'s own `maxAttempts` window, read directly from
+  `port.ts` rather than guessed, so this script's search range matches
+  what the daemon itself would actually try. Confirms a candidate port
+  genuinely has a crewbench daemon (not just anything occupying it) via
+  the same unauthenticated `/__crewbench_daemon__` liveness route
+  `singleton.ts` already built (Phase 4 milestone 4) for its own
+  daemon-singleton check -- reused, not re-invented. **Verified live,
+  three ways**: a real daemon started on a specific port, with that port
+  written into a real `config.json` -- the script found it and built the
+  right URL, with and without a task id; a *wrong* configured port
+  correctly reported `"found": false`; a range-scan (real daemon outside
+  the configured-port path) found it by scanning. `skills/open/SKILL.md`
+  is the actual bridge: opens the real, tokenless URL (Design decision 6,
+  Open question 2's own confirmed answer) and explains plainly, every
+  time, why a fresh tab won't be pre-authenticated -- this is not
+  testable as code (an LLM-instruction file, like every other
+  `skills/*/SKILL.md` in this repo), verified by reading it end to end
+  for correctness against the real probe script's actual output shape,
+  not by a computable test.
+- **`skills/status/SKILL.md`** gains the same probe call, mentioning
+  "running in crewbench ui at `<url>`" when a daemon is reachable --
+  reusing the identical liveness route, not a second one.
+- **Update banner (Design decision 7)**: `update-check.ts`'s
+  `checkForUpdate()`, a real `GET https://registry.npmjs.org/crewbench/latest`
+  call, cached 24h (module-level, not per-daemon-instance like
+  `doctor.ts`'s own cache -- deliberate: an update check has no
+  per-project/per-request meaning, so this repo's test suite starting
+  many daemon instances in one process should share one real cache
+  rather than each hitting the real registry separately). `current`
+  version resolved from whichever real `package.json` is actually
+  reachable at runtime (the packaged sibling next to the bundled
+  `bin.js` in the real published case; `packages/cli/package.json` two
+  directories over in the dev/unbundled case) -- `null`, not a guess or
+  a crash, when neither resolves. A plain 3-number comparator, not a
+  real semver library (`bump_version.py`'s own `VERSION_RE` already
+  enforces `MAJOR.MINOR.PATCH` repo-wide, so range parsing/prereleases
+  would be unused complexity -- `docs/app/CONTEXT.md`'s "don't add
+  dependencies beyond the stack without a reason"). `GET /api/update-check`;
+  UI: `useUpdateCheck()` + `UpdateBanner` (dismissible, per-version via
+  `localStorage`, the same "per-viewer convenience, wrapped in try/catch"
+  pattern `lib/notifications.ts` already established) in the app shell.
+  Never auto-updates anything, exactly as the phase prompt words it.
+- **A real bug caught writing the banner's own test, not shipped**: the
+  first draft read `localStorage` inside a `useState` initializer, which
+  only ever runs once, at mount -- but `data.latest` is still `undefined`
+  on that very first render (the query hasn't resolved yet), so a real
+  prior dismissal would never be found. Fixed with a `useEffect` that
+  re-checks once `data.latest` is actually known.
+- **`bump_version.py` (Design decision 8)**: extended to also bump
+  `app/packages/cli/package.json` -- the one package this repo actually
+  publishes (Milestone 1's own bundle-not-multi-publish call, confirmed
+  again by re-reading `build-publish.mjs`); the other four `app/packages/*`
+  manifests stay `"private": true`, deliberately not bumped, since they
+  have no real external version identity to bump at all. **Tested without
+  ever touching this repo's own real manifest files**, per the directive's
+  own instruction: copied the real plugin manifests + the real
+  `app/packages/cli/package.json` into an isolated scratch directory and
+  ran the real script against that copy (`python3 scripts/bump_version.py
+  3.2.0` in the scratch dir) -- confirmed all four bumped correctly,
+  `check_manifests.py` still passes, and `git status` on the real repo's
+  own manifest files stayed empty throughout. **A real, pre-existing
+  Python test regression found and fixed**: `tests/test_bump_version.py`'s
+  own fixture only ever copied the three plugin manifests into its
+  `tmp_path`, never `app/packages/cli/package.json` -- the extended
+  script's own attempt to read that file crashed with a genuine
+  `FileNotFoundError` the moment the existing
+  `test_bumps_all_three_manifests` test ran for real, caught by this
+  milestone's own full-suite verification pass, not assumed passing.
+  Fixed the fixture to copy the real file too, and added a new
+  `test_bumps_the_published_app_package_too` asserting the real behavior
+  Design decision 8 asks for.
+- **Release workflow (Design decision 8, finding 11)**: extends
+  `.github/workflows/ci-node.yml` with a `publish` job gated on a `v*`
+  tag push (`needs: [test, package-smoke, check-schemas]`, `if:
+  startsWith(github.ref, 'refs/tags/v')`) -- not a second, parallel
+  workflow file. **A real GitHub Actions gotcha found reading GitHub's
+  own docs before writing this, not assumed**: `on.push.paths` and
+  `on.push.tags` inside the *same* filter block are ANDed together, not
+  ORed -- a release tag pushed against an already-merged commit often
+  carries no file diff of its own for `paths` to match against at all,
+  which would silently skip the exact run this job exists for, with no
+  error anywhere. There is no way in this syntax to scope `paths` to
+  branch pushes only, so `paths` is dropped from the `push` trigger
+  entirely -- the real, accepted trade-off: this workflow now runs on
+  every push to `main`, not just ones touching `app/**`/`schemas/**`
+  (extra CI minutes, never extra risk); `pull_request`'s own `paths`
+  filter is unchanged (a tag is never a pull request). The `publish`
+  job's own real `npm publish --provenance` step needs a real
+  `NPM_TOKEN` repo secret this milestone does not add (no credential
+  exists in this session to add one with, and doing so is explicitly out
+  of this milestone's own scope) -- a tag push before that secret exists
+  fails loudly at that one step, after every real build/test/smoke check
+  above has already passed on all 3 OSes, a safe and visible failure
+  mode. **Verified by YAML-parsing the file directly (Python's `yaml`
+  module, since no `actionlint`/`yamllint` was available on this
+  machine) and confirming the exact job graph/gating/trigger shape**,
+  and by careful reading against `package-smoke`'s own already-proven
+  `build:publish`/`npm pack` sequence -- **never** by pushing a real tag
+  or otherwise triggering this workflow for real, per this milestone's
+  own hard safety constraint.
+- **`CHANGELOG.md`**: a new entry covering everything since v3.1.0
+  (Phases 1-4, not just this milestone's own diff -- finding 10), written
+  from this session's own `git log` read of every phase's real shipped
+  commits, not invented feature descriptions. Marked "proposed — not yet
+  tagged or published" rather than a real version header, since no real
+  tag/publish happened this milestone (Open question 5 stays open).
+- **`README.md`**: a real, substantial rewrite (Design decision 9) --
+  both install paths (plugin slash-commands, `npm i -g crewbench`), a
+  quick start for the app (`crewbench ui`'s own first-run wizard,
+  `crewbench run` headless), `crewbench service install`, the settings
+  page, the embedded terminal's real fallback behavior, `/crewbench:open`,
+  and a troubleshooting table built directly from `doctor.ts`'s five real
+  `errors.push(...)` strings (read from the file, not recalled) -- what
+  each one concretely means and the real fix, not invented advice.
+- **A real, recurring build/verify-loop gap, same shape as Milestone 2's
+  own disclosed one, hit again here**: the daemon's `node_modules`
+  symlink to `@crewbench/contract` needed a real `pnpm --filter
+  @crewbench/contract build` before the new `ApiUpdateCheckResponseSchema`
+  export was actually visible to the daemon at runtime -- the first live
+  test run 500'd with `Cannot read properties of undefined (reading
+  'parse')` until that rebuild happened. Same root cause Milestone 2's
+  log already named; flagging that this is now a second, independent
+  occurrence of the identical gap, worth remembering as "rebuild
+  `@crewbench/contract` after touching its schemas, before trusting a
+  live daemon check" rather than something to fix generically this
+  milestone.
+- **Real, live end-to-end verification, beyond the automated tests**: a
+  real `build:publish` + `npm publish --dry-run` (clean, 16 files) + `npm
+  pack` + install into a directory fully outside the monorepo (matching
+  Milestone 1's own established pattern, re-run here specifically because
+  this milestone touched the daemon/UI bundle) -- the real installed
+  binary's `--help` showed the real `service install|uninstall` usage
+  line; a real daemon started from it (`node-pty`'s self-heal from
+  Milestone 3 still holding: `GET /api/capabilities` -> `{"pty": true}`
+  against this fresh install, with `npm warn install-scripts` confirming
+  node-pty's own postinstall was genuinely skipped); `GET /api/update-check`
+  against the real npm registry returned `current: "0.1.0"` (correctly
+  read from the real installed `package.json`), `latest: null`,
+  `error: "registry returned 404"` -- the real, honest result, since
+  "crewbench" genuinely isn't published yet (confirmed again, still true
+  as of this milestone); the daemon-probe script, pointed at this real
+  installed daemon via a real `config.json` port entry, found it and
+  built the real `/tasks/<id>` URL correctly.
+- Tests: `packages/daemon/test/update-check.test.ts` (7 tests -- the pure
+  comparison/caching/error-handling logic via an injected fake `fetch`,
+  never the real npmjs.org registry in this suite, plus one real
+  route-level test with the daemon's own global `fetch` stubbed
+  specifically for the registry host, passing every other URL through to
+  the real `fetch` so the daemon's own internal calls are unaffected).
+  `packages/ui/test/update-banner.test.tsx` (4 tests). Python:
+  `tests/test_bump_version.py` gained the real regression fix above plus
+  a new real assertion.
+- Full verification: `pnpm -r typecheck/build/test` all green (466 TS
+  tests: 27 contract + 107 adapters + 152 engine + 105 daemon + 41 ui +
+  34 cli, up from 455 before this milestone), both Playwright e2e tests
+  still passing, Python suite (213 tests, up from 212) all green,
+  `pnpm check:schemas` clean. `~/.crewbench/projects.json`'s md5 checksum
+  (`8583583e35110b06b082ad35d16182d6`, the same known-good value every
+  milestone since Milestone 3 has checked) confirmed unchanged across
+  this milestone's entire verification run, including the real
+  install-smoke test above.
+- **Explicit safety confirmation, per this milestone's own directive**:
+  no real `npm publish` was ever run (every publish-adjacent command used
+  `--dry-run`, every time); no git tag was created or pushed; the release
+  workflow was never triggered for real, only read and YAML-validated.
+
+## Honest assessment: is Phase 4's overall goal met?
+
+*"Anyone on macOS, Linux or Windows can install crewbench with one
+command and have it running in under two minutes. The UI can also open
+real agent sessions in an embedded terminal."*
+
+**Partially, and here's precisely what's real versus what's still
+unverified, based on what this phase actually built and checked, not a
+guess:**
+
+Real and verified: the packaging/bundling pipeline works end to end on
+macOS, confirmed by five separate real install-and-run cycles across
+milestones 1, 3, 4 and 5 (this one included), each proving the specific
+thing that milestone touched still works against a real, standalone
+`npm install` outside the monorepo. `package-smoke` (the same sequence,
+in CI) is confirmed genuinely green on all 3 OSes for real (Milestone
+1's second CI run). The embedded terminal is real, gated correctly
+server-side, and its `node-pty` dependency self-heals against a real,
+reproduced packaging gap, verified against the worst real case (blocked
+install scripts) twice (milestones 3 and 5). The onboarding wizard,
+settings page, update banner, and `/crewbench:open`/`/crewbench:status`
+bridge are all real, working, tested code paths.
+
+**Not yet real, disclosed plainly, not glossed over:**
+
+1. **`npm publish` has never actually happened.** Every milestone that
+   touched publishing used `--dry-run` exclusively, per this phase's own
+   explicit, repeated safety constraint. `npx crewbench`/`npm i -g
+   crewbench` do not work today for anyone outside this repo -- there is
+   no real published package yet. Open question 5 (confirming the
+   package name immediately before that real step) is still open.
+2. **The "under two minutes" claim has never been measured against a
+   real published package**, only against a local tarball install, which
+   skips real npm registry latency entirely.
+3. **`crewbench service install|uninstall`'s real effect has never been
+   run on a real machine.** The plist/unit/XML generation is real and
+   tested; the actual OS registration call (`launchctl`/`systemctl`/
+   `schtasks`) is mocked in every single test in this phase, by the
+   user's own explicit, hardened choice after two real safety incidents.
+   Whether a real `crewbench service install` genuinely makes `crewbench
+   ui` come up at the next real login, on each of the three target OSes,
+   is completely unverified.
+4. **Windows and Linux verification is CI-only, never run on a real
+   machine of either OS by a human or an agent in this phase** -- real,
+   but only as real as a GitHub Actions runner is (confirmed identical
+   to a real install by `package-smoke`'s own real `--help`/`doctor`/
+   binary-run steps, not just "the job went green").
+5. **Three real safety incidents occurred during this phase's own work**
+   (Milestone 2: a real `~/.gemini` plugin-install; Milestone 3 and 4:
+   three separate `~/.crewbench/projects.json` leaks from test isolation
+   gaps) -- all found, disclosed, fixed, and independently re-verified
+   during human review, but their existence is itself a real signal that
+   this phase's own tooling needed real, live verification to be trusted,
+   not just written and assumed correct.
+
+The core engineering claim -- a real, working, cross-platform packaging
+and install pipeline, with a real embedded terminal, real settings, and
+a real plugin-app bridge -- is genuinely built and genuinely tested. The
+literal "anyone... in under two minutes" claim is not yet provable,
+because the one step that would prove it (a real `npm publish`) is
+deliberately the one step this phase never took.
+
+- **What still needs human sign-off before this milestone (and Phase 4
+  as a whole) is "done"**: (1) the router-URL correction to Design
+  decision 6 above; (2) the port-discovery approach for `/crewbench:open`
+  (config.json's port field, then a range scan matching `findOpenPort()`'s
+  own window) as sufficient, or whether a more direct mechanism is
+  wanted; (3) the CI trigger's dropped `paths` filter (a real, disclosed
+  trade-off: more CI runs on `main`, never a correctness risk) as
+  acceptable; (4) the `NPM_TOKEN` secret still needing to be added before
+  a real tag push can ever succeed past the `publish` job's own first
+  step; (5) whether to now take the real steps this phase's own
+  verification stopped short of by design -- a real `npm publish`, a
+  real `crewbench service install` on a real machine of each OS, and a
+  real measured "under two minutes" timing -- and if so, in what order
+  and under what supervision, given this phase's own history of real
+  safety incidents when those boundaries were crossed without enough
+  care.

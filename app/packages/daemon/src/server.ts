@@ -19,6 +19,7 @@ import { registerFsBrowseRoutes } from "./routes/fs-browse.js";
 import { registerPluginInstallRoutes } from "./routes/plugin-install.js";
 import { registerCapabilityRoutes, registerPtyRoutes } from "./routes/pty.js";
 import { registerConfigRoutes } from "./routes/config.js";
+import { registerUpdateCheckRoutes } from "./routes/update-check.js";
 import { registerUiStatic } from "./static-ui.js";
 import { DEFAULT_PORT, loadConfig } from "./config.js";
 import { loadRegistry } from "./registry.js";
@@ -137,6 +138,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   registerPluginInstallRoutes(app);
   registerCapabilityRoutes(app);
   registerConfigRoutes(app);
+  registerUpdateCheckRoutes(app);
   const cliEntryPath = options.cliEntryPath ?? (process.argv[1] as string);
   registerPtyRoutes(app, watcher, taskRunner, cliEntryPath);
   await registerUiStatic(app);

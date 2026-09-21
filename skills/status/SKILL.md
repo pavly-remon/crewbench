@@ -25,6 +25,16 @@ its output verbatim.
    and show a compact table: id, title, phase, round, updated. Newest
    first. If it's empty or missing, say there are no tasks yet.
 
+   Also run `python3 <root>/bin/crewbench_daemon_probe.py` (Phase 4
+   milestone 5) — a plain, unauthenticated liveness probe against the
+   crewbench app's daemon, the same one `/crewbench:open`'s own docstring
+   explains in full (never the token-gated API, never anything more than
+   "is a daemon here"). If its `"found"` is `true`, mention it plainly at
+   the top of your report: "running in crewbench ui at `<url>`" — this is
+   informational only, it doesn't change anything else about this report,
+   and its absence (`"found": false`) means nothing is running, not that
+   anything is wrong.
+
 2. With a task id: read
    `python3 <root>/bin/crewbench_state.py get --task-dir
    .crewbench/tasks/<task-id>` and `<task-dir>/runs/status.json`. Report:

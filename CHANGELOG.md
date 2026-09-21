@@ -1,5 +1,86 @@
 # Changelog
 
+## v3.2.0 (proposed — not yet tagged or published)
+
+The crewbench **app**: an installable local tool (daemon + web UI + CLI)
+that runs the same workflow the plugin does, standalone, alongside it —
+the plugin keeps working unchanged throughout. Covers everything since
+v3.1.0 (Phases 1–4 of the app build, `docs/app/CONTEXT.md`), not just
+this release's own diff — the app didn't exist in any previous release.
+Real, disclosed gaps this release doesn't close: `npm publish` has never
+been run for real (the package name `crewbench` is reserved by nothing
+but being unclaimed — see Open question 5 in `docs/app/phase-4-plan.md`),
+and `crewbench service install`'s real launchd/systemd/Task Scheduler
+registration has never been exercised end-to-end on a real machine (built
+and tested with every actual OS call mocked, by deliberate, disclosed
+choice — see that plan's milestone 4 log).
+
+### Added
+
+- **`crewbench` CLI** (`npm i -g crewbench`, or `npx crewbench`): `run`
+  (headless, one task, terminal-driven — the same workflow `/crewbench:new-task`
+  runs, without an LLM host CLI in the loop), `resume`, `status`, `doctor`,
+  `team`, `profile`, `ui`, `service install|uninstall`. Bundled as a
+  single published package (`esbuild`) — the four internal `@crewbench/*`
+  packages (contract, adapters, engine, daemon) stay private, inlined at
+  build time, never separately published.
+- **`crewbench ui`**: starts a local daemon (loopback-only, a fresh
+  bearer token per run, never persisted to disk) and opens a web UI to:
+  add a project (a real server-side folder browser, not manual path
+  entry), create and scope a task in a live chat with the lead, pick the
+  lineup (per-role CLI/model/effort/permissions, with a real model
+  dropdown for any CLI that can actually enumerate its own models —
+  today, only `agy`), watch a fix round run live (per-role status, real
+  diffs, issues/failures tables), resolve approvals from a global inbox
+  (desktop notifications, opt-in), and cancel/resume/retry a run — all
+  daemon-hosted, no separate CLI subprocess per task.
+  - A first-run onboarding wizard (CLI detection + login instructions,
+    add your first project, offer to install the plugin into each
+    detected CLI, confirmed before running).
+  - An embedded terminal ("Open session" on a resumable task) backed by
+    a true optional dependency (`node-pty`) — degrades to a "copy resume
+    command" button on any platform where it isn't available, never a
+    broken button.
+  - A global settings page (port, per-CLI concurrency limits, a
+    machine-wide default lineup, notification/theme defaults) and a
+    non-blocking "a newer version is available" banner (checked against
+    the npm registry at most once a day, never auto-updating).
+  - `crewbench service install|uninstall`: generates a real launchd
+    plist / systemd user unit / Windows Task Scheduler entry to run the
+    daemon at login.
+- **`/crewbench:open [task-id]`**: opens a task (or the UI's front page)
+  in the browser if a daemon is already running on this machine —
+  read-only, no token involved (Phase 2's "never persisted" principle
+  applies here too: it can only open a page, never authenticate one on
+  its own). `/crewbench:status` now also mentions when a live daemon is
+  reachable.
+- The full `.crewbench/` on-disk contract (task state, events, results)
+  is now shared, unmodified, between the plugin and the app — either one
+  can create, drive, or resume a task; the other picks it up exactly
+  where it left off.
+
+### Fixed (real, pre-existing bugs found while building the app, disclosed at the time)
+
+- `crewbench resume`'s own CLI command silently did nothing for a
+  `stopped`/`failed` task (matching only the plugin's original, narrower
+  meaning of "resumable") — the daemon-hosted app had already established
+  a real, wider "resumable" set for those two phases; the CLI now matches
+  it, so a task's own real "copy resume command" button (and the
+  embedded terminal built on top of it) actually works.
+- `reconcileDeadRuns()`'s pid-based dead-process detection was silently
+  non-functional since it shipped (Phase 1) — nothing ever wrote the
+  `pid` field it read.
+- A task's phase could get silently stuck reporting a stale, mid-round
+  value forever after a real commit approval resolved, or after a user
+  cancelled it — both are pure runtime signals with no corresponding
+  `runs/*.result.json` file for the existing file-replay logic to ever
+  notice.
+
+See `docs/app/phase-1-plan.md` through `docs/app/phase-4-plan.md`'s own
+milestone logs for the full, real-time account of every design decision,
+deviation, and bug found along the way — this entry summarizes; those
+logs are the record.
+
 ## v3.1.0
 
 Phase 0 of the crewbench-app build (see `docs/app/CONTEXT.md` and
