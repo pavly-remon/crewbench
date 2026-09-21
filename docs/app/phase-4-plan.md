@@ -36,20 +36,24 @@ accumulating 321 stale entries in this real machine's own
 `~/.crewbench/projects.json` -- cleaned up with a backup preserved,
 independently re-verified during review byte-for-byte against that
 backup, and re-confirmed stable via checksum across a full fresh test
-run; full precise account in the milestone log. Milestone 4 implemented
-2026-09-21, pending human review -- see its log entry, including a real
-registry-locking fix (a genuine, reproduced-both-ways race), a daemon-
-singleton startup check, `GET/PUT /api/config`, a global settings page,
-`crewbench service install|uninstall` (file generation only, every real
-OS registration call mocked in every test, per an explicit, hardened
-safety decision -- live end-to-end verification of the real install
-cycle deliberately deferred, not attempted), and a third real-world
+run; full precise account in the milestone log. Milestone 4 done --
+reviewed and approved 2026-09-21, including a real registry-locking fix
+(a genuine, reproduced-both-ways race), a daemon-singleton startup
+check, `GET/PUT /api/config`, a global settings page, `crewbench
+service install|uninstall` (file generation only, every real OS
+registration call mocked in every test, independently confirmed via
+direct inspection of this machine's own service-config locations and
+process list -- per the user's own explicit, hardened safety decision
+-- live end-to-end verification of the real install cycle deliberately
+deferred, not attempted), and a third real-world
 `~/.crewbench/projects.json` leak found live, root-caused precisely (an
 orphaned-promise / test-cleanup-ordering bug, reproduced twice, fixed
 with a defensive `settleAll()` helper, and reproduced a third time
 specifically to confirm the fix holds even under deliberate fault
-injection), cleaned up, with an honest note that this class of bug
-cannot be provably ruled out for good.))
+injection), independently re-verified during review via the real file's
+own checksum (stable before and after a full fresh test run), with an
+honest note that this class of bug cannot be provably ruled out for
+good.))
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -998,7 +1002,7 @@ patched defensively for a gap that doesn't exist in it.
   persistence across dialog closes) is sufficient for a first pass or
   needs more before being called done.
 
-### Milestone 4 -- implemented, pending human review (2026-09-21)
+### Milestone 4 -- done (reviewed and approved 2026-09-21)
 
 **Continued across two sessions**: a session-limit stall cut off the
 first attempt right after `packages/ui/src/api/config.ts` was created
