@@ -24,17 +24,19 @@ severity: only the on-disk plugin source was replaced with a fresh
 clone, no registration/settings changed; user confirmed leaving it
 as-is) and a real bug its own live daemon check caught and fixed (a
 doubled `command` string in the install-step API response). Milestone 3
-implemented 2026-09-21, pending human review -- see its log entry,
-including a real pre-existing bug fixed in `resume.ts` (Phase 3
-milestone 6's `CopyResumeCommand` silently did nothing for a stopped
-task until this fix), a self-healing fix for a real node-pty packaging
-gap (verified against the worst real case: a fresh `npm install` with
-install scripts blocked), and a second, separate, serious real-world
-isolation bug found live and fixed repo-wide (8 daemon test files,
-including a pre-existing 7 from Phase 3/milestone 2, never isolated
-`CREWBENCH_HOME`, and had been silently accumulating 321 stale entries
-in this real machine's own `~/.crewbench/projects.json` -- cleaned up
-with a backup preserved, full precise account in the milestone log.))
+done -- reviewed and approved 2026-09-21, including a real pre-existing
+bug fixed in `resume.ts` (Phase 3 milestone 6's `CopyResumeCommand`
+silently did nothing for a stopped task until this fix), a self-healing
+fix for a real node-pty packaging gap (verified against the worst real
+case: a fresh `npm install` with install scripts blocked), and a second,
+separate, serious real-world isolation bug found live and fixed
+repo-wide (8 daemon test files, including a pre-existing 7 from Phase
+3/milestone 2, never isolated `CREWBENCH_HOME`, and had been silently
+accumulating 321 stale entries in this real machine's own
+`~/.crewbench/projects.json` -- cleaned up with a backup preserved,
+independently re-verified during review byte-for-byte against that
+backup, and re-confirmed stable via checksum across a full fresh test
+run; full precise account in the milestone log.))
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -732,7 +734,7 @@ plugin system genuinely differs.
   which this session deliberately did not attempt after the agy
   incident.
 
-### Milestone 3 -- implemented, pending human review (2026-09-21)
+### Milestone 3 -- done (reviewed and approved 2026-09-21)
 
 **Continued from a previous fork's rate-limit-interrupted session**: that
 earlier fork got as far as adding `node-pty` to `packages/daemon`'s
