@@ -18,11 +18,15 @@ import { registerModelRoutes } from "./routes/models.js";
 import { registerFsBrowseRoutes } from "./routes/fs-browse.js";
 import { registerPluginInstallRoutes } from "./routes/plugin-install.js";
 import { registerCapabilityRoutes, registerPtyRoutes } from "./routes/pty.js";
+import { registerConfigRoutes } from "./routes/config.js";
 import { registerUiStatic } from "./static-ui.js";
 import { DEFAULT_PORT, loadConfig } from "./config.js";
 import { loadRegistry } from "./registry.js";
 import { DaemonWatcher } from "./watcher.js";
 import { TaskRunner } from "./task-runner.js";
+import { DaemonAlreadyRunningError, LIVENESS_MARKER, LIVENESS_PATH, probeExistingDaemon } from "./singleton.js";
+
+export { DaemonAlreadyRunningError } from "./singleton.js";
 
 export interface DaemonHandle {
   app: FastifyInstance;
@@ -64,6 +68,18 @@ export interface StartDaemonOptions {
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonHandle> {
   const config = await loadConfig();
   const preferredPort = options.port ?? config.port ?? DEFAULT_PORT;
+  // Phase 4 milestone 4 (Design decision 4): `preferred === 0` is the
+  // ephemeral-port sentinel `findOpenPort()` itself already special-cases
+  // (every test in this codebase calls `startDaemon({port: 0})` for
+  // exactly this reason, to avoid colliding with anything else, including
+  // each other) -- the singleton check only makes sense for a real,
+  // specific preferred port (the actual `crewbench ui`/`crewbench ui
+  // --port N` case), so it's skipped here rather than probing port 0
+  // (meaningless) or racing every parallel test file against one shared
+  // "is something on port 0" question.
+  if (preferredPort !== 0 && (await probeExistingDaemon(preferredPort))) {
+    throw new DaemonAlreadyRunningError(preferredPort);
+  }
   const port = await findOpenPort(preferredPort);
   const token = generateToken();
 
@@ -73,6 +89,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // propagated to the socket yet), hanging shutdown. Safe here since a
   // daemon shutdown legitimately means "every stream ends now."
   const app = Fastify({ logger: false, forceCloseConnections: true });
+  // Unauthenticated by construction (auth.ts's own hook exempts anything
+  // outside /api/, the same exemption static UI assets already get) --
+  // this route exists purely so a *different, about-to-start* daemon
+  // process can ask "is a real crewbench daemon already here" via
+  // singleton.ts's probeExistingDaemon(), before this app.listen() call
+  // below even happens. No secrets in the response.
+  app.get(LIVENESS_PATH, async () => ({ marker: LIVENESS_MARKER, pid: process.pid }));
   app.addHook("onRequest", createAuthHook(token, port));
   // Registered before every route (per @fastify/websocket's own README:
   // "it needs to be registered before all routes in order to be able to
@@ -113,6 +136,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   registerFsBrowseRoutes(app);
   registerPluginInstallRoutes(app);
   registerCapabilityRoutes(app);
+  registerConfigRoutes(app);
   const cliEntryPath = options.cliEntryPath ?? (process.argv[1] as string);
   registerPtyRoutes(app, watcher, taskRunner, cliEntryPath);
   await registerUiStatic(app);

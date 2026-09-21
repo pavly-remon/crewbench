@@ -9,6 +9,7 @@ import { TeamSettingsPage } from "./routes/team-settings-page.js";
 import { ProfilePage } from "./routes/profile-page.js";
 import { HealthPage } from "./routes/health-page.js";
 import { UsagePage } from "./routes/usage-page.js";
+import { SettingsPage } from "./routes/settings-page.js";
 
 const rootRoute = createRootRoute({ component: Layout });
 
@@ -69,6 +70,12 @@ const healthRoute = createRoute({
   component: HealthPage,
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   projectsRoute,
   taskBoardRoute,
@@ -79,6 +86,7 @@ const routeTree = rootRoute.addChildren([
   teamSettingsRoute,
   profileRoute,
   healthRoute,
+  settingsRoute,
 ]);
 
 export const router = createRouter({ routeTree });

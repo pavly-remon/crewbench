@@ -72,6 +72,13 @@ export function Layout() {
           >
             Health
           </Link>
+          <Link
+            to="/settings"
+            className={cn("text-[var(--color-fg-muted)] [&.active]:text-[var(--color-fg)]")}
+            activeProps={{ className: "text-[var(--color-fg)]" }}
+          >
+            Settings
+          </Link>
         </nav>
         <div className="flex items-center gap-1">
           <ApprovalInbox />

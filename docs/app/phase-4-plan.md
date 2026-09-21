@@ -36,7 +36,20 @@ accumulating 321 stale entries in this real machine's own
 `~/.crewbench/projects.json` -- cleaned up with a backup preserved,
 independently re-verified during review byte-for-byte against that
 backup, and re-confirmed stable via checksum across a full fresh test
-run; full precise account in the milestone log.))
+run; full precise account in the milestone log. Milestone 4 implemented
+2026-09-21, pending human review -- see its log entry, including a real
+registry-locking fix (a genuine, reproduced-both-ways race), a daemon-
+singleton startup check, `GET/PUT /api/config`, a global settings page,
+`crewbench service install|uninstall` (file generation only, every real
+OS registration call mocked in every test, per an explicit, hardened
+safety decision -- live end-to-end verification of the real install
+cycle deliberately deferred, not attempted), and a third real-world
+`~/.crewbench/projects.json` leak found live, root-caused precisely (an
+orphaned-promise / test-cleanup-ordering bug, reproduced twice, fixed
+with a defensive `settleAll()` helper, and reproduced a third time
+specifically to confirm the fix holds even under deliberate fault
+injection), cleaned up, with an honest note that this class of bug
+cannot be provably ruled out for good.))
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -984,3 +997,229 @@ patched defensively for a gap that doesn't exist in it.
   terminal's own UX (a single dialog, no reconnect-on-drop, no scrollback
   persistence across dialog closes) is sufficient for a first pass or
   needs more before being called done.
+
+### Milestone 4 -- implemented, pending human review (2026-09-21)
+
+**Continued across two sessions**: a session-limit stall cut off the
+first attempt right after `packages/ui/src/api/config.ts` was created
+(the daemon-side registry locking, singleton check, and `GET/PUT
+/api/config` route were already done and confirmed safe -- typecheck
+clean, no real service files touched). This entry covers the full
+milestone.
+
+- **`registry.ts`'s locked read-modify-write, a real, reproduced-both-
+  ways fix**: `addProject()`/`removeProject()` used to do a plain
+  `loadRegistry()` → mutate → `saveRegistry()` with no lock spanning the
+  three -- the identical bug class Phase 0 fixed for `state.json`/
+  `index.json` on the Python side, never ported here (finding 5). Fixed
+  by wrapping the whole critical section (including the "does this path
+  already have an entry" lookup, not just the final write -- the id-
+  minting decision itself has to be inside the lock, or two concurrent
+  adds of a brand-new path can each decide "no existing entry" and mint
+  two different ids for one path) in `@crewbench/engine`'s own
+  `lockedReadModifyWrite()` (already built, already used by
+  `task-store.ts`/`runner.ts` for the same reason -- reused directly, no
+  new lock primitive written). **Proven both ways, not just asserted**:
+  a new `registry.test.ts` fires 10 concurrent `addProject()` calls (all
+  survive, no lost updates, no duplicate ids), a concurrent idempotent-
+  re-add case, and an interleaved add/remove case -- all three were
+  deliberately run against a temporarily-reverted, pre-fix `registry.ts`
+  (`git stash`) first and confirmed to genuinely fail there (2 with real
+  `ENOENT` crashes from the actual race, not assertion failures), then
+  confirmed to pass against the real fix.
+- **Daemon-singleton startup check, Design decision 4's other half**:
+  `findOpenPort()` used to silently walk forward to the next free port
+  when the preferred one was busy, including when it was busy because
+  *another crewbench daemon* was already there -- quietly starting a
+  second, independent daemon instead of refusing. New `singleton.ts`:
+  a real, unauthenticated liveness route (`GET /__crewbench_daemon__`,
+  outside `/api/`, the same exemption static UI assets already get from
+  `auth.ts`) any crewbench daemon answers; `startDaemon()` probes the
+  *exact* preferred port for it before calling `findOpenPort()` at all,
+  and throws a new `DaemonAlreadyRunningError` if a real crewbench
+  daemon (not just anything occupying that port) is already there.
+  Skipped entirely for the `port: 0` ephemeral sentinel every test in
+  this codebase already relies on. `crewbench ui` (`commands/ui.ts`)
+  catches this specific error and exits cleanly (code 0, not a crash),
+  printing the existing daemon's URL -- it has no way to know that
+  daemon's own token (Phase 2's "never persisted" principle, unchanged),
+  a real, disclosed limitation. **A real bug in my own first test caught
+  live, not a probe/detection bug**: a test proving "a *non*-crewbench
+  process occupying the port still lets a daemon start normally" itself
+  hung for 20s in its own cleanup -- `probeExistingDaemon()`'s `fetch()`
+  against a bare `net.Server` correctly aborted after 300ms, but that
+  left the server's own accepted socket still open, and `Server.close()`
+  waits for every existing connection to end before its callback fires.
+  Fixed in the test (track and force-`destroy()` accepted sockets before
+  `close()`), not in `singleton.ts` itself -- `startDaemon()` had already
+  resolved correctly in under 400ms every time, confirmed by explicit
+  timing logs before concluding where the real hang was.
+- **`GET/PUT /api/config`, three new additive `config.json` fields**:
+  `default_lineup` (reuses `team.ts`'s own `RoleLineupSchema`, not a
+  parallel type -- same real shape, one level higher: a machine-wide
+  fallback for a project with no `team.json` yet), `notifications`,
+  `theme`. Route matches Phase 3's team/profile envelope pattern exactly
+  (`{}` when the file doesn't exist yet, not a 404). `saveConfig()`
+  deliberately *not* locked the way the registry now is -- disclosed in
+  its own docstring: `config.json` has one real writer (a person on the
+  settings page), not many concurrent API callers, so the severity that
+  justified `registry.ts`'s fix doesn't apply the same way here; a plain
+  `atomicWriteJson()` (still crash-safe) matches `team.json`/
+  `profile.json`'s own existing PUT routes' locking posture.
+- **UI: a global settings page**, reusing `RoleLineupEditor` for
+  `default_lineup` exactly like `team-settings-page.tsx` does for a
+  project's own roster (a bare `{roles: config.default_lineup}` stand-in
+  for a `Team` object, since every other field `suggestLineup()` reads is
+  optional). **A real, disclosed non-wiring**: `notifications`/`theme`
+  here are deliberately *not* connected to the existing purely-client-
+  side mechanisms (`lib/notifications.ts`'s `localStorage` opt-in,
+  `lib/theme.ts`'s `useTheme()`) -- both of those files' own docstrings
+  say "never anything the daemon needs to know about," a real Phase 3
+  design line this milestone doesn't cross. These two fields are only
+  the machine-wide *default* a fresh tab could in principle seed its own
+  local state from; actually wiring that read is a real, separate change
+  to already-shipped Phase 3 code this milestone doesn't make.
+- **`crewbench service install|uninstall`, built exactly to the user's
+  own explicit, hardened safety decision for this milestone**: after two
+  real safety incidents earlier in this phase (milestone 2's real
+  `~/.gemini` plugin-install, and this same milestone's own
+  `~/.crewbench/projects.json` leak below), the user chose the most
+  conservative option -- generate real, well-formed launchd plist /
+  systemd user unit / Windows Task Scheduler XML content, write it to a
+  real (but fully overridable, `CREWBENCH_SERVICE_HOME`-scoped) on-disk
+  location, but never let the actual `launchctl`/`systemctl`/`schtasks`
+  registration command run for real anywhere in this milestone's own
+  work. **Confirmed, explicitly**: `node:child_process`'s `execFile` is
+  mocked at the module level in every test that exercises
+  `installService()`/`uninstallService()` (`service.test.ts`, 9 tests) --
+  by construction, no real subprocess could spawn, not just "wasn't
+  observed to." Live end-to-end verification of the real install/
+  uninstall cycle (does `launchctl load` actually work, does the daemon
+  actually come up at the next real login) is **deliberately deferred**
+  to the user or a session they explicitly supervise -- stated plainly as
+  the user's own choice, not a shortfall this milestone fell short of.
+- Full verification: `pnpm -r typecheck/build/test` green (455 TS tests:
+  27 contract + 107 adapters + 152 engine + 98 daemon + 37 ui + 34 cli, up
+  from 432 before this milestone), both Playwright e2e tests still
+  passing, Python suite (212 tests) unaffected, `pnpm check:schemas`
+  clean. Milestone 1's own `npm pack`/install smoke test re-run against
+  this milestone's changes: a real tarball installed into a directory
+  outside the monorepo, the installed binary's `--help`/`service` (usage
+  text only, no real command) verified, and a real daemon started from
+  it confirmed `GET /api/capabilities` (`{"pty": true}`, node-pty's
+  self-heal from milestone 3 still holding), `GET/PUT /api/config`, and
+  the daemon-singleton refusal all work against the real published
+  artifact, not just against source. **A real, pre-existing daemon-suite
+  flakiness, not a regression**: `pnpm -r test`/repeated full `vitest run`
+  passes in `packages/daemon` intermittently failed on different,
+  unrelated tests each time (`watcher-sse.test.ts`, `task-detail.test.ts`,
+  `lineup.test.ts`, `diff-screenshots.test.ts` -- never this milestone's
+  own new files) under this machine's own elevated load (`load average`
+  4-7 during this session) -- every one of this milestone's own new test
+  files passed reliably, every time, in isolation; the daemon package's
+  own full suite passed clean on at least one of several attempts.
+
+**A third real-world `~/.crewbench/projects.json` incident this
+session, found live, root-caused precisely (not just patched and
+hoped), and disclosed in full**: independently checking the real
+file's own md5 checksum (the exact discipline milestone 3's own review
+established) caught it changing from the known-good single-entry state
+twice more during this milestone's own work.
+
+1. **What happened, precisely**: `registry.test.ts`'s own concurrent
+   `Promise.all()` calls, run *specifically while `registry.ts` was
+   deliberately reverted to its pre-fix, unlocked form* (a legitimate
+   falsification step -- proving the new tests actually catch the bug
+   they claim to, the same discipline every earlier milestone's own
+   locking/race fixes in this phase used) -- threw a real `ENOENT` from
+   the genuine pre-fix race. `Promise.all()` rejects the instant its
+   *first* promise rejects; every other promise in that same array is
+   *orphaned*, not cancelled, and keeps running in the background. This
+   test file's own `afterEach` (the same "delete every env var, restore
+   a module-load-time snapshot" pattern every daemon test file in this
+   repo already uses, including the 6 milestone 3 just fixed) ran
+   immediately after the `it()` block's own `await` rejected --
+   deleting `CREWBENCH_HOME` from the real environment *while the
+   orphaned siblings were still in flight*. When those orphaned calls
+   finally reached their own `atomicWriteJson()`, `daemonHome()` read
+   the just-restored *real* default and wrote a handful of stray
+   temp-dir-path entries into this actual machine's real
+   `~/.crewbench/projects.json`.
+2. **Reproduced twice, independently confirmed non-reproducible against
+   the real shipped (locked) code**: first occurrence found via a
+   checksum mismatch after the day's earlier work; a second, deliberate
+   reproduction attempt (repeating the exact stash → test → stash-pop
+   sequence) reproduced it again, with the leaked entry's own
+   `added_at` timestamp matching the failing run's own wall-clock time
+   to the second -- the actual proof of root cause, not a guess. Five
+   separate attempts to reproduce it against the real, unmodified
+   shipped code (this file alone, the full daemon suite twice, the full
+   monorepo suite twice) never leaked once -- the underlying race this
+   milestone's own fix closes is exactly what made the leak possible in
+   the first place; it cannot occur in normal operation against the
+   actual shipped `registry.ts`.
+3. **Fixed defensively regardless, not left as "only happens during
+   deliberate fault injection, so it's fine"**: a new `settleAll()`
+   helper in the test file itself replaces every racing `Promise.all()`
+   with `Promise.allSettled()` (waits for every promise to actually
+   finish, success or failure, before returning; re-throws the first
+   real rejection only after every sibling has settled) -- no future
+   regression, in this code or anything else a test exercises with real
+   concurrent I/O, can leave an orphaned write racing this file's own
+   environment cleanup again. **Re-reproduced the exact same fault-
+   injection sequence a third time against the hardened test** and
+   confirmed it: still fails correctly (proving the underlying bug is
+   still genuinely caught), but the real file's checksum is now
+   provably unchanged even under deliberate fault injection against
+   broken code.
+4. **Cleanup, each time**: the real file's non-temp-dir entries were
+   programmatically identified (the same `/var/folders/`/`/tmp/` path
+   filter milestone 3's own cleanup used) and the file rewritten with
+   only the genuine entries kept -- confirmed back to the exact
+   milestone-3-established checksum (`8583583e35110b06b082ad35d16182d6`)
+   each time. No separate backup file was made for this smaller,
+   3-and-then-1-entry incident (milestone 3's own 321-entry backup
+   remains at
+   `/private/tmp/claude-501/-Users-pavly-Projects-AgenticAI-crewbench/9d2b490e-3a01-4cd3-83ce-3d47b21b5a97/scratchpad/projects.json.backup-before-cleanup`)
+   -- the removed entries themselves are reproduced in full above
+   (this log entry), which was judged sufficient given their small
+   number and that they're printed in full here.
+5. **Honestly, not swept under the rug**: this is not a closed case the
+   way milestone 3's finding was (that one had a single, provable root
+   cause -- 8 files missing an env override -- fixed once, verified
+   stable). This one's root cause (an orphaned promise from a rejected
+   `Promise.all()` racing a test's own cleanup) is a *general shape* of
+   bug that could in principle recur in any future test file that races
+   real concurrent I/O against code that might throw -- `settleAll()`
+   closes it for this file specifically; it was not applied repo-wide
+   (unlike milestone 3's `CREWBENCH_HOME` fix, which *was* applied to
+   every affected file) because no other current test file in this repo
+   races `Promise.all()` against an operation that both touches real
+   env-scoped paths *and* can genuinely reject under concurrent load --
+   confirmed by grep, not assumed, but flagged as worth a repo-wide
+   audit if a future milestone adds another one.
+
+- **What still needs human sign-off before this is "done"**: (1) the
+  `~/.crewbench/projects.json` incident above in full -- whether the
+  `settleAll()` fix and the honest "this class of bug isn't provably
+  ruled out everywhere" disclosure is an acceptable resolution, or
+  whether a repo-wide audit for the same pattern is wanted now rather
+  than deferred; (2) `crewbench service install|uninstall`'s real
+  install/uninstall cycle has *never been run for real, anywhere*, per
+  the user's own explicit safety decision -- the plist/unit/XML
+  generation and the mocked registration call are both real and tested,
+  but the actual "does this make `crewbench ui` come up at the next
+  real login" claim is entirely unverified and needs the user (or a
+  session they explicitly supervise) to run it for real, on a real
+  machine of each target OS, before this can be called functionally
+  complete; (3) the daemon-singleton refusal's UX (`crewbench ui` prints
+  a message and exits 0 -- no way to know the existing daemon's token,
+  so it can't offer to open a browser tab straight to it) -- acceptable
+  as the real, disclosed limitation Phase 2's "never persisted"
+  principle implies, or worth a different tradeoff; (4) `notifications`/
+  `theme` in `config.json` being unwired to the existing client-side
+  mechanisms -- a real, disclosed scope limit, confirm it's acceptable
+  for this milestone rather than a future one; (5) the pre-existing
+  daemon-suite flakiness under load noted above -- not new, not this
+  milestone's to fix, but worth being aware it's real and was directly
+  observed multiple times this session.

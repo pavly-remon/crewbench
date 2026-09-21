@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { atomicWriteJson, nowIso, readJsonOrDefault } from "@crewbench/engine";
+import { atomicWriteJson, lockedReadModifyWrite, nowIso, readJsonOrDefault } from "@crewbench/engine";
 import { ProjectsRegistrySchema, type ProjectsRegistry, type RegisteredProject } from "@crewbench/contract";
 
 const execFileAsync = promisify(execFile);
@@ -21,14 +21,39 @@ function registryPath(): string {
   return join(daemonHome(), "projects.json");
 }
 
+function registryLockPath(): string {
+  return join(daemonHome(), ".projects.lock");
+}
+
 export async function loadRegistry(): Promise<ProjectsRegistry> {
   const raw = await readJsonOrDefault<unknown>(registryPath(), {});
   const parsed = ProjectsRegistrySchema.safeParse(raw);
   return parsed.success ? parsed.data : {};
 }
 
-async function saveRegistry(registry: ProjectsRegistry): Promise<void> {
-  await atomicWriteJson(registryPath(), registry);
+/** Phase 4 milestone 4 (Design decision 4, finding 5): the real bug
+ * class Phase 0 already fixed for `state.json`/`index.json` on the
+ * Python side (`crewbench_fs.py`'s `locked_read_modify_write`), ported
+ * in spirit here (not verbatim -- different language, same shape) via
+ * `@crewbench/engine`'s own `lockedReadModifyWrite()`, already built and
+ * used by `task-store.ts`/`runner.ts` for the identical reason. Before
+ * this, `addProject()`/`removeProject()` each did a plain
+ * load-then-`atomicWriteJson()` with no lock spanning the two -- two
+ * concurrent writers (two `crewbench ui` processes, or one process
+ * handling two racing `POST /api/projects` calls) could each read the
+ * same registry, mutate their own copy, and the second writer's
+ * `atomicWriteJson()` would silently clobber the first writer's entry
+ * entirely. Rare when a person has to manually run `crewbench ui` twice
+ * to hit it; becomes the normal case once Design decision 4's background
+ * service can keep one daemon running silently at login while the same
+ * person also opens a second one by hand. */
+async function mutateRegistry<T>(fn: (registry: ProjectsRegistry) => T): Promise<T> {
+  return lockedReadModifyWrite(registryLockPath(), async () => {
+    const registry = await loadRegistry();
+    const result = fn(registry);
+    await atomicWriteJson(registryPath(), registry);
+    return result;
+  });
 }
 
 export class NotAGitRepoError extends Error {
@@ -59,25 +84,33 @@ async function assertGitRepo(path: string): Promise<void> {
 export async function addProject(path: string, name?: string): Promise<RegisteredProject> {
   const absolute = resolve(path);
   await assertGitRepo(absolute);
-  const registry = await loadRegistry();
-  const existing = Object.values(registry).find((p) => p.path === absolute);
-  const entry: RegisteredProject = {
-    id: existing?.id ?? randomBytes(8).toString("hex"),
-    path: absolute,
-    name: name ?? existing?.name ?? absolute.split(/[/\\]/).filter(Boolean).pop() ?? absolute,
-    added_at: existing?.added_at ?? nowIso(),
-  };
-  registry[entry.id] = entry;
-  await saveRegistry(registry);
-  return entry;
+  // The existing-entry lookup and the id it decides on must happen
+  // *inside* the same locked critical section as the write -- deciding
+  // "no existing entry, mint a fresh id" outside the lock (the pre-fix
+  // shape) is exactly the read-modify-write race mutateRegistry() exists
+  // to close: two concurrent adds of the same brand-new path could each
+  // see no existing entry and each mint a different random id, leaving
+  // two duplicate registry entries for one path instead of the one
+  // idempotent entry this function's own docstring promises.
+  return mutateRegistry((registry) => {
+    const existing = Object.values(registry).find((p) => p.path === absolute);
+    const entry: RegisteredProject = {
+      id: existing?.id ?? randomBytes(8).toString("hex"),
+      path: absolute,
+      name: name ?? existing?.name ?? absolute.split(/[/\\]/).filter(Boolean).pop() ?? absolute,
+      added_at: existing?.added_at ?? nowIso(),
+    };
+    registry[entry.id] = entry;
+    return entry;
+  });
 }
 
 export async function removeProject(id: string): Promise<boolean> {
-  const registry = await loadRegistry();
-  if (!(id in registry)) return false;
-  delete registry[id];
-  await saveRegistry(registry);
-  return true;
+  return mutateRegistry((registry) => {
+    if (!(id in registry)) return false;
+    delete registry[id];
+    return true;
+  });
 }
 
 export async function getProject(id: string): Promise<RegisteredProject | null> {

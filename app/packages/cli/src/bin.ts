@@ -7,6 +7,7 @@ import { doctorCommand } from "./commands/doctor.js";
 import { teamCommand } from "./commands/team.js";
 import { profileCommand } from "./commands/profile.js";
 import { uiCommand } from "./commands/ui.js";
+import { serviceCommand } from "./commands/service.js";
 import { closePrompt } from "./prompt.js";
 
 const USAGE = `crewbench -- run the crewbench workflow headlessly
@@ -20,6 +21,7 @@ Usage:
   crewbench team [show]
   crewbench profile [show|refresh]
   crewbench ui [--port N] [--no-open]
+  crewbench service install|uninstall
 `;
 
 async function main(): Promise<void> {
@@ -51,6 +53,9 @@ async function main(): Promise<void> {
       return;
     case "ui":
       await uiCommand(rest);
+      return;
+    case "service":
+      await serviceCommand(rest);
       return;
     default:
       console.error(`Unknown command: ${command}\n`);
