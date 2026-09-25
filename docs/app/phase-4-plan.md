@@ -1455,17 +1455,41 @@ install scripts) twice (milestones 3 and 5). The onboarding wizard,
 settings page, update banner, and `/crewbench:open`/`/crewbench:status`
 bridge are all real, working, tested code paths.
 
-**Not yet real, disclosed plainly, not glossed over:**
+**Update, 2026-09-25 -- the real `npm publish` has now happened, under
+direct user supervision**: after milestone 5's own review, the user
+chose to take this real step themselves rather than leave it deferred
+indefinitely. `crewbench@0.1.0` is genuinely, publicly published
+(confirmed via a direct `GET https://registry.npmjs.org/crewbench`
+query -- real `dist-tags.latest: "0.1.0"`, and the published tarball's
+shasum/integrity/file count match this phase's own `--dry-run` output
+exactly, so nothing unexpected shipped). A real `npm install crewbench`
+into a directory outside this repo entirely, real npm registry latency
+included, installed successfully (`npm warn install-scripts` fired for
+`node-pty` exactly as milestone 3 predicted -- the worst real case, not
+avoided), and the real installed binary's `--help`/`doctor` and a real
+`crewbench ui` both ran correctly, with `GET /api/capabilities`
+confirming `{"pty": true}` -- the node-pty self-heal genuinely holds
+against a real published package with real npm script-blocking in
+effect, not just the local tarball this phase tested it against before.
+Open question 5 is now closed: `crewbench` was the real, permanent name
+claimed. This closes disclosed gaps 1 and 2 below for good; they're kept
+here, marked resolved, as the honest record of what was and wasn't true
+at milestone 5's own review time.
 
-1. **`npm publish` has never actually happened.** Every milestone that
-   touched publishing used `--dry-run` exclusively, per this phase's own
-   explicit, repeated safety constraint. `npx crewbench`/`npm i -g
-   crewbench` do not work today for anyone outside this repo -- there is
-   no real published package yet. Open question 5 (confirming the
-   package name immediately before that real step) is still open.
-2. **The "under two minutes" claim has never been measured against a
-   real published package**, only against a local tarball install, which
-   skips real npm registry latency entirely.
+**Not yet real, disclosed plainly, not glossed over (at milestone 5's
+own review time -- see the update above for what's since changed):**
+
+1. ~~**`npm publish` has never actually happened.**~~ **Resolved
+   2026-09-25** -- see the update above. Every milestone up to and
+   including 5's own review used `--dry-run` exclusively; the real step
+   was taken deliberately afterward, under direct supervision.
+2. ~~**The "under two minutes" claim has never been measured against a
+   real published package**~~ **Partially resolved 2026-09-25**: a real
+   `npm install crewbench` (real registry latency included) was timed
+   informally during the post-publish verification above and completed
+   in seconds, not minutes -- not a rigorous, repeated timing study
+   across all 3 OSes, but the real package install itself is no longer
+   the untested unknown it was.
 3. **`crewbench service install|uninstall`'s real effect has never been
    run on a real machine.** The plist/unit/XML generation is real and
    tested; the actual OS registration call (`launchctl`/`systemctl`/
