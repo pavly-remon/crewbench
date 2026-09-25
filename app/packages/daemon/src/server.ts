@@ -17,6 +17,7 @@ import { registerTaskControlRoutes } from "./routes/task-control.js";
 import { registerModelRoutes } from "./routes/models.js";
 import { registerFsBrowseRoutes } from "./routes/fs-browse.js";
 import { registerPluginInstallRoutes } from "./routes/plugin-install.js";
+import { registerTaskCleanupRoutes } from "./routes/task-cleanup.js";
 import { registerCapabilityRoutes, registerPtyRoutes } from "./routes/pty.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerUpdateCheckRoutes } from "./routes/update-check.js";
@@ -136,6 +137,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   registerModelRoutes(app);
   registerFsBrowseRoutes(app);
   registerPluginInstallRoutes(app);
+  registerTaskCleanupRoutes(app, watcher);
   registerCapabilityRoutes(app);
   registerConfigRoutes(app);
   registerUpdateCheckRoutes(app);

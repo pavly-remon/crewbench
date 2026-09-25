@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { SCHEMA_VERSION, type TaskState, type TaskCommand } from "@crewbench/contract";
@@ -197,4 +197,72 @@ export interface TaskIndexRow {
 export async function listTasks(root: string): Promise<TaskIndexRow[]> {
   const index = await readJsonOrDefault<Record<string, TaskIndexRow>>(join(root, "index.json"), {});
   return Object.values(index).sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+}
+
+const FINISHED_PHASES = new Set(["done", "stopped", "failed"]);
+
+export interface CleanupCandidate extends TaskIndexRow {
+  age_days: number | null;
+}
+
+/** Ported from crewbench_state.py's cmd_cleanup_candidates() -- same
+ * shape, same default threshold (30 days), so the app and the plugin
+ * agree on what "old enough to offer cleaning up" means for a task
+ * either side might have created. Listing only, never deletes anything.
+ * A task with no parseable `updated_at` is treated as old enough to
+ * surface (an abandoned record is exactly what this is for), not
+ * skipped. */
+export function listCleanupCandidates(rows: TaskIndexRow[], olderThanDays = 30): CleanupCandidate[] {
+  const now = Date.now();
+  const candidates: CleanupCandidate[] = [];
+  for (const row of rows) {
+    if (!row.phase || !FINISHED_PHASES.has(row.phase)) continue;
+    const parsed = row.updated_at ? Date.parse(row.updated_at) : NaN;
+    const ageDays = Number.isNaN(parsed) ? null : Math.floor((now - parsed) / 86_400_000);
+    if (ageDays === null || ageDays >= olderThanDays) {
+      candidates.push({ ...row, age_days: ageDays });
+    }
+  }
+  return candidates;
+}
+
+export class TaskNotFinishedError extends Error {
+  constructor(id: string, phase: string | undefined) {
+    super(`refusing to delete task ${id}: phase is ${JSON.stringify(phase)}, not one of done/stopped/failed`);
+    this.name = "TaskNotFinishedError";
+  }
+}
+
+/** Ported from crewbench_state.py's cmd_delete() -- same real Windows
+ * constraint drives the same two-step shape here: the state lock file
+ * lives *inside* `taskDir` (`.state.json.lock`), and a file this same
+ * process still has open can't be deleted out from under it on Windows
+ * (no `FILE_SHARE_DELETE` by default) -- confirmed against Node's own
+ * default `fs` open-mode behavior, not assumed. Acquiring and fully
+ * releasing the state lock first (a brief no-op, just to serialize with
+ * any `mutateState()` call already in flight for this task) before
+ * `rm(taskDir, {recursive: true})` ever runs avoids that on every OS.
+ * The index lock (its own lock file lives one directory up, never inside
+ * `taskDir`) is held across the actual delete-and-reindex, matching
+ * `mutateState()`'s own documented lock-ordering promise for any other
+ * task sharing that same index. Re-checks the task's real, current phase
+ * itself (via `loadState()`, not a caller-supplied/stale phase) before
+ * doing anything -- refuses outright, no change made, if it isn't
+ * genuinely done/stopped/failed right now. */
+export async function deleteTask(taskDir: string): Promise<{ id: string }> {
+  const state = await loadState(taskDir);
+  if (!state.phase || !FINISHED_PHASES.has(state.phase)) {
+    throw new TaskNotFinishedError(state.id, state.phase);
+  }
+
+  await lockedReadModifyWrite(stateLockPath(taskDir), async () => {});
+
+  await lockedReadModifyWrite(indexLockPath(taskDir), async () => {
+    await rm(taskDir, { recursive: true, force: true });
+    const index = await readJsonOrDefault<Record<string, IndexEntry>>(indexPath(taskDir), {});
+    delete index[state.id];
+    await atomicWriteJson(indexPath(taskDir), index);
+  });
+
+  return { id: state.id };
 }

@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { TASK_PHASES, type ApiTaskSummary, type TaskPhase } from "@crewbench/contract";
 import { Card } from "../components/card.js";
 import { Button } from "../components/button.js";
 import { Dialog } from "../components/dialog.js";
+import { CleanupDialog } from "../components/cleanup-dialog.js";
 import { useProjectTasks } from "../api/projects.js";
 import { useGlobalEvents } from "../api/events.js";
 import { useCreateTask } from "../api/tasks.js";
@@ -125,6 +126,7 @@ export function TaskBoardPage() {
   const { data: tasks, isLoading, isError, error } = useProjectTasks(projectId);
   const queuedTaskIds = useGlobalEvents();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
 
   const byPhase = new Map<string, ApiTaskSummary[]>();
   for (const task of tasks ?? []) {
@@ -135,7 +137,11 @@ export function TaskBoardPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={() => setCleanupOpen(true)}>
+          <Trash2 size={16} className="mr-1.5" />
+          Clean up old tasks
+        </Button>
         <Button variant="primary" onClick={() => setDialogOpen(true)}>
           <Plus size={16} className="mr-1.5" />
           New task
@@ -163,6 +169,7 @@ export function TaskBoardPage() {
       )}
 
       {projectId && <NewTaskDialog projectId={projectId} open={dialogOpen} onOpenChange={setDialogOpen} />}
+      {projectId && <CleanupDialog projectId={projectId} open={cleanupOpen} onOpenChange={setCleanupOpen} />}
     </div>
   );
 }

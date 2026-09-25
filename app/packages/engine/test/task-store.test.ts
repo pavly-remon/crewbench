@@ -1,9 +1,22 @@
+import { existsSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { appendField, createTask, listTasks, loadState, makeSlug, makeTaskId, mutateState, setField } from "../src/task-store.js";
+import {
+  appendField,
+  createTask,
+  deleteTask,
+  listCleanupCandidates,
+  listTasks,
+  loadState,
+  makeSlug,
+  makeTaskId,
+  mutateState,
+  setField,
+  TaskNotFinishedError,
+} from "../src/task-store.js";
 
 async function newRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "crewbench-store-"));
@@ -122,5 +135,60 @@ describe("mutateState concurrency", () => {
     for (let i = 0; i < N; i++) {
       expect((state as Record<string, unknown>)[`field${i}`]).toBe(i);
     }
+  });
+});
+
+describe("listCleanupCandidates", () => {
+  it("only includes finished tasks past the age threshold; excludes unfinished tasks regardless of age", () => {
+    const old = new Date(Date.now() - 60 * 86_400_000).toISOString();
+    const recent = new Date(Date.now() - 2 * 86_400_000).toISOString();
+    const rows = [
+      { id: "old-done", phase: "done", updated_at: old },
+      { id: "recent-done", phase: "done", updated_at: recent },
+      { id: "old-busy", phase: "scoping", updated_at: old },
+      { id: "no-timestamp-failed", phase: "failed" },
+    ];
+    const candidates = listCleanupCandidates(rows, 30);
+    const ids = candidates.map((c) => c.id).sort();
+    expect(ids).toEqual(["no-timestamp-failed", "old-done"]);
+    expect(candidates.find((c) => c.id === "old-done")?.age_days).toBeGreaterThanOrEqual(60);
+    expect(candidates.find((c) => c.id === "no-timestamp-failed")?.age_days).toBeNull();
+  });
+});
+
+describe("deleteTask", () => {
+  it("refuses to delete a task that isn't genuinely done/stopped/failed, changing nothing", async () => {
+    const root = await newRoot();
+    const taskDir = join(root, ".crewbench", "tasks", "busy");
+    await createTask(taskDir, { id: "busy", command: "new-task", title: "T" });
+    await expect(deleteTask(taskDir)).rejects.toThrow(TaskNotFinishedError);
+    expect(existsSync(taskDir)).toBe(true);
+  });
+
+  it("removes a finished task's whole directory and its index.json entry", async () => {
+    const root = await newRoot();
+    const taskDir = join(root, ".crewbench", "tasks", "finished");
+    await createTask(taskDir, { id: "finished", command: "new-task", title: "T" });
+    await setField(taskDir, "phase", "stopped");
+
+    const result = await deleteTask(taskDir);
+    expect(result).toEqual({ id: "finished" });
+    expect(existsSync(taskDir)).toBe(false);
+
+    const rows = await listTasks(join(root, ".crewbench"));
+    expect(rows.find((r) => r.id === "finished")).toBeUndefined();
+  });
+
+  it("re-checks the real on-disk phase, not a stale one -- a task resumed after being listed can't be deleted", async () => {
+    const root = await newRoot();
+    const taskDir = join(root, ".crewbench", "tasks", "was-stopped");
+    await createTask(taskDir, { id: "was-stopped", command: "new-task", title: "T" });
+    await setField(taskDir, "phase", "stopped");
+    // Simulates "resumed since the candidate list was generated" --
+    // deleteTask() must look at the real state now, not trust a caller's
+    // own earlier snapshot.
+    await setField(taskDir, "phase", "implementing");
+    await expect(deleteTask(taskDir)).rejects.toThrow(TaskNotFinishedError);
+    expect(existsSync(taskDir)).toBe(true);
   });
 });

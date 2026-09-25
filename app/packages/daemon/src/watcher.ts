@@ -83,6 +83,16 @@ export class DaemonWatcher extends EventEmitter {
     this.taskIndex.set(taskId, { projectId, projectPath, taskDir: join(projectPath, ".crewbench", "tasks", taskId) });
   }
 
+  /** Mirrors `registerTask()` for the delete direction (the new
+   * task-directory cleanup mechanism) -- removes it from the in-memory
+   * index immediately, rather than waiting for the fs watcher's own
+   * debounced pickup of the now-changed `index.json` to notice its
+   * absence. `GET /api/tasks/:tid/*` for this id 404s from the next
+   * request on, matching a task that never existed. */
+  unregisterTask(taskId: string): void {
+    this.taskIndex.delete(taskId);
+  }
+
   /** Full history for one task's SSE stream, replayed from disk (files
    * stay the source of truth, per docs/app/CONTEXT.md -- this daemon
    * keeps no separate durable event log of its own). `sinceSeq` is

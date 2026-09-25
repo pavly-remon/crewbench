@@ -585,3 +585,24 @@ export const ApiUpdateCheckResponseSchema = z
   })
   .strict();
 export type ApiUpdateCheckResponse = z.infer<typeof ApiUpdateCheckResponseSchema>;
+
+/** `GET /api/projects/:pid/tasks/cleanup-candidates` -- new task-directory
+ * cleanup mechanism (added directly, not tied to a specific phase plan).
+ * Same shape `@crewbench/engine`'s `listCleanupCandidates()` and
+ * `crewbench_state.py`'s `cleanup-candidates` subcommand both produce, so
+ * app-owned and plugin-owned tasks are listed identically here --
+ * `ApiTaskSummarySchema` plus `age_days` (`null` only when the task has
+ * no parseable `updated_at` at all, treated as "old enough to surface,"
+ * per that engine function's own docstring, not as "unknown, skip it"). */
+export const ApiCleanupCandidateSchema = ApiTaskSummarySchema.extend({
+  age_days: z.number().int().nullable(),
+});
+export type ApiCleanupCandidate = z.infer<typeof ApiCleanupCandidateSchema>;
+export const ApiCleanupCandidateListSchema = z.array(ApiCleanupCandidateSchema);
+
+export const ApiDeleteTaskResponseSchema = z
+  .object({
+    deleted: z.string(),
+  })
+  .strict();
+export type ApiDeleteTaskResponse = z.infer<typeof ApiDeleteTaskResponseSchema>;
