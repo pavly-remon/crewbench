@@ -1,4 +1,4 @@
-import type { ApprovalDecision, ApprovalProvider, ApprovalRequest } from "@crewbench/engine";
+import { DispatchCancelledError, type ApprovalDecision, type ApprovalProvider, type ApprovalRequest } from "@crewbench/engine";
 
 interface Pending {
   request: ApprovalRequest;
@@ -16,9 +16,30 @@ interface Pending {
 export class HttpApprovalProvider implements ApprovalProvider {
   private pending = new Map<string, Pending>();
 
-  request(request: ApprovalRequest): Promise<ApprovalDecision> {
-    return new Promise((resolve) => {
-      this.pending.set(request.id, { request, resolve });
+  /** `signal` firing while this request is still pending removes it
+   * from `pending` (so a later, stray `POST .../approvals/:aid` for the
+   * same id 404s instead of silently resolving nothing, or worse,
+   * resolving a decision nobody's still awaiting) and rejects with
+   * `DispatchCancelledError` -- see that error's own docstring
+   * (`concurrency.ts`) for the real cancellation bug this closes. */
+  request(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision> {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DispatchCancelledError());
+        return;
+      }
+      const onAbort = (): void => {
+        this.pending.delete(request.id);
+        reject(new DispatchCancelledError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pending.set(request.id, {
+        request,
+        resolve: (decision) => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve(decision);
+        },
+      });
     });
   }
 

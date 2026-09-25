@@ -42,6 +42,16 @@ export interface DispatchParams {
    * `TaskRunner` passes one shared instance across every active task
    * (Design decision 2). */
   limiter?: ConcurrencyLimiter;
+  /** Forwarded straight into `limiter.withSlot()`'s own `acquire()` call
+   * (`DriveTaskParams.cancelSignal`'s own docstring in `drive.ts` has the
+   * full story) -- lets a dispatch genuinely queued behind a full CLI
+   * slot be cancelled instead of dispatched once a slot eventually frees,
+   * long after the person who cancelled it stopped waiting. Omitted
+   * wherever `limiter` is (no queueing without a limiter, nothing to
+   * cancel out of). Meaningless once the subprocess has actually spawned
+   * -- see `process-kill.ts`/`cancelRun()` for what actually stops an
+   * in-flight one. */
+  cancelSignal?: AbortSignal;
 }
 
 export interface DispatchEnvelope {
@@ -227,7 +237,9 @@ export async function dispatchRole(params: DispatchParams): Promise<DispatchEnve
       },
     });
   };
-  const { code, stdout, timedOut } = params.limiter ? await params.limiter.withSlot(cli, body, taskDir, run) : await body();
+  const { code, stdout, timedOut } = params.limiter
+    ? await params.limiter.withSlot(cli, body, taskDir, run, params.cancelSignal)
+    : await body();
   const durationS = Math.round((Date.now() - start) / 100) / 10;
 
   await writeFile(rawPath, `$ ${argv[0]} ...\n--- stdout ---\n${stdout}\n--- stderr ---\n\n`, "utf-8");

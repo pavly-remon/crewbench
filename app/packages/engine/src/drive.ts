@@ -5,7 +5,7 @@ import { requestApproval, resolveApproval, type ApprovalDecision } from "./appro
 import type { ApprovalProvider } from "./approval-provider.js";
 import { decide } from "./decide.js";
 import { dispatchRole, dispatchVerification } from "./runner.js";
-import type { ConcurrencyLimiter } from "./concurrency.js";
+import { DispatchCancelledError, type ConcurrencyLimiter } from "./concurrency.js";
 import { reduce, type FullEngineState } from "./reduce.js";
 import { runGate } from "./gate.js";
 import { setField } from "./task-store.js";
@@ -102,6 +102,7 @@ function buildParams(role: RoleName, p: DriveTaskParams, round: number, handoff:
     agentsDir: p.agentsDir,
     schemaPath: p.schemaPathFor(role),
     ...(p.limiter ? { limiter: p.limiter } : {}),
+    ...(p.cancelSignal ? { cancelSignal: p.cancelSignal } : {}),
   };
 }
 
@@ -118,6 +119,23 @@ function buildDeveloperHandoff(taskText: string, spec: TaskSpec | null, fixList:
 
 function logRunResult(role: string, envelope: { ok: boolean; error: string | null }): void {
   console.log(`  ${role}: ${envelope.ok ? "done" : `FAILED — ${envelope.error}`}`);
+}
+
+/** Persists the same `"stopped"`/`"cancelled by user"` outcome from two
+ * real cancellation shapes: the loop's own top-of-iteration check
+ * (`p.cancelSignal?.aborted` between commands, unchanged since Phase 3
+ * milestone 6) and, as of this fix, a `DispatchCancelledError` thrown
+ * *inside* a command -- a dispatch genuinely queued behind a full CLI
+ * slot, or an approval genuinely pending, that `cancelTask()`'s abort
+ * actually woke instead of leaving stuck forever (`concurrency.ts`'s own
+ * `DispatchCancelledError` docstring has the real bug this closes).
+ * Extracted so both call sites persist identically, not two
+ * independently-maintained copies of the same three lines. */
+async function persistCancelled(p: DriveTaskParams, state: FullEngineState): Promise<FullEngineState> {
+  const next: FullEngineState = { ...state, phase: "stopped", stuckReason: "cancelled by user" };
+  await setField(p.taskDir, "phase", next.phase);
+  await setField(p.taskDir, "stuck_reason", next.stuckReason);
+  return next;
 }
 
 /** Requests one approval and resolves it through `resolveApproval()` --
@@ -140,7 +158,7 @@ function logRunResult(role: string, envelope: { ok: boolean; error: string | nul
 async function askApproval(p: DriveTaskParams, kind: Parameters<typeof requestApproval>[0], payload: unknown): Promise<ApprovalDecision> {
   const request = requestApproval(kind, payload);
   await appendEvent(p.taskDir, "approval.requested", { id: request.id, kind: request.kind, payload: request.payload });
-  const decision = await p.approvals.request(request);
+  const decision = await p.approvals.request(request, p.cancelSignal);
   resolveApproval(request, decision, { auto: false });
   await appendEvent(p.taskDir, "approval.resolved", { id: request.id, kind: request.kind, decision: decision.decision });
   return decision;
@@ -215,9 +233,7 @@ export async function driveTask(p: DriveTaskParams): Promise<void> {
     // cancelled. `task-detail.ts` reads this field back to override
     // exactly that case -- see its own docstring.
     if (p.cancelSignal?.aborted && !TERMINAL_PHASES.has(state.phase)) {
-      state = { ...state, phase: "stopped", stuckReason: "cancelled by user" };
-      await setField(p.taskDir, "phase", state.phase);
-      await setField(p.taskDir, "stuck_reason", state.stuckReason);
+      state = await persistCancelled(p, state);
     }
     const commands = decide(state);
     const command = commands[0];
@@ -226,70 +242,88 @@ export async function driveTask(p: DriveTaskParams): Promise<void> {
     if (command.type === "wait") {
       throw new Error(`engine returned "wait" in an unexpected phase: ${state.phase}`);
     }
-    if (command.type === "dispatch_design") {
-      console.log("Dispatching ui-ux...");
-      const env = await dispatchRole(buildParams("ui-ux", p, state.round, `Task: ${p.taskText}\n`));
-      logRunResult("ui-ux", env);
-      state = reduce(state, { type: "design.finished" });
-    } else if (command.type === "dispatch_developer") {
-      console.log(`Dispatching developer (round ${command.round})...`);
-      const handoff = buildDeveloperHandoff(p.taskText, p.spec, command.fixList);
-      const env = await dispatchRole(buildParams("developer", p, command.round, handoff));
-      logRunResult("developer", env);
-      state = reduce(state, { type: "developer.finished" });
-    } else if (command.type === "run_gate") {
-      console.log(`Running gate (round ${command.round})...`);
-      const { result } = await runGate(p.cwd, p.taskDir, command.round);
-      console.log(result.ok ? "  gate: ok" : `  gate: FAILED at ${result.steps.at(-1)?.name}`);
-      state = reduce(state, { type: "gate.finished", gate: result });
-    } else if (command.type === "dispatch_verification") {
-      console.log(`Dispatching tester + code-reviewer (round ${command.round})...`);
-      const handoff = `Task: ${p.taskText}\n\nAcceptance criteria:\n${(p.spec?.acceptance_criteria ?? []).map((c) => `- ${c}`).join("\n")}`;
-      const { tester, reviewer } = await dispatchVerification(
-        buildParams("tester", p, command.round, handoff),
-        buildParams("code-reviewer", p, command.round, handoff),
-      );
-      logRunResult("tester", tester);
-      logRunResult("code-reviewer", reviewer);
-      // Fall back to a safe, engine-shaped default whenever the dispatch
-      // itself failed, not just when `result` is null -- see
-      // docs/app/phase-1-plan.md's milestone 5 note on why `ok` (not
-      // result's nullness) is the right check.
-      const testerResult = tester.ok ? (tester.result as TesterResult) : { verdict: "error" as const, failures: [] };
-      const reviewerResult = reviewer.ok ? (reviewer.result as ReviewerResult) : { verdict: "changes_requested" as const, issues: [] };
-      state = reduce(state, { type: "verification.finished", tester: testerResult, reviewer: reviewerResult });
-    } else if (command.type === "request_commit_approval") {
-      if (p.yes) {
-        console.log("Not committing (--yes always declines commit approval).");
+    // Real, disclosed gap Copilot review caught (`DispatchCancelledError`'s
+    // own docstring in concurrency.ts has the full story): a dispatch
+    // genuinely queued behind a full CLI slot, or an approval genuinely
+    // pending, used to have no way to observe `p.cancelSignal` firing --
+    // `cancelTask()`'s abort only ever mattered *between* commands, at
+    // the top-of-loop check above, never *inside* one already in flight
+    // at the `await` level. `ConcurrencyLimiter.acquire()`/
+    // `HttpApprovalProvider.request()` now both reject with this one
+    // error type the instant the signal fires; caught here, once, around
+    // every command that could possibly throw it, and persisted through
+    // the exact same `persistCancelled()` the between-commands case
+    // already uses -- not a second, parallel cancellation code path. */
+    try {
+      if (command.type === "dispatch_design") {
+        console.log("Dispatching ui-ux...");
+        const env = await dispatchRole(buildParams("ui-ux", p, state.round, `Task: ${p.taskText}\n`));
+        logRunResult("ui-ux", env);
+        state = reduce(state, { type: "design.finished" });
+      } else if (command.type === "dispatch_developer") {
+        console.log(`Dispatching developer (round ${command.round})...`);
+        const handoff = buildDeveloperHandoff(p.taskText, p.spec, command.fixList);
+        const env = await dispatchRole(buildParams("developer", p, command.round, handoff));
+        logRunResult("developer", env);
+        state = reduce(state, { type: "developer.finished" });
+      } else if (command.type === "run_gate") {
+        console.log(`Running gate (round ${command.round})...`);
+        const { result } = await runGate(p.cwd, p.taskDir, command.round);
+        console.log(result.ok ? "  gate: ok" : `  gate: FAILED at ${result.steps.at(-1)?.name}`);
+        state = reduce(state, { type: "gate.finished", gate: result });
+      } else if (command.type === "dispatch_verification") {
+        console.log(`Dispatching tester + code-reviewer (round ${command.round})...`);
+        const handoff = `Task: ${p.taskText}\n\nAcceptance criteria:\n${(p.spec?.acceptance_criteria ?? []).map((c) => `- ${c}`).join("\n")}`;
+        const { tester, reviewer } = await dispatchVerification(
+          buildParams("tester", p, command.round, handoff),
+          buildParams("code-reviewer", p, command.round, handoff),
+        );
+        logRunResult("tester", tester);
+        logRunResult("code-reviewer", reviewer);
+        // Fall back to a safe, engine-shaped default whenever the dispatch
+        // itself failed, not just when `result` is null -- see
+        // docs/app/phase-1-plan.md's milestone 5 note on why `ok` (not
+        // result's nullness) is the right check.
+        const testerResult = tester.ok ? (tester.result as TesterResult) : { verdict: "error" as const, failures: [] };
+        const reviewerResult = reviewer.ok ? (reviewer.result as ReviewerResult) : { verdict: "changes_requested" as const, issues: [] };
+        state = reduce(state, { type: "verification.finished", tester: testerResult, reviewer: reviewerResult });
+      } else if (command.type === "request_commit_approval") {
+        if (p.yes) {
+          console.log("Not committing (--yes always declines commit approval).");
+          break;
+        }
+        const diff = p.worktree ? await diffStat(p.worktree, p.base) : null;
+        if (diff) console.log(diff);
+        const commitDecision = await askApproval(p, "commit", { title: p.title, diffStat: diff });
+        if (commitDecision.decision !== "yes") {
+          console.log("Not committing. Leaving the work as-is.");
+          break;
+        }
+        const message = ((commitDecision.data as { message?: string } | undefined)?.message || p.title).trim() || p.title;
+        const sha = await commitAll(p.worktree ?? p.cwd, message);
+        console.log(`Committed ${sha.slice(0, 8)}.`);
+        if (p.worktree && p.branch) {
+          const integrateDecision = await askApproval(p, "integrate", { branch: p.branch });
+          const choice = (integrateDecision.data as { choice?: IntegrateMode } | undefined)?.choice ?? "none";
+          if (choice === "merge" || choice === "cherry-pick") {
+            await integrate(p.projectRoot, p.branch, choice, choice === "cherry-pick" ? sha : undefined);
+            console.log(`${choice === "merge" ? "Merged" : "Cherry-picked"} onto the original branch.`);
+          }
+          const cleanupDecision = await askApproval(p, "cleanup_worktree", { worktree: p.worktree });
+          if (cleanupDecision.decision === "yes") {
+            await removeWorktree(p.projectRoot, p.worktree, p.branch);
+          }
+        }
+        state = reduce(state, { type: "commit.approved" });
+      } else if (command.type === "finish") {
+        const usage = {}; // per-role usage aggregation lives in packages/daemon (Phase 2 milestone 4's aggregateUsage())
+        const summary = await summarizeTask(p.title, state, usage);
+        console.log("\n" + summary);
         break;
       }
-      const diff = p.worktree ? await diffStat(p.worktree, p.base) : null;
-      if (diff) console.log(diff);
-      const commitDecision = await askApproval(p, "commit", { title: p.title, diffStat: diff });
-      if (commitDecision.decision !== "yes") {
-        console.log("Not committing. Leaving the work as-is.");
-        break;
-      }
-      const message = ((commitDecision.data as { message?: string } | undefined)?.message || p.title).trim() || p.title;
-      const sha = await commitAll(p.worktree ?? p.cwd, message);
-      console.log(`Committed ${sha.slice(0, 8)}.`);
-      if (p.worktree && p.branch) {
-        const integrateDecision = await askApproval(p, "integrate", { branch: p.branch });
-        const choice = (integrateDecision.data as { choice?: IntegrateMode } | undefined)?.choice ?? "none";
-        if (choice === "merge" || choice === "cherry-pick") {
-          await integrate(p.projectRoot, p.branch, choice, choice === "cherry-pick" ? sha : undefined);
-          console.log(`${choice === "merge" ? "Merged" : "Cherry-picked"} onto the original branch.`);
-        }
-        const cleanupDecision = await askApproval(p, "cleanup_worktree", { worktree: p.worktree });
-        if (cleanupDecision.decision === "yes") {
-          await removeWorktree(p.projectRoot, p.worktree, p.branch);
-        }
-      }
-      state = reduce(state, { type: "commit.approved" });
-    } else if (command.type === "finish") {
-      const usage = {}; // per-role usage aggregation lives in packages/daemon (Phase 2 milestone 4's aggregateUsage())
-      const summary = await summarizeTask(p.title, state, usage);
-      console.log("\n" + summary);
+    } catch (err) {
+      if (!(err instanceof DispatchCancelledError)) throw err;
+      state = await persistCancelled(p, state);
       break;
     }
 

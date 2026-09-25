@@ -100,10 +100,21 @@ describe("TaskRunner: reattach on restart", () => {
     const taskRunner = new TaskRunner(watcher);
 
     await taskRunner.reattachProject(repo);
-    // Must NOT have started driving yet -- the developer run is still
+    // Must NOT have started *driving* yet -- the developer run is still
     // genuinely in flight, so re-entering driveTask() right now would
-    // re-dispatch it a second time.
-    expect(taskRunner.isActive(taskId)).toBe(false);
+    // re-dispatch it a second time (proven further down: developer-r1
+    // is never re-dispatched). `isActive()` itself now correctly reports
+    // `true` here, though -- a real, disclosed fix (Copilot review,
+    // TaskAlreadyStartingError's own docstring): before it, `isActive()`
+    // wrongly read `false` for this entire "reattach is waiting for
+    // run.finished" window, since nothing was in TaskRunner's `active`
+    // map yet -- a real API call racing a daemon restart for this exact
+    // task (a resume, a lineup submission) could have slipped past its
+    // own `!isActive()` guard and started a second, concurrent
+    // driveTask() loop. `isActive()` reporting "reserved or active" now
+    // closes that window; it was never meant to mean "already inside a
+    // running driveTask() loop specifically."
+    expect(taskRunner.isActive(taskId)).toBe(true);
 
     // Let the orphaned dispatch actually finish on its own (a real
     // subprocess, unaffected by anything the "restart" above did).

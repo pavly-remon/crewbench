@@ -326,6 +326,58 @@ describe("task control: POST /api/tasks/:tid/{cancel,resume,retry-run} (Phase 3 
     expect(detail.notes.some((n) => n.includes("Retrying developer-r1"))).toBe(true);
   }, 30_000);
 
+  /** Real, disclosed bug (Copilot review #4/#9, `DispatchCancelledError`'s
+   * own docstring in concurrency.ts has the full story): before this
+   * fix, cancelling a task genuinely stuck awaiting a real pending
+   * commit approval only ever aborted `driveTask()`'s own loop signal --
+   * it never woke the `HttpApprovalProvider.request()` promise the loop
+   * was actually blocked on, so the task stayed `active` forever, the
+   * cancel route's own direct `phase: "stopped"` write (for the
+   * `!wasActive` case) never even ran (the task *was* active, just
+   * unresponsively so), and the pending approval kept showing up in the
+   * global inbox for a task the user had already tried to cancel. This
+   * drives a real task all the way to a real, pending commit approval
+   * (the same fake-CLI/waitFor pattern the retry-run test above
+   * establishes), cancels it while genuinely stuck there, and proves
+   * all three real symptoms are fixed: the task actually goes inactive,
+   * `state.json`'s phase actually reaches "stopped" (not left at
+   * "awaiting_commit"), and the pending approval is actually gone from
+   * the inbox -- not just that the HTTP call returned 200. */
+  it("cancel: a task genuinely stuck awaiting a real pending commit approval actually stops, not left active forever", async () => {
+    process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = await fakeMultiRoleCli();
+    daemon = await startDaemon({ port: 0 });
+    const headers = { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" };
+    const repo = await gitRepo("crewbench-cancel-approval-");
+    const { taskId } = await createStartedTask(headers, repo);
+
+    let pendingId = "";
+    await waitFor(async () => {
+      const res = await fetch(url("/api/approvals"), { headers });
+      const rows = (await res.json()) as Array<{ task_id: string; kind: string; id: string }>;
+      const row = rows.find((r) => r.task_id === taskId && r.kind === "commit");
+      if (!row) return false;
+      pendingId = row.id;
+      return true;
+    }, 20_000);
+    expect(daemon.taskRunner.isActive(taskId)).toBe(true); // genuinely blocked inside driveTask(), not between commands
+
+    const cancelRes = await fetch(url(`/api/tasks/${taskId}/cancel`), { method: "POST", headers, body: JSON.stringify({}) });
+    expect(cancelRes.status).toBe(200);
+
+    // The actual claim: the task genuinely stops, not "the HTTP call
+    // returned before the real cancellation finished propagating."
+    await waitFor(async () => {
+      const res = await fetch(url(`/api/tasks/${taskId}`), { headers });
+      const detail = (await res.json()) as { phase: string; active: boolean };
+      return detail.phase === "stopped" && detail.active === false;
+    });
+    expect(daemon.taskRunner.isActive(taskId)).toBe(false);
+
+    const afterRes = await fetch(url("/api/approvals"), { headers });
+    const afterRows = (await afterRes.json()) as Array<{ id: string }>;
+    expect(afterRows.some((r) => r.id === pendingId)).toBe(false); // the pending approval is genuinely gone, not orphaned
+  }, 20_000);
+
   it("retry-run: 400s while the task is active", async () => {
     process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = QUICK_SUCCESS;
     process.env.FAKE_CLI_SLEEP = "6";

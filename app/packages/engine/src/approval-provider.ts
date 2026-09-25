@@ -12,5 +12,13 @@ import type { ApprovalDecision, ApprovalRequest } from "./approvals.js";
  * implementation of this interface anywhere in this codebase, matching
  * `docs/app/CONTEXT.md`'s non-negotiable principle 3. */
 export interface ApprovalProvider {
-  request(approval: ApprovalRequest): Promise<ApprovalDecision>;
+  /** `signal`, if given and it fires before a real decision arrives,
+   * lets an implementation reject with `DispatchCancelledError`
+   * (`concurrency.ts`) instead of hanging forever -- see that error's
+   * own docstring for the real cancellation bug this exists to close.
+   * Optional and safely ignorable: a provider with no such concept (the
+   * terminal one -- `crewbench run`/`resume` have no cancel signal to
+   * begin with, `DriveTaskParams.cancelSignal`'s own docstring explains
+   * why) simply never gets called with one. */
+  request(approval: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision>;
 }
