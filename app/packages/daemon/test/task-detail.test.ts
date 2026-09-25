@@ -137,7 +137,25 @@ describe("daemon task detail", () => {
 
   it("returns 404 for a log request against an unknown run", async () => {
     const { taskId } = await setUpTaskWithARealRun();
-    const res = await fetch(url(`/api/tasks/${taskId}/runs/does-not-exist-r1/log`), { headers: authHeaders() });
+    // A real-shaped run name (matches routes/tasks.ts's own RUN_NAME_RE)
+    // that just doesn't exist yet -- round 99 was never dispatched --
+    // distinct from a malformed one (the test below), which 400s instead.
+    const res = await fetch(url(`/api/tasks/${taskId}/runs/developer-r99/log`), { headers: authHeaders() });
     expect(res.status).toBe(404);
+  }, 20_000);
+
+  it("400s a log request for a malformed run name -- a real, disclosed path-traversal gap this closes", async () => {
+    // Real bug caught by review: `request.params.run` used to be
+    // interpolated straight into a filesystem path with no validation at
+    // all, so a value with `..` segments could resolve outside the
+    // task's own runs/ directory (see routes/tasks.ts's own
+    // RUN_NAME_RE docstring for the full story). Proving the fix with
+    // an actual traversal-shaped value, not just an arbitrary bad
+    // string -- the real attack shape this closes.
+    const { taskId } = await setUpTaskWithARealRun();
+    const res = await fetch(url(`/api/tasks/${taskId}/runs/${encodeURIComponent("../../../../etc/passwd")}/log`), {
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(400);
   }, 20_000);
 });

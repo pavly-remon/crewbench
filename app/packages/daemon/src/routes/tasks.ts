@@ -11,6 +11,23 @@ import { computeDiff } from "../diff.js";
 
 const MAX_LOG_READ_BYTES = 1_000_000;
 
+/** The real, exhaustive set of run-name shapes this codebase ever
+ * generates (`runner.ts`'s own `runName()`: `${role}-r${round}` for
+ * `developer`/`tester`/`code-reviewer`/`ui-ux`, plus `gate.ts`'s own
+ * `gate-r${round}` -- confirmed by reading both, not assumed). A real,
+ * disclosed path-traversal gap Copilot review caught: `request.params.run`
+ * used to be interpolated straight into a filesystem path with no
+ * validation at all -- a value like `../../../../etc/passwd%00` (or any
+ * `..`-laden segment) could make `join(taskDir, "runs", ...)` resolve
+ * outside the task's own `runs/` directory, and since the path always
+ * gets a real `.log` suffix appended, the exposure was "read any
+ * `.log`-suffixed file this daemon process can see," not literally
+ * arbitrary files -- still a real, unacceptable gap. Rejecting anything
+ * that doesn't match this exact shape closes it outright, rather than
+ * trying to sanitize or resolve-and-check the resulting path (simpler,
+ * and this route only ever needs to serve real run logs anyway). */
+const RUN_NAME_RE = /^(developer|tester|code-reviewer|ui-ux|gate)-r\d+$/;
+
 /** Content types this route will actually serve -- a screenshot is
  * always one of these per the tester schema's own `screenshots[]` field
  * (Playwright visual checks save PNG/JPEG); anything else is refused
@@ -47,6 +64,10 @@ export function registerTaskRoutes(app: FastifyInstance, watcher: DaemonWatcher,
       const location = watcher.resolveTask(request.params.tid);
       if (!location) {
         await reply.code(404).send({ error: `no such task: ${request.params.tid}` });
+        return;
+      }
+      if (!RUN_NAME_RE.test(request.params.run)) {
+        await reply.code(400).send({ error: `malformed run: ${request.params.run}` });
         return;
       }
       const logPath = join(location.taskDir, "runs", `${request.params.run}.log`);
