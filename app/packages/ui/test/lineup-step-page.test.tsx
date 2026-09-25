@@ -131,4 +131,36 @@ describe("LineupStepPage", () => {
     expect(screen.getByDisplayValue("gemini-3.8-flash-high").tagName).toBe("SELECT");
     expect(screen.queryByTitle(/use the cheap tier for agy/i)).not.toBeInTheDocument();
   });
+
+  it("shows a curated, clearly-non-live model quick-pick list for claude (not a real dropdown, distinct from agy's)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/tasks/t1")) return jsonResponse(TASK_DETAIL);
+      if (url.includes("/api/projects/p1/team")) return jsonResponse({ roles: { developer: { cli: "claude", model: "sonnet" } } });
+      if (url.includes("/api/doctor")) return jsonResponse({ reports: [], checked_at: "2026-01-01T00:00:00Z" });
+      // claude genuinely has no live listing capability -- checked: false,
+      // matching @crewbench/adapters' own real, re-verified finding.
+      if (url.includes("/api/models/")) return jsonResponse({ cli: url.split("/").pop(), checked: false, available: [], error: null });
+      throw new Error(`unexpected fetch: ${url} ${init?.method}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderLineupPage();
+    await screen.findByText(/Lineup: Fix login redirect/i);
+
+    // Still the free-text input (a real <input>, not a <select>) --
+    // curated quick-picks feed it, they don't replace it.
+    const modelInput = screen.getAllByDisplayValue("sonnet")[0] as HTMLInputElement;
+    expect(modelInput.tagName).toBe("INPUT");
+
+    // A curated quick-pick is present and clearly labeled as not a live
+    // list -- clicking it fills the same free-text input.
+    const curatedButtons = screen.getAllByTitle(/not verified live against claude/i);
+    expect(curatedButtons.length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/common models, not verified live/i).length).toBeGreaterThan(0);
+
+    fireEvent.click(curatedButtons[0] as HTMLElement);
+    expect((curatedButtons[0] as HTMLButtonElement).textContent).not.toBe("");
+    await waitFor(() => expect(screen.getAllByDisplayValue((curatedButtons[0] as HTMLButtonElement).textContent ?? "").length).toBeGreaterThan(0));
+  });
 });

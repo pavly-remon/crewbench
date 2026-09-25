@@ -2,6 +2,7 @@ import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import type { ApiCli, ApiDoctorReport, ApiEffort, RoleKey, Team } from "@crewbench/contract";
 import { ROLE_KEYS } from "@crewbench/contract";
 import { useAvailableModels } from "../api/models.js";
+import { CURATED_MODELS } from "../lib/curated-models.js";
 import { resolveModelTier, type LineupRoleValue } from "../lib/lineup-defaults.js";
 
 const CLI_OPTIONS: ApiCli[] = ["claude", "codex", "agy", "copilot"];
@@ -31,11 +32,14 @@ function DoctorBadge({ report }: { report: ApiDoctorReport | undefined }) {
  * today only ever `agy` -- see `@crewbench/adapters`'
  * `listAvailableModels()`'s own docstring, re-verified against the real
  * installed binaries), otherwise today's free-text input plus the
- * cheap/strong tier quick-picks. Deliberately not a static hardcoded
- * model list for the other three CLIs -- that would drift out of date
- * the moment any of them ships a new model, silently steering users
- * toward a name that no longer exists; the free-text field already lets
- * anyone type an exact model name today, tier buttons included. */
+ * cheap/strong tier quick-picks *and* (a real, disclosed, user-requested
+ * addition) a hand-curated list of common model names for
+ * claude/codex/copilot specifically, per `lib/curated-models.ts`'s own
+ * docstring for exactly what's real about it and what isn't -- these are
+ * quick-picks into the same free-text input, not a second dropdown, and
+ * are never labeled as live or verified anywhere in this UI (the caption
+ * below says so explicitly), so a user can't mistake them for agy's real
+ * live list. */
 function ModelField({ value, team, onChange }: { value: LineupRoleValue; team: Team | undefined; onChange: (next: LineupRoleValue) => void }) {
   const { data, isLoading } = useAvailableModels(value.cli, true);
   const hasRealList = Boolean(data?.checked && data.available.length > 0);
@@ -76,7 +80,7 @@ function ModelField({ value, team, onChange }: { value: LineupRoleValue; team: T
           className="w-full min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
         />
       </div>
-      <div className="flex gap-1">
+      <div className="flex flex-wrap gap-1">
         {(["cheap", "strong"] as const).map((tier) => (
           <button
             key={tier}
@@ -88,7 +92,21 @@ function ModelField({ value, team, onChange }: { value: LineupRoleValue; team: T
             {tier}
           </button>
         ))}
+        {(CURATED_MODELS[value.cli] ?? []).map((model) => (
+          <button
+            key={model}
+            type="button"
+            title={`use "${model}" -- a common model name, not verified live against ${value.cli}`}
+            onClick={() => onChange({ ...value, model })}
+            className="rounded border border-dashed border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+          >
+            {model}
+          </button>
+        ))}
       </div>
+      {(CURATED_MODELS[value.cli]?.length ?? 0) > 0 && (
+        <p className="text-[10px] text-[var(--color-fg-muted)]">common models, not verified live</p>
+      )}
     </label>
   );
 }
