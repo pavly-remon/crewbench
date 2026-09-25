@@ -29,11 +29,27 @@ Usage:
 
   crewbench_state.py list [--root <dir>]
       -> prints .crewbench/index.json (default root: ./.crewbench), newest first
+
+  crewbench_state.py cleanup-candidates [--root <dir>] [--older-than-days N]
+      -> prints finished tasks (phase in done/stopped/failed) whose
+         updated_at is older than N days (default 30) as a JSON list,
+         newest first -- listing only, never deletes anything (mirrors
+         `/crewbench:status --cleanup`'s own worktree-candidate listing,
+         `skills/status/SKILL.md`)
+
+  crewbench_state.py delete --task-dir <dir>
+      -> deletes a task's entire directory and its index.json entry.
+         Refuses (exit 1, no change) unless the task's own on-disk phase
+         is done/stopped/failed -- this command never deletes an
+         in-progress or awaiting-approval task regardless of age; the
+         caller (the `--cleanup` skill workflow) is responsible for
+         asking the user to confirm each deletion before calling this.
 """
 import argparse
 import json
 import re
 import secrets
+import shutil
 import sys
 import time
 from datetime import datetime, timezone
@@ -256,6 +272,89 @@ def cmd_list(args):
     print(json.dumps(rows, indent=2))
 
 
+FINISHED_PHASES = ("done", "stopped", "failed")
+
+
+def cmd_cleanup_candidates(args):
+    """Listing only -- never deletes or touches anything. Mirrors
+    `/crewbench:status --cleanup`'s own worktree-candidate listing
+    (skills/status/SKILL.md): the skill using this shows the list and asks
+    per task before ever calling `delete` below."""
+    index_path = Path(args.root) / "index.json"
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        index = {}
+    now = datetime.now(timezone.utc)
+    candidates = []
+    for row in index.values():
+        if row.get("phase") not in FINISHED_PHASES:
+            continue
+        parsed = parse_legacy_or_utc(row.get("updated_at"))
+        age_days = (now - parsed).days if parsed else None
+        # No parseable updated_at at all is treated as "old enough" --
+        # a task this stale on record-keeping is exactly the kind of
+        # abandoned entry this command exists to surface, not skip.
+        if age_days is None or age_days >= args.older_than_days:
+            candidates.append({**row, "age_days": age_days})
+
+    def sort_key(row):
+        parsed = parse_legacy_or_utc(row.get("updated_at"))
+        return parsed or datetime.min.replace(tzinfo=timezone.utc)
+
+    candidates.sort(key=sort_key, reverse=True)
+    print(json.dumps(candidates, indent=2))
+
+
+def cmd_delete(args):
+    """Deletes a finished task's entire directory and its index.json entry.
+    Refuses outright (exit 1, no change made) for a task whose on-disk
+    phase isn't done/stopped/failed -- this is the one, sole safety check
+    standing between "the cleanup skill listed this as a candidate a
+    while ago" and "this task got resumed in the meantime and is now
+    genuinely running again"; re-checking the real, current phase here
+    (not trusting the caller's own stale listing) is what makes that
+    safe.
+
+    Two separate locked sections, not one nested critical section spanning
+    both: the state lock file lives *inside* `task_dir` itself
+    (`.state.json.lock`), and Windows refuses to delete a directory
+    containing a file this same process still has open (no
+    FILE_SHARE_DELETE) -- confirmed against Python's own default `open()`
+    behavior, not assumed. Taking the state lock first (as a brief no-op
+    mutex, just to serialize with any `mutate_state()` call already in
+    flight for this task) and fully releasing it before `shutil.rmtree`
+    ever runs avoids that outright, on every OS. The index lock (its own
+    lock file lives one directory up, a sibling of `index.json`, never
+    inside `task_dir`) is held across the actual delete-and-reindex, so a
+    `mutate_state()` call on *another* task sharing this same index still
+    serializes against it exactly as `mutate_state()`'s own docstring
+    promises."""
+    task_dir = Path(args.task_dir)
+    state = load_state(task_dir)
+    if state.get("phase") not in FINISHED_PHASES:
+        raise SystemExit(
+            f"refusing to delete {args.task_dir}: phase is {state.get('phase')!r}, "
+            f"not one of {FINISHED_PHASES} -- only a finished task can be deleted"
+        )
+
+    # Briefly acquire and release the state lock -- proves no other
+    # mutate_state() call for this exact task is mid-flight right now,
+    # and (unlike holding it across the delete below) is guaranteed
+    # released, so removing the file it lives in is safe everywhere.
+    locked_read_modify_write(_state_lock_path(task_dir), lambda: None)
+
+    def critical_section():
+        shutil.rmtree(task_dir, ignore_errors=True)
+        index_path = _index_path(task_dir)
+        index = read_json_or_default(index_path, {})
+        index.pop(state["id"], None)
+        atomic_write_json(index_path, index)
+
+    locked_read_modify_write(_index_lock_path(task_dir), critical_section)
+    print(json.dumps({"deleted": state["id"], "task_dir": str(task_dir)}, indent=2))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -295,6 +394,15 @@ def main():
     s = sub.add_parser("list")
     s.add_argument("--root", default=".crewbench")
     s.set_defaults(func=cmd_list)
+
+    s = sub.add_parser("cleanup-candidates")
+    s.add_argument("--root", default=".crewbench")
+    s.add_argument("--older-than-days", type=int, default=30)
+    s.set_defaults(func=cmd_cleanup_candidates)
+
+    s = sub.add_parser("delete")
+    s.add_argument("--task-dir", required=True)
+    s.set_defaults(func=cmd_delete)
 
     args = p.parse_args()
     args.func(args)

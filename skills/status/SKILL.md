@@ -9,7 +9,8 @@ disable-model-invocation: true
 
 You report on crewbench task state. You never delegate to a crew role, run
 the dispatch script for a new run, or change any file except (for the
-`--cleanup` case below) removing a finished worktree the user confirms.
+`--cleanup` case below) removing a finished worktree or a finished task's
+own directory, each only after the user confirms that specific one.
 
 Argument: $ARGUMENTS
 
@@ -58,6 +59,21 @@ its output verbatim.
    removing it (`git worktree remove`) and deleting its branch. Also run
    `git worktree prune` for any worktree directories that were deleted by
    hand outside git. Do nothing without per-task confirmation.
+
+   Then, separately, run `python3 <root>/bin/crewbench_state.py
+   cleanup-candidates` (default: finished tasks whose `updated_at` is 30+
+   days old; pass `--older-than-days N` if the user names a different
+   threshold) and show the list — id, title, phase, age in days. This is
+   a listing only; it never deletes anything by itself. For each task the
+   user explicitly confirms, run `python3 <root>/bin/crewbench_state.py
+   delete --task-dir .crewbench/tasks/<task-id>` — this permanently
+   removes that task's entire directory (every round's logs, results,
+   `events.jsonl`, `state.json`) and its `index.json` entry; there is no
+   undo. The command itself refuses (and changes nothing) if the task's
+   real, current phase isn't done/stopped/failed, in case it was resumed
+   since this list was generated — if it refuses, say so and move on to
+   the next task rather than treating it as an error. Ask before each
+   deletion individually; never batch-confirm "delete all of these."
 
 4. Never dump raw JSON on the user — translate into a short, readable
    summary. If the task id doesn't exist, say so plainly.

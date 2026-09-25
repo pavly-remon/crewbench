@@ -99,3 +99,74 @@ def test_get_missing_state_errors(tmp_path):
         cwd=tmp_path, capture_output=True, text=True,
     )
     assert result.returncode != 0
+
+
+def _backdate(task_dir, root, task_id, days):
+    # crewbench_state.py's own `set` always refreshes updated_at to now --
+    # backdating for a real age-threshold test has to happen underneath
+    # it, directly on both state.json and its index.json entry (mirroring
+    # what mutate_state() itself keeps in sync), not through the CLI.
+    import datetime
+    stamp = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    state_path = task_dir / "state.json"
+    state = json.loads(state_path.read_text())
+    state["updated_at"] = stamp
+    state_path.write_text(json.dumps(state))
+    index_path = root / "index.json"
+    index = json.loads(index_path.read_text())
+    index[task_id]["updated_at"] = stamp
+    index_path.write_text(json.dumps(index))
+
+
+def test_cleanup_candidates_excludes_unfinished_and_recent_finished_tasks(tmp_path):
+    root = tmp_path / ".crewbench"
+    old_done = root / "tasks" / "old-done"
+    recent_done = root / "tasks" / "recent-done"
+    in_progress = root / "tasks" / "in-progress"
+    run_state("new", "--task-dir", str(old_done), "--id", "old-done", "--command", "test", "--title", "Old",
+              cwd=tmp_path)
+    run_state("set", "--task-dir", str(old_done), "--key", "phase", "--value", '"done"', cwd=tmp_path)
+    _backdate(old_done, root, "old-done", days=60)
+
+    run_state("new", "--task-dir", str(recent_done), "--id", "recent-done", "--command", "test", "--title", "Recent",
+              cwd=tmp_path)
+    run_state("set", "--task-dir", str(recent_done), "--key", "phase", "--value", '"done"', cwd=tmp_path)
+
+    run_state("new", "--task-dir", str(in_progress), "--id", "in-progress", "--command", "test", "--title", "Busy",
+              cwd=tmp_path)
+    _backdate(in_progress, root, "in-progress", days=90)  # old, but not finished -- must not appear
+
+    candidates = run_state("cleanup-candidates", "--root", str(root), "--older-than-days", "30", cwd=tmp_path)
+    ids = {c["id"] for c in candidates}
+    assert ids == {"old-done"}
+    assert candidates[0]["age_days"] >= 60
+
+
+def test_delete_refuses_a_task_that_is_not_actually_finished(tmp_path):
+    root = tmp_path / ".crewbench"
+    task_dir = root / "tasks" / "busy"
+    run_state("new", "--task-dir", str(task_dir), "--id", "busy", "--command", "test", "--title", "Busy",
+              cwd=tmp_path)
+    result = subprocess.run(
+        [sys.executable, str(Path(crewbench_state.__file__)), "delete", "--task-dir", str(task_dir)],
+        cwd=tmp_path, capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "refusing to delete" in result.stderr
+    assert task_dir.exists()  # nothing was touched
+
+
+def test_delete_removes_task_directory_and_index_entry_for_a_finished_task(tmp_path):
+    root = tmp_path / ".crewbench"
+    task_dir = root / "tasks" / "finished"
+    run_state("new", "--task-dir", str(task_dir), "--id", "finished", "--command", "test", "--title", "Finished",
+              cwd=tmp_path)
+    run_state("set", "--task-dir", str(task_dir), "--key", "phase", "--value", '"stopped"', cwd=tmp_path)
+    (task_dir / "runs").mkdir()
+    (task_dir / "runs" / "developer-r1.log").write_text("some log output")
+
+    deleted = run_state("delete", "--task-dir", str(task_dir), cwd=tmp_path)
+    assert deleted == {"deleted": "finished", "task_dir": str(task_dir)}
+    assert not task_dir.exists()
+    index = json.loads((root / "index.json").read_text())
+    assert "finished" not in index

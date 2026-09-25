@@ -844,6 +844,15 @@ delete `crew/<task-id>`. `/crewbench:status --cleanup` finds finished tasks
 with a leftover worktree and offers this per task; it also runs `git
 worktree prune` for any worktree directories someone deleted by hand.
 
+Separately, `/crewbench:status --cleanup` also offers to delete a finished
+task's own directory entirely (every round's logs/results/`events.jsonl`/
+`state.json`, not just its worktree) once it's old enough
+(`crewbench_state.py cleanup-candidates`, default 30 days since
+`updated_at`) — always listed first, always confirmed per task, never
+automatic. `crewbench_state.py delete` refuses outright for a task that
+isn't genuinely `done`/`stopped`/`failed` right now, so a task resumed
+after being listed as a candidate can't be deleted out from under it.
+
 ### `in-place` mode
 
 Keeps the pre-Phase-5 behavior exactly, including the Phase 1 git safety
