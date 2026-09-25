@@ -31,6 +31,22 @@ describe("parseRunFlags", () => {
     expect(() => parseRunFlags(["--rounds", "abc"])).toThrow();
   });
 
+  it("rejects a negative --rounds value -- real bug caught by review, Number.parseInt('-1') is a real number, not NaN", () => {
+    expect(() => parseRunFlags(["--rounds", "-1"])).toThrow(/positive integer/);
+  });
+
+  it("rejects zero -- 'positive' means positive, not non-negative", () => {
+    expect(() => parseRunFlags(["--rounds", "0"])).toThrow(/positive integer/);
+  });
+
+  it("rejects a partially-numeric value instead of silently truncating it -- real bug caught by review, Number.parseInt('2abc') used to become 2", () => {
+    expect(() => parseRunFlags(["--rounds", "2abc"])).toThrow(/positive integer/);
+  });
+
+  it("rejects a non-integer numeric value", () => {
+    expect(() => parseRunFlags(["--rounds", "2.5"])).toThrow(/positive integer/);
+  });
+
   it("parses --dev cli:model and --review cli", () => {
     const flags = parseRunFlags(["Fix", "it", "--dev", "agy:gemini-3.8-flash", "--review", "codex"]);
     expect(flags.dev).toEqual({ cli: "agy", model: "gemini-3.8-flash" });
