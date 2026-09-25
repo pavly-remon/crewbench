@@ -47,9 +47,21 @@ export async function killProcessGroup(pid: number, timeoutS = GRACEFUL_KILL_TIM
   const deadline = Date.now() + timeoutS * 1000;
   while (Date.now() < deadline) {
     try {
-      process.kill(pid, 0); // signal 0: alive-check, doesn't actually signal
+      // Real, disclosed bug caught by review: `process.kill(pid, 0)`
+      // (a positive pid) only probes the group *leader* -- a CLI that
+      // spawns its own children and then exits itself (a real, common
+      // shape: a wrapper script that forks a real worker) leaves this
+      // loop concluding "gone" the instant the leader dies, skipping the
+      // fallback SIGKILL below entirely while a real child keeps
+      // running in the same detached group. `process.kill(-pid, 0)`
+      // (negative -- the same negation `terminateProcessGroup()` and
+      // `hardKillProcessGroup()` already use to *signal* the group, per
+      // POSIX kill(2): a negative pid targets the whole process group)
+      // instead throws ESRCH only once every process in the group is
+      // actually gone, not just the leader.
+      process.kill(-pid, 0); // signal 0: alive-check, doesn't actually signal
     } catch {
-      return true; // gone
+      return true; // the whole group is gone, not just the leader
     }
     await sleep(200);
   }
