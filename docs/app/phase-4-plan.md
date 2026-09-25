@@ -53,7 +53,24 @@ specifically to confirm the fix holds even under deliberate fault
 injection), independently re-verified during review via the real file's
 own checksum (stable before and after a full fresh test run), with an
 honest note that this class of bug cannot be provably ruled out for
-good.))
+good. Milestone 5 done -- reviewed and approved 2026-09-25, the last
+milestone of this phase: `/crewbench:open` + `/crewbench:status` bridge
+(port discovery live-tested against a real running daemon during
+review, correctly finding it via `config.json` and building the real
+`/tasks/$taskId` URL -- Design decision 6's own guessed route shape was
+wrong and got corrected against the real router), an update-check
+endpoint (live-tested against the real npm registry during review,
+correctly reporting the package as still unpublished), `bump_version.py`
+extended, a CI release job, and a full `CHANGELOG.md`/`README.md`
+rewrite. All independently re-verified in full during review (466 TS
+tests, e2e, 213 Python tests, schema check, checksum stability). **Phase
+4 overall: core packaging/embedded-terminal/settings/bridge genuinely
+built and tested end to end; the real `npm publish` and the real
+`crewbench service install` OS-registration cycle were deliberately
+never taken during phase execution, by explicit user decision after
+three real safety incidents -- see milestone 5's own "Honest assessment"
+section for the full, precise account of what's real versus what
+remains unverified.))
 
 Read first: `docs/app/CONTEXT.md`, `docs/app/build-prompts.md`'s Phase 4
 section (the literal phase prompt this plan is based on), and
@@ -1228,7 +1245,7 @@ twice more during this milestone's own work.
   milestone's to fix, but worth being aware it's real and was directly
   observed multiple times this session.
 
-### Milestone 5 -- implemented, pending human review (2026-09-21)
+### Milestone 5 -- done (reviewed and approved 2026-09-25)
 
 This is the last milestone of Phase 4.
 
