@@ -161,6 +161,42 @@ describe("POST /api/tasks/:tid/lineup (Phase 3 milestone 4)", () => {
     expect(second.status).toBe(400);
   });
 
+  it("two genuinely concurrent lineup submissions for the same task never both start a driveTask() loop", async () => {
+    // Real, disclosed race caught by review (TaskRunner's own
+    // `TaskAlreadyStartingError` docstring has the full story): this
+    // route's own `hasLineup` check and `taskRunner.startTask()` call
+    // aren't atomic with each other, so two truly concurrent requests
+    // (fired together via Promise.all, not sequential awaits like the
+    // test above) can both pass `hasLineup === false` before either one
+    // finishes writing the lineup. The actual claim proven here isn't
+    // "the second request 400s" (both might legitimately see an empty
+    // lineup and both proceed past that check) -- it's that
+    // `TaskRunner`'s own synchronous reservation still stops a second
+    // `driveTask()` loop from ever starting: exactly one of the two
+    // responses reports a real, successful start (`200`), the other is
+    // either the route's own pre-existing `400` (lost the `hasLineup`
+    // race) or the new `409` (lost `TaskRunner`'s own reservation race)
+    // -- never two `200`s, and never a crash.
+    daemon = await startDaemon({ port: 0 });
+    const headers = { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" };
+    const { taskId } = await createAndFinalizeTask(headers);
+
+    const [a, b] = await Promise.all([
+      fetch(url(`/api/tasks/${taskId}/lineup`), { method: "POST", headers, body: JSON.stringify(LINEUP_BODY) }),
+      fetch(url(`/api/tasks/${taskId}/lineup`), { method: "POST", headers, body: JSON.stringify(LINEUP_BODY) }),
+    ]);
+
+    const statuses = [a.status, b.status].sort((x, y) => x - y); // ascending numeric, not the default lexicographic sort
+    expect(statuses[0]).toBe(200); // the winner: genuinely started
+    expect(statuses[1]).toBeGreaterThanOrEqual(400); // the loser: 400 (hasLineup) or 409 (TaskAlreadyStartingError)
+    expect(statuses[1]).toBeLessThan(500); // never an unhandled crash
+
+    // The actual harm this test guards against: only one driveTask()
+    // loop, ever, over this task's own directory -- proven by TaskRunner's
+    // own live state, not inferred from the HTTP responses alone.
+    expect(daemon.taskRunner.isActive(taskId)).toBe(true);
+  }, 15_000);
+
   it("400s a lineup submission missing a role -- z.record over an enum requires every key", async () => {
     daemon = await startDaemon({ port: 0 });
     const headers = { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" };

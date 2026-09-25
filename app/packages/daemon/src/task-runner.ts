@@ -42,8 +42,33 @@ interface StatusEntry {
  * run`-created task is driven by its own process, and the daemon must
  * never also try to drive it (docs/app/CONTEXT.md's ownership model,
  * carried into Phase 3 by Design decision 5). */
+/** Real concurrency bug caught by review, not this repo's own testing:
+ * two concurrent callers racing to start the same task (two `POST
+ * .../lineup` submissions, or a resume racing a reattach) could both
+ * pass an `!isActive()` check, both await `buildParams()`'s real disk
+ * I/O, and both end up calling `start()` -- the second's `active.set()`
+ * silently overwriting the first's map entry, leaving one `driveTask()`
+ * loop running fully untracked while both mutate the same task
+ * directory. A route catches this to return 409, not 500 -- it's a real,
+ * expected outcome of a genuine race, not a server error. */
+export class TaskAlreadyStartingError extends Error {
+  constructor(public readonly taskId: string) {
+    super(`task ${taskId} is already starting or active -- a concurrent request got there first`);
+    this.name = "TaskAlreadyStartingError";
+  }
+}
+
 export class TaskRunner {
   private readonly active = new Map<string, ActiveTask>();
+  /** Reserves a taskId the instant a caller commits to starting it,
+   * before any `await` -- closing the exact race `TaskAlreadyStartingError`'s
+   * own docstring describes. `isActive()` treats a reservation exactly
+   * like a fully active task (both mean "don't let anyone else start
+   * this"), so a route's own `!isActive()` guard stays correct without
+   * having to know this set exists. Emptied either by `start()` (the
+   * task graduates from "reserved" to "active") or by the reserving
+   * call's own cleanup if it throws before reaching `start()`. */
+  private readonly reserving = new Set<string>();
   private readonly root: string;
   /** One shared instance across every active task in this daemon
    * process (Design decision 2 -- "one shared ConcurrencyLimiter per
@@ -61,7 +86,7 @@ export class TaskRunner {
   }
 
   isActive(taskId: string): boolean {
-    return this.active.has(taskId);
+    return this.active.has(taskId) || this.reserving.has(taskId);
   }
 
   listPendingApprovals(taskId: string): ApprovalRequest[] {
@@ -121,10 +146,34 @@ export class TaskRunner {
    * `buildParams()`/`start()` unchanged: by the time this is called,
    * `state.json` already has a real, non-empty `lineup`, so this is
    * structurally the same as any reattach that found nothing still
-   * running, just reached from a fresh task instead of a restart. */
+   * running, just reached from a fresh task instead of a restart.
+   *
+   * Reserves `taskId` synchronously, before the first `await`, so two
+   * concurrent calls for the same task can't both slip past their own
+   * `!isActive()` check and both reach `start()` -- see
+   * `TaskAlreadyStartingError`'s own docstring for the real race this
+   * closes. Throws that error immediately (no async work happens at all)
+   * for the loser of that race, rather than silently overwriting the
+   * winner's `active` entry. */
   async startTask(taskId: string, taskDir: string, projectPath: string, taskState: TaskState): Promise<void> {
-    const params = await this.buildParams(taskId, taskDir, projectPath, taskState);
-    this.start(taskId, params);
+    if (!this.reserve(taskId)) throw new TaskAlreadyStartingError(taskId);
+    try {
+      const params = await this.buildParams(taskId, taskDir, projectPath, taskState);
+      this.start(taskId, params);
+    } catch (err) {
+      this.reserving.delete(taskId);
+      throw err;
+    }
+  }
+
+  /** Synchronous check-and-reserve -- see `TaskAlreadyStartingError`'s
+   * own docstring. Returns `false` (reserving nothing) if the task is
+   * already active or already reserved by a concurrent caller; the
+   * caller must not proceed to `buildParams()`/`start()` in that case. */
+  private reserve(taskId: string): boolean {
+    if (this.active.has(taskId) || this.reserving.has(taskId)) return false;
+    this.reserving.add(taskId);
+    return true;
   }
 
   /** Starts driving a task that's ready to go *right now* -- either a
@@ -145,6 +194,10 @@ export class TaskRunner {
         this.active.delete(taskId);
       });
     this.active.set(taskId, { approvals, promise, controller });
+    // Graduated from "reserved" to "active" -- both synchronous, same
+    // tick, so `isActive()` never has a window where it would wrongly
+    // read false between the two.
+    this.reserving.delete(taskId);
   }
 
   /** Rebuilds `DriveTaskParams` purely from what's already on disk --
@@ -232,41 +285,69 @@ export class TaskRunner {
   }
 
   private async reattachOne(taskId: string, taskDir: string, projectPath: string, taskState: TaskState): Promise<void> {
-    // Marks any run stuck at "running" with a genuinely dead pid as
-    // failed (Phase 1 milestone 6's reconcileDeadRuns(), functional for
-    // the first time as of this milestone's pid-recording fix in
-    // runner.ts) -- must run before the still-alive check below, so a
-    // stale "running" entry from a truly dead process never gets treated
-    // as still in flight.
-    await reconcileDeadRuns(taskDir);
+    // Reserved for the whole duration of reattach, including the
+    // "waiting for run.finished" branch below -- not just the immediate-
+    // start branch. Before this, `isActive()` genuinely read `false`
+    // during that whole wait (nothing was in `this.active` yet), so a
+    // real API call racing a daemon restart (a resume or a lineup
+    // submission for the exact task reattach is mid-way through picking
+    // back up) could slip past its own `!isActive()` guard and start a
+    // second, concurrent `driveTask()` loop over the same task directory
+    // -- the identical race `TaskAlreadyStartingError` closes for
+    // `startTask()`, just reached from the reattach path instead. If
+    // reservation fails here, something else already claimed this task
+    // (vanishingly unlikely this early in daemon startup, but a real,
+    // not just theoretical, possibility once a project can be
+    // re-registered while other projects' reattach is still running) --
+    // skip it rather than fight over it; whatever claimed it first owns
+    // driving it now.
+    if (!this.reserve(taskId)) return;
+    try {
+      // Marks any run stuck at "running" with a genuinely dead pid as
+      // failed (Phase 1 milestone 6's reconcileDeadRuns(), functional for
+      // the first time as of this milestone's pid-recording fix in
+      // runner.ts) -- must run before the still-alive check below, so a
+      // stale "running" entry from a truly dead process never gets treated
+      // as still in flight.
+      await reconcileDeadRuns(taskDir);
 
-    const status = await readJsonOrDefault<Record<string, StatusEntry>>(join(taskDir, "runs", "status.json"), {});
-    const stillRunning = Object.entries(status).find(
-      ([, info]) => info.state === "running" && typeof info.pid === "number" && isPidAlive(info.pid),
-    );
+      const status = await readJsonOrDefault<Record<string, StatusEntry>>(join(taskDir, "runs", "status.json"), {});
+      const stillRunning = Object.entries(status).find(
+        ([, info]) => info.state === "running" && typeof info.pid === "number" && isPidAlive(info.pid),
+      );
 
-    const params = await this.buildParams(taskId, taskDir, projectPath, taskState);
+      const params = await this.buildParams(taskId, taskDir, projectPath, taskState);
 
-    if (!stillRunning) {
-      this.start(taskId, params);
-      return;
+      if (!stillRunning) {
+        this.start(taskId, params);
+        return;
+      }
+
+      // Design decision 3: don't call driveTask() while a real dispatch is
+      // still in flight (decide() would re-issue the same command,
+      // dispatching a second, redundant copy of it). Instead wait for that
+      // exact run's own run.finished event -- already emitted by
+      // dispatchRole() before this daemon ever existed, and already tailed
+      // by the watcher (Phase 2) -- then rebuild params fresh (so
+      // rehydrateState() picks up the now-completed round) and start.
+      // The reservation above stays held the whole time this waits --
+      // released only by start() finally firing, or by the catch below
+      // if building fresh params fails.
+      const [runName] = stillRunning;
+      const onTaskEvent = (tid: string, event: { type: string; run: string | null }): void => {
+        if (tid !== taskId || event.type !== "run.finished" || event.run !== runName) return;
+        this.watcher.off("task-event", onTaskEvent);
+        this.buildParams(taskId, taskDir, projectPath, taskState)
+          .then((freshParams) => this.start(taskId, freshParams))
+          .catch((err: unknown) => {
+            this.reserving.delete(taskId);
+            console.error(`task ${taskId}: failed to resume after reattach:`, err);
+          });
+      };
+      this.watcher.on("task-event", onTaskEvent);
+    } catch (err) {
+      this.reserving.delete(taskId);
+      throw err;
     }
-
-    // Design decision 3: don't call driveTask() while a real dispatch is
-    // still in flight (decide() would re-issue the same command,
-    // dispatching a second, redundant copy of it). Instead wait for that
-    // exact run's own run.finished event -- already emitted by
-    // dispatchRole() before this daemon ever existed, and already tailed
-    // by the watcher (Phase 2) -- then rebuild params fresh (so
-    // rehydrateState() picks up the now-completed round) and start.
-    const [runName] = stillRunning;
-    const onTaskEvent = (tid: string, event: { type: string; run: string | null }): void => {
-      if (tid !== taskId || event.type !== "run.finished" || event.run !== runName) return;
-      this.watcher.off("task-event", onTaskEvent);
-      this.buildParams(taskId, taskDir, projectPath, taskState)
-        .then((freshParams) => this.start(taskId, freshParams))
-        .catch((err: unknown) => console.error(`task ${taskId}: failed to resume after reattach:`, err));
-    };
-    this.watcher.on("task-event", onTaskEvent);
   }
 }

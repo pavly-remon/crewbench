@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { atomicWriteJson, loadState, readJsonOrDefault, setField } from "@crewbench/engine";
 import { ApiLineupRequestSchema, ApiTaskDetailSchema, type Team } from "@crewbench/contract";
 import type { DaemonWatcher } from "../watcher.js";
-import type { TaskRunner } from "../task-runner.js";
+import { TaskAlreadyStartingError, type TaskRunner } from "../task-runner.js";
 import { buildTaskDetail } from "../task-detail.js";
 
 /** `POST /api/tasks/:tid/lineup` (Phase 3 milestone 4) -- see
@@ -52,7 +52,23 @@ export function registerLineupRoutes(app: FastifyInstance, watcher: DaemonWatche
     }
 
     const freshState = await loadState(location.taskDir);
-    await taskRunner.startTask(state.id, location.taskDir, location.projectPath, freshState);
+    try {
+      await taskRunner.startTask(state.id, location.taskDir, location.projectPath, freshState);
+    } catch (err) {
+      // Real, disclosed race caught by review (TaskAlreadyStartingError's
+      // own docstring has the full story): two concurrent lineup
+      // submissions for the same task can both reach this point --
+      // TaskRunner's own synchronous reservation is what actually stops
+      // the loser from starting a second driveTask() loop; this route
+      // just needs to report that loss as a real 409, not an unhandled
+      // 500 (the lineup itself is already written either way -- only the
+      // *second* driveTask() start is refused, not the whole request).
+      if (err instanceof TaskAlreadyStartingError) {
+        await reply.code(409).send({ error: err.message });
+        return;
+      }
+      throw err;
+    }
 
     const detail = await buildTaskDetail(location, taskRunner);
     await reply.send(ApiTaskDetailSchema.parse(detail));

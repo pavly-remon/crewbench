@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { appendField, atomicWriteJson, cancelRun, loadState, readJsonOrDefault, setField } from "@crewbench/engine";
 import { ApiCancelTaskRequestSchema, ApiRetryRunRequestSchema, ApiTaskDetailSchema } from "@crewbench/contract";
 import type { DaemonWatcher } from "../watcher.js";
-import type { TaskRunner } from "../task-runner.js";
+import { TaskAlreadyStartingError, type TaskRunner } from "../task-runner.js";
 import { buildTaskDetail } from "../task-detail.js";
 
 interface StatusEntry {
@@ -130,7 +130,23 @@ export function registerTaskControlRoutes(app: FastifyInstance, watcher: DaemonW
     }
 
     await appendField(location.taskDir, "notes", "Resumed by user.");
-    await taskRunner.startTask(state.id, location.taskDir, location.projectPath, state);
+    try {
+      await taskRunner.startTask(state.id, location.taskDir, location.projectPath, state);
+    } catch (err) {
+      // Real, disclosed race caught by review: this route's own
+      // `isActive()` check above and the actual `startTask()` call
+      // aren't atomic with each other, so two concurrent resume
+      // requests can both pass the check above before either reserves.
+      // `TaskRunner`'s own synchronous reservation (`TaskAlreadyStartingError`'s
+      // docstring has the full story) is what actually stops the loser
+      // from starting a second `driveTask()` loop -- this just reports
+      // that loss as a real 409, not an unhandled 500.
+      if (err instanceof TaskAlreadyStartingError) {
+        await reply.code(409).send({ error: err.message });
+        return;
+      }
+      throw err;
+    }
 
     const detail = await buildTaskDetail(location, taskRunner);
     await reply.send(ApiTaskDetailSchema.parse(detail));
@@ -233,7 +249,18 @@ export function registerTaskControlRoutes(app: FastifyInstance, watcher: DaemonW
     await appendField(location.taskDir, "notes", `Retrying ${parsed.data.run}.`);
 
     const freshState = await loadState(location.taskDir);
-    await taskRunner.startTask(state.id, location.taskDir, location.projectPath, freshState);
+    try {
+      await taskRunner.startTask(state.id, location.taskDir, location.projectPath, freshState);
+    } catch (err) {
+      // Same real, disclosed race as the resume route above -- this
+      // route's own `isActive()` check isn't atomic with `startTask()`
+      // either.
+      if (err instanceof TaskAlreadyStartingError) {
+        await reply.code(409).send({ error: err.message });
+        return;
+      }
+      throw err;
+    }
 
     const detail = await buildTaskDetail(location, taskRunner);
     await reply.send(ApiTaskDetailSchema.parse(detail));
