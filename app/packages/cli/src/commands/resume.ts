@@ -81,6 +81,25 @@ export async function resumeCommand(argv: string[], root: string): Promise<void>
     console.log(`  ${run} was marked running but its process is gone -- marked failed.`);
   }
 
+  // Real, disclosed bug caught live by CI (not local dev, where a real
+  // CLI is always installed): this "no saved lineup" check used to run
+  // *after* `pickLeadCli()`/`resolveLineup()` below, both of which
+  // require an actually-installed, doctor-passing CLI on PATH to resolve
+  // anything at all. A lineup-less task (never dispatched, e.g. one
+  // finalized by the app's own scoping/lineup flow but never actually
+  // started) hits this early-return regardless of whether any CLI is
+  // installed -- but the old ordering meant `pickLeadCli()` threw first
+  // on a machine with zero CLIs installed (every CI runner in this repo,
+  // confirmed by `doctor()`'s own real `installed: false` reports there),
+  // so the real "no saved lineup" message this test asserts on was never
+  // reached. Moved before any lead-CLI/loop resolution, since neither is
+  // needed to decide "this task was never actually started."
+  const lineupRoles = taskState.lineup as Record<string, { cli: Cli; model: string; effort: string; permissions: string }>;
+  if (!lineupRoles || Object.keys(lineupRoles).length === 0) {
+    console.log("This task has no saved lineup (it may predate Phase 1) -- cannot resume automatically.");
+    return;
+  }
+
   // The lineup is already agreed (state.json.lineup) -- re-resolve only
   // the loop settings (max_rounds/fix_threshold aren't stored in
   // state.json itself, see schemas/task-state.json) from the same
@@ -96,12 +115,6 @@ export async function resumeCommand(argv: string[], root: string): Promise<void>
     : null;
   const taskText = spec?.description ?? taskState.title;
   const cwd = (taskState.worktree as string | null) ?? projectRoot;
-  const lineupRoles = taskState.lineup as Record<string, { cli: Cli; model: string; effort: string; permissions: string }>;
-
-  if (!lineupRoles || Object.keys(lineupRoles).length === 0) {
-    console.log("This task has no saved lineup (it may predate Phase 1) -- cannot resume automatically.");
-    return;
-  }
 
   // state.json.lineup's shape matches DriveTaskLineup.roles exactly by
   // construction (`run` writes it via `setField(taskDir, "lineup",
