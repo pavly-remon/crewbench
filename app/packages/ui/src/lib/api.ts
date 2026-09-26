@@ -1,10 +1,15 @@
 import { getToken } from "./auth.js";
 
-/** Same-origin by default (the packaged daemon serves this build itself,
- * per docs/app/CONTEXT.md's daemon description) -- `VITE_API_BASE`
- * overrides it for `vite dev`, where the UI's own dev server runs on a
- * different port than `crewbench ui`'s daemon. */
-const API_BASE: string = import.meta.env.VITE_API_BASE ?? window.location.origin;
+/** Always same-origin: the packaged daemon serves this build itself
+ * directly (`crewbench ui`, Phase 2), and under `vite dev` the same is
+ * true from the browser's own point of view too, now that
+ * `vite.config.ts`'s own dev-server proxy forwards `/api/*` to the real
+ * daemon -- see that file's own docstring for why a `VITE_API_BASE`
+ * pointing straight at the daemon's real origin (this file's own
+ * earlier approach) never actually worked: the daemon's Origin check
+ * and missing CORS headers both reject a genuine cross-origin request
+ * regardless of what URL the client itself points at. */
+const API_BASE: string = window.location.origin;
 
 export class ApiError extends Error {
   constructor(
@@ -39,7 +44,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
  * matched exactly on the daemon side (`auth.ts`'s own
  * `isPtyWebsocketPath()`, gated to this one path shape only). Same-origin
  * `API_BASE` swapped from `http(s)` to `ws(s)`, not hardcoded, so this
- * still works under `vite dev`'s own `VITE_API_BASE` override. */
+ * still works under `vite dev`'s own proxy (`vite.config.ts`, `ws: true`
+ * on the same `/api` proxy entry `apiFetch()`/`openEventStream()` use). */
 export function ptyWebSocketUrl(taskId: string): string {
   const token = getToken() ?? "";
   const wsBase = API_BASE.replace(/^http/, "ws");

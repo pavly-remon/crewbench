@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { getToken } from "../lib/auth.js";
 
-const API_BASE: string = import.meta.env.VITE_API_BASE ?? window.location.origin;
+// Same-origin unconditionally -- see lib/api.ts's own API_BASE docstring
+// for why (vite.config.ts's dev-server proxy makes this correct under
+// `vite dev` too, not just in the packaged daemon-served build).
+const API_BASE: string = window.location.origin;
 
 /** Fetches one screenshot with the bearer token attached and hands back
  * a local object URL -- a plain `<img src="/api/...">` can't attach the
