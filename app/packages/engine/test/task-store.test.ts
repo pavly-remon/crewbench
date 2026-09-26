@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   appendField,
@@ -18,6 +18,11 @@ import {
   TaskAlreadyExistsError,
   TaskNotFinishedError,
 } from "../src/task-store.js";
+import { lockedReadModifyWrite } from "../src/contract-fs.js";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function newRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "crewbench-store-"));
@@ -211,6 +216,50 @@ describe("deleteTask", () => {
     // own earlier snapshot.
     await setField(taskDir, "phase", "implementing");
     await expect(deleteTask(taskDir)).rejects.toThrow(TaskNotFinishedError);
+    expect(existsSync(taskDir)).toBe(true);
+  });
+
+  /** The real gap review caught, that the sequential test above doesn't
+   * actually exercise: the old `deleteTask()` read `state.json` *before*
+   * acquiring the state lock at all, so a concurrent `mutateState()`
+   * call (a real resume, for instance) landing in the gap between that
+   * unlocked read and the lock briefly changing hands afterward could
+   * flip the phase back to non-terminal without `deleteTask()` ever
+   * noticing -- it would delete the directory anyway. Proven here with a
+   * genuine lock race, not sequential calls: this test itself holds the
+   * exact same state lock `deleteTask()` uses internally
+   * (`<taskDir>/.state.json.lock`, `lockedReadModifyWrite()`'s own
+   * public API), starts `deleteTask()` concurrently (it must block,
+   * waiting for the lock this test is holding), flips the phase to
+   * non-terminal *while still holding that lock*, then releases --
+   * `deleteTask()` must only ever see the phase *after* that flip, never
+   * the stale terminal one from before this test's own critical section
+   * started. */
+  it("the phase re-check is genuinely inside the state lock, not a stale read from before any lock was taken", async () => {
+    const root = await newRoot();
+    const taskDir = join(root, ".crewbench", "tasks", "race");
+    await createTask(taskDir, { id: "race", command: "new-task", title: "T" });
+    await setField(taskDir, "phase", "stopped");
+
+    const lockPath = join(taskDir, ".state.json.lock");
+    const statePath = join(taskDir, "state.json");
+    let deletePromise: Promise<{ id: string }> | undefined;
+    await lockedReadModifyWrite(lockPath, async () => {
+      // deleteTask() starts here but must genuinely block, waiting for
+      // this very lock -- not race ahead and read the still-terminal
+      // phase before this callback gets to flip it. Written directly
+      // (not via setField()/mutateState(), which would try to acquire
+      // this exact same lock this callback is already holding and
+      // deadlock) -- safe precisely because holding the lock already
+      // guarantees no other writer can interleave.
+      deletePromise = deleteTask(taskDir);
+      await sleep(50);
+      const state = JSON.parse(await readFile(statePath, "utf-8")) as Record<string, unknown>;
+      state.phase = "implementing";
+      await writeFile(statePath, JSON.stringify(state), "utf-8");
+    });
+
+    await expect(deletePromise).rejects.toThrow(TaskNotFinishedError);
     expect(existsSync(taskDir)).toBe(true);
   });
 });

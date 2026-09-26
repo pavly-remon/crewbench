@@ -66,6 +66,34 @@ describe("daemon singleton check (Phase 4 milestone 4)", () => {
     }
   });
 
+  /** The real race review caught: the old probe-then-bind sequence had
+   * no mutual exclusion at all, so two `startDaemon({port})` calls fired
+   * at the same instant could each run `probeExistingDaemon()` before
+   * either had bound anything, then each independently resolve
+   * `findOpenPort()` -- timing-dependently landing on the same port
+   * (one wins the real bind, the other's `app.listen()` throws a raw,
+   * unhandled bind error, not the clean `DaemonAlreadyRunningError` this
+   * whole check exists to produce) or, worse, on two different ports
+   * (two live, mutually-unaware daemons). Fired genuinely concurrently
+   * here (`Promise.allSettled`, not two sequential `await`s) so this
+   * exercises real interleaved async scheduling, not an artificially
+   * staggered pair -- proves exactly one call ever ends up bound to
+   * `port`, and the other specifically gets `DaemonAlreadyRunningError`,
+   * not some other crash. */
+  it("two startDaemon() calls fired at the same instant for the same port: exactly one binds, the other gets a clean DaemonAlreadyRunningError, not a race", async () => {
+    const port = await findOpenPort(40150);
+    const results = await Promise.allSettled([startDaemon({ port }), startDaemon({ port })]);
+
+    const fulfilled = results.filter((r): r is PromiseFulfilledResult<DaemonHandle> => r.status === "fulfilled");
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(fulfilled[0]!.value.port).toBe(port);
+    expect(rejected[0]!.reason).toBeInstanceOf(DaemonAlreadyRunningError);
+
+    daemon = fulfilled[0]!.value;
+  });
+
   it("skips the singleton check entirely for the ephemeral-port sentinel (port: 0), same as every other test in this suite relies on", async () => {
     const port = await findOpenPort(40300);
     const first = await startDaemon({ port });

@@ -55,11 +55,18 @@ loads, it's just not authenticated yet.
    default browser (the same open-a-URL mechanism you'd use for any other
    link — e.g. macOS's `open`, Linux's `xdg-open`, Windows' `start`, or
    simply print it and let the user click it if you have no way to open a
-   browser directly). Tell the user plainly: if they don't already have a
-   crewbench UI tab open, this new tab will need them to paste in the
-   token from wherever they last saw it (the terminal output of
-   `crewbench ui`, or an already-open tab's own URL) — this skill has no
-   way to skip that step, by design.
+   browser directly). **Real, disclosed limitation, corrected here after
+   review caught this skill's own earlier wording overstating what's
+   possible**: the UI has no token-entry field anywhere — its bootstrap
+   code (`bootstrapToken()`) only ever reads a token from `location.hash`
+   once, at page load, so there is nothing to "paste into." Tell the user
+   plainly, accurately: if they already have another crewbench UI tab
+   open, switch to it (or copy that tab's own address-bar URL, which
+   still carries its `#token=...` fragment, into this new tab) — a fresh
+   tab with no token in its own URL will load the real page but every
+   `/api/` call will 401 until it has one. If no tab is open anywhere,
+   the simplest real fix is running `crewbench ui` themselves, which
+   opens one correctly authenticated from the start.
 
 4. Never dump the raw JSON from step 1 on the user — translate it into a
    short, plain-language result either way.

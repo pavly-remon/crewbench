@@ -261,30 +261,46 @@ export class TaskNotFinishedError extends Error {
  * process still has open can't be deleted out from under it on Windows
  * (no `FILE_SHARE_DELETE` by default) -- confirmed against Node's own
  * default `fs` open-mode behavior, not assumed. Acquiring and fully
- * releasing the state lock first (a brief no-op, just to serialize with
- * any `mutateState()` call already in flight for this task) before
+ * releasing the state lock first (just to serialize with any
+ * `mutateState()` call already in flight for this task) before
  * `rm(taskDir, {recursive: true})` ever runs avoids that on every OS.
  * The index lock (its own lock file lives one directory up, never inside
  * `taskDir`) is held across the actual delete-and-reindex, matching
  * `mutateState()`'s own documented lock-ordering promise for any other
- * task sharing that same index. Re-checks the task's real, current phase
- * itself (via `loadState()`, not a caller-supplied/stale phase) before
- * doing anything -- refuses outright, no change made, if it isn't
- * genuinely done/stopped/failed right now. */
+ * task sharing that same index.
+ *
+ * **Real gap caught by review, fixed here**: the phase re-check used to
+ * happen *before* acquiring the state lock at all -- an unlocked
+ * `loadState()` read, with the actual lock-acquire-then-release below it
+ * a pure no-op that verified nothing. A concurrent `mutateState()` call
+ * (a resume, for instance, flipping the phase back to something
+ * non-terminal) could land in the gap between that unlocked read and the
+ * lock briefly changing hands, and this function would still delete the
+ * directory anyway -- the "re-checks the task's real, current phase"
+ * claim in this docstring wasn't actually true. Fixed by re-reading
+ * `state.json` *inside* the state lock, immediately before releasing it
+ * -- genuinely serialized against any `mutateState()` in flight, not
+ * just a lock acquired and dropped around an already-stale read. This
+ * doesn't claim to close the race completely: the real Windows
+ * constraint above means the state lock still can't be held all the way
+ * through the actual `rm()` (a second, disclosed, much narrower window
+ * remains between releasing the state lock and the delete actually
+ * running) -- a real, remaining limitation, not silently assumed away. */
 export async function deleteTask(taskDir: string): Promise<{ id: string }> {
-  const state = await loadState(taskDir);
-  if (!state.phase || !FINISHED_PHASES.has(state.phase)) {
-    throw new TaskNotFinishedError(state.id, state.phase);
-  }
-
-  await lockedReadModifyWrite(stateLockPath(taskDir), async () => {});
+  const id = await lockedReadModifyWrite(stateLockPath(taskDir), async () => {
+    const state = await loadState(taskDir);
+    if (!state.phase || !FINISHED_PHASES.has(state.phase)) {
+      throw new TaskNotFinishedError(state.id, state.phase);
+    }
+    return state.id;
+  });
 
   await lockedReadModifyWrite(indexLockPath(taskDir), async () => {
     await rm(taskDir, { recursive: true, force: true });
     const index = await readJsonOrDefault<Record<string, IndexEntry>>(indexPath(taskDir), {});
-    delete index[state.id];
+    delete index[id];
     await atomicWriteJson(indexPath(taskDir), index);
   });
 
-  return { id: state.id };
+  return { id };
 }
