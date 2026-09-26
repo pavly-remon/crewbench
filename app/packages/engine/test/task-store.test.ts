@@ -15,6 +15,7 @@ import {
   makeTaskId,
   mutateState,
   setField,
+  TaskAlreadyExistsError,
   TaskNotFinishedError,
 } from "../src/task-store.js";
 
@@ -59,6 +60,27 @@ describe("createTask", () => {
     const events = (await readFile(join(taskDir, "events.jsonl"), "utf-8")).trim().split("\n").map((l) => JSON.parse(l));
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: "task.created", data: { command: "new-task", title: "X" } });
+  });
+
+  it("refuses to silently overwrite an existing task at the same id (Copilot #11)", async () => {
+    // Real, disclosed bug this proves fixed: makeTaskId()'s 16-bit random
+    // suffix can genuinely collide -- before this fix, a second
+    // createTask() call at the same taskDir silently clobbered the first
+    // task's real state.json (and everything else a caller might still
+    // be writing to that directory) with a brand-new one under the same
+    // id. Real first title, a real second createTask() attempt at the
+    // identical path, and a direct read of state.json afterward proving
+    // the *original* title survived, not just that an error was thrown.
+    const root = await newRoot();
+    const taskDir = join(root, ".crewbench", "tasks", "t1");
+    await createTask(taskDir, { id: "t1", command: "new-task", title: "Original task" });
+
+    await expect(createTask(taskDir, { id: "t1", command: "new-task", title: "Colliding task" })).rejects.toThrow(
+      TaskAlreadyExistsError,
+    );
+
+    const state = JSON.parse(await readFile(join(taskDir, "state.json"), "utf-8")) as { title: string };
+    expect(state.title).toBe("Original task");
   });
 
   it("stores a Jira key when given", async () => {

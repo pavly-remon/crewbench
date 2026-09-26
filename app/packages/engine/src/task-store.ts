@@ -114,33 +114,55 @@ export interface CreateTaskParams {
   owner?: "plugin" | "app";
 }
 
+/** Real, disclosed bug fix (Copilot review #11): `makeTaskId()` mints
+ * only a 16-bit random suffix -- a genuine, if rare, collision is
+ * possible for two tasks created in the same minute with a similar
+ * enough description to also collide on the slug. Before this,
+ * `createTask()`'s own `mutateState()` callback ignored whatever
+ * `current` state already existed at `taskDir` and unconditionally
+ * returned a brand-new object, silently overwriting a real, existing
+ * task's `state.json` (and everything else in that directory a caller
+ * might still be writing to) under a colliding id. Thrown from *inside*
+ * `mutateState()`'s own locked critical section -- the same lock that
+ * performs the write -- so the existence check is genuinely atomic with
+ * the write, not a separate check-then-create race of its own. */
+export class TaskAlreadyExistsError extends Error {
+  constructor(public readonly id: string) {
+    super(`a task already exists at this id: ${id}`);
+    this.name = "TaskAlreadyExistsError";
+  }
+}
+
 /** Ported from crewbench_state.py's cmd_new(). Emits `task.created`, same
  * as the plugin's `crewbench_state.py new`. */
 export async function createTask(taskDir: string, params: CreateTaskParams): Promise<TaskState> {
-  const state = await mutateState(taskDir, () => ({
-    schema_version: SCHEMA_VERSION,
-    id: params.id,
-    command: params.command,
-    title: params.title,
-    created_at: nowIso(),
-    updated_at: nowIso(),
-    phase: "scoping",
-    round: 0,
-    lineup: {},
-    base_commit: params.baseCommit ?? null,
-    branch: params.branch ?? null,
-    worktree: null,
-    jira_key: params.jiraKey ?? null,
-    host_override: null,
-    doctor: {},
-    acceptance_criteria: [],
-    design_spec_file: params.designSpecFile ?? null,
-    spec_file: null,
-    rounds: [],
-    usage: {},
-    notes: [],
-    ...(params.owner ? { owner: params.owner } : {}),
-  }));
+  const state = await mutateState(taskDir, (current) => {
+    if (current) throw new TaskAlreadyExistsError(params.id);
+    return {
+      schema_version: SCHEMA_VERSION,
+      id: params.id,
+      command: params.command,
+      title: params.title,
+      created_at: nowIso(),
+      updated_at: nowIso(),
+      phase: "scoping",
+      round: 0,
+      lineup: {},
+      base_commit: params.baseCommit ?? null,
+      branch: params.branch ?? null,
+      worktree: null,
+      jira_key: params.jiraKey ?? null,
+      host_override: null,
+      doctor: {},
+      acceptance_criteria: [],
+      design_spec_file: params.designSpecFile ?? null,
+      spec_file: null,
+      rounds: [],
+      usage: {},
+      notes: [],
+      ...(params.owner ? { owner: params.owner } : {}),
+    };
+  });
   await appendEvent(taskDir, "task.created", { command: params.command, title: params.title, jira_key: params.jiraKey ?? null });
   return state;
 }

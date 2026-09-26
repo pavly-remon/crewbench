@@ -18,6 +18,7 @@ import {
   setField,
   startScoping,
   continueScoping,
+  TaskAlreadyExistsError,
   worktreePath as computeWorktreePath,
   type FullEngineState,
 } from "@crewbench/engine";
@@ -101,9 +102,23 @@ export async function runCommand(argv: string[], root: string): Promise<void> {
   const needsDesign = flags.design || (flags.yes ? false : await confirm("Use the ui-ux role for this task?", false));
 
   // --- Task creation ---
-  const taskId = makeTaskId(taskText);
-  const taskDir = join(projectRoot, ".crewbench", "tasks", taskId);
-  await createTask(taskDir, { id: taskId, command: "new-task", title, jiraKey });
+  // Real, disclosed bug fix (Copilot review #11) -- same real collision
+  // retry `routes/tasks-mutating.ts`'s own app-side task-creation
+  // endpoint now does; see `TaskAlreadyExistsError`'s own docstring in
+  // `@crewbench/engine` for the full story.
+  let taskId = "";
+  let taskDir = "";
+  for (let attempt = 0; ; attempt++) {
+    taskId = makeTaskId(taskText);
+    taskDir = join(projectRoot, ".crewbench", "tasks", taskId);
+    try {
+      await createTask(taskDir, { id: taskId, command: "new-task", title, jiraKey });
+      break;
+    } catch (err) {
+      if (err instanceof TaskAlreadyExistsError && attempt < 4) continue;
+      throw err;
+    }
+  }
   if (spec) {
     const specPath = join(taskDir, "spec.json");
     await writeFile(specPath, JSON.stringify(spec, null, 2) + "\n", "utf-8");

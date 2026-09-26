@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { createTask, makeTaskId } from "@crewbench/engine";
+import { createTask, makeTaskId, TaskAlreadyExistsError } from "@crewbench/engine";
 import { ApiCreateTaskRequestSchema, ApiTaskDetailSchema } from "@crewbench/contract";
 import { getProject } from "../registry.js";
 import type { DaemonWatcher } from "../watcher.js";
@@ -28,11 +28,29 @@ export function registerMutatingTaskRoutes(app: FastifyInstance, watcher: Daemon
       return;
     }
     const { task_text: taskText, jira_key: jiraKey } = parsed.data;
-
-    const taskId = makeTaskId(taskText);
-    const taskDir = join(project.path, ".crewbench", "tasks", taskId);
     const title = taskText.slice(0, 60);
-    await createTask(taskDir, { id: taskId, command: "new-task", title, jiraKey: jiraKey ?? null, owner: "app" });
+
+    // Real, disclosed bug fix (Copilot review #11): makeTaskId()'s
+    // 16-bit random suffix can genuinely collide (task-store.ts's own
+    // TaskAlreadyExistsError docstring has the full story) -- createTask()
+    // now refuses to silently overwrite an existing task's state.json
+    // rather than clobbering it, so a collision here is retried with a
+    // freshly-minted id instead of surfacing as a confusing 500. A tight
+    // bound (5 attempts) is plenty: even a genuine collision is rare
+    // enough that needing a second attempt should itself be rare.
+    let taskId = "";
+    let taskDir = "";
+    for (let attempt = 0; ; attempt++) {
+      taskId = makeTaskId(taskText);
+      taskDir = join(project.path, ".crewbench", "tasks", taskId);
+      try {
+        await createTask(taskDir, { id: taskId, command: "new-task", title, jiraKey: jiraKey ?? null, owner: "app" });
+        break;
+      } catch (err) {
+        if (err instanceof TaskAlreadyExistsError && attempt < 4) continue;
+        throw err;
+      }
+    }
 
     // See watcher.ts's registerTask() docstring -- registered immediately
     // rather than waiting for the fs watcher's own debounced index.json
