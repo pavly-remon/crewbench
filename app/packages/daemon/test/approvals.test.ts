@@ -167,6 +167,67 @@ describe("approvals: GET /api/approvals, POST /api/tasks/:tid/approvals/:aid (Ph
     expect(afterRows.some((r) => r.id === pendingId)).toBe(false);
   }, 30_000);
 
+  /** Real, disclosed bug (Copilot review #7): `reduce.ts` already has a
+   * real, unit-tested `"commit.declined"` transition
+   * (`phase: "stopped", stuckReason: "user declined the commit"`), but
+   * `drive.ts`'s own decline branch used to just `console.log` and
+   * `break` -- exiting the loop before ever calling `reduce()` for it or
+   * reaching the trailing `setField()` calls at the loop's own bottom.
+   * `state.json`'s on-disk phase stayed stuck at "awaiting_commit"
+   * forever; a later daemon restart would read that non-terminal phase
+   * and wrongly re-enter the approval flow for a task that was actually
+   * declined and done. This drives a real task to a real pending commit
+   * approval (the same pattern the accept-path test above uses) and
+   * resolves it with a real `decision: "no"` instead, proving the task
+   * actually reaches a real, persisted terminal state -- not just that
+   * the HTTP call returned 200. */
+  it("commit: declining a real pending commit approval actually persists 'stopped', not left stuck at 'awaiting_commit'", async () => {
+    const fakeCli = await fakeClaudeCli();
+    process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = fakeCli;
+    daemon = await startDaemon({ port: 0 });
+    const headers = { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" };
+    const repo = await gitRepo("crewbench-approvals-decline-");
+    const { taskId } = await createFinalizedTask(headers, repo);
+
+    const lineupRes = await fetch(url(`/api/tasks/${taskId}/lineup`), { method: "POST", headers, body: JSON.stringify(LINEUP_BODY) });
+    expect(lineupRes.status).toBe(200);
+
+    let pendingId = "";
+    await waitFor(async () => {
+      const res = await fetch(url("/api/approvals"), { headers });
+      const rows = (await res.json()) as Array<{ task_id: string; kind: string; id: string }>;
+      const row = rows.find((r) => r.task_id === taskId && r.kind === "commit");
+      if (!row) return false;
+      pendingId = row.id;
+      return true;
+    });
+
+    const resolveRes = await fetch(url(`/api/tasks/${taskId}/approvals/${pendingId}`), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "no" }),
+    });
+    expect(resolveRes.status).toBe(200);
+
+    // The actual unblock claim: phase genuinely reaches "stopped" with a
+    // real stuck_reason, and the daemon genuinely stops driving the
+    // task -- not just that the HTTP call returned 200.
+    await waitFor(async () => {
+      const res = await fetch(url(`/api/tasks/${taskId}`), { headers });
+      const detail = (await res.json()) as { phase: string; active: boolean; stuck_reason: string | null };
+      return detail.phase === "stopped" && detail.active === false && detail.stuck_reason === "user declined the commit";
+    });
+
+    // No commit ever landed -- a real, negative confirmation the decline
+    // was genuinely honored, not silently ignored.
+    const log = await git(["log", "--oneline", "-5"], repo).catch(() => "");
+    expect(log.toLowerCase()).not.toContain("reverse");
+
+    const afterRes = await fetch(url("/api/approvals"), { headers });
+    const afterRows = (await afterRes.json()) as Array<{ id: string }>;
+    expect(afterRows.some((r) => r.id === pendingId)).toBe(false);
+  }, 30_000);
+
   it("404s resolving an unknown approval id, and resolving an already-resolved one twice", async () => {
     daemon = await startDaemon({ port: 0 });
     const headers = { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" };

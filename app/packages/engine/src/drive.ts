@@ -290,6 +290,24 @@ export async function driveTask(p: DriveTaskParams): Promise<void> {
       } else if (command.type === "request_commit_approval") {
         if (p.yes) {
           console.log("Not committing (--yes always declines commit approval).");
+          // Real, disclosed gap caught by review: `reduce.ts` already
+          // has a real, unit-tested `"commit.declined"` transition
+          // (`phase: "stopped", stuckReason: "user declined the
+          // commit"`), but this `break` used to exit the loop before
+          // ever calling it *or* reaching the trailing `setField()`
+          // calls at the loop's own bottom -- `state.json`'s on-disk
+          // phase stayed stuck at whatever `decide()` last saw as
+          // "awaiting_commit" (the phase that produced this very
+          // command in the first place). A daemon restart later reads
+          // that stale, non-terminal phase and wrongly re-enters the
+          // approval flow for a task that was actually declined and
+          // done. Persisted explicitly here, not left to the trailing
+          // calls, for the identical reason `persistCancelled()`'s own
+          // docstring already explains for the cancellation case: this
+          // `break` exits before ever reaching them.
+          state = reduce(state, { type: "commit.declined" });
+          await setField(p.taskDir, "phase", state.phase);
+          await setField(p.taskDir, "stuck_reason", state.stuckReason);
           break;
         }
         const diff = p.worktree ? await diffStat(p.worktree, p.base) : null;
@@ -297,6 +315,11 @@ export async function driveTask(p: DriveTaskParams): Promise<void> {
         const commitDecision = await askApproval(p, "commit", { title: p.title, diffStat: diff });
         if (commitDecision.decision !== "yes") {
           console.log("Not committing. Leaving the work as-is.");
+          // Same real, disclosed gap as the `--yes` branch just above --
+          // see its own comment for the full story.
+          state = reduce(state, { type: "commit.declined" });
+          await setField(p.taskDir, "phase", state.phase);
+          await setField(p.taskDir, "stuck_reason", state.stuckReason);
           break;
         }
         const message = ((commitDecision.data as { message?: string } | undefined)?.message || p.title).trim() || p.title;
