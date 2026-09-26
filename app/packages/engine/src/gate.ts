@@ -4,10 +4,37 @@ import { join } from "node:path";
 import type { GateResult, GateStepResult } from "./types.js";
 import { shellSplit } from "./shell-split.js";
 import { GRACEFUL_KILL_TIMEOUT_S, hardKillProcessGroup, terminateProcessGroup } from "./process-kill.js";
-import { appendEvent } from "./contract-fs.js";
+import { appendEvent, atomicWriteJson, lockedReadModifyWrite, nowIso, readJsonOrDefault } from "./contract-fs.js";
 
 const MAX_TAIL_LINES = 200;
 export const DEFAULT_GATE_TIMEOUT_S = 600;
+
+/** Real, disclosed bug fix (Copilot review #10): a gate command is a
+ * real in-flight subprocess exactly like a role dispatch, but before
+ * this it never wrote a `status.json` entry at all -- `runner.ts`'s own
+ * `cancelRun()` (the only cancellation mechanism this codebase has,
+ * `routes/task-control.ts`'s cancel route iterates `status.json`'s
+ * `"running"` entries and calls it for each) had nothing to find, so
+ * cancelling a task while its gate was running left the gate process
+ * running until completion or timeout -- possibly still mutating the
+ * project (a lint --fix, a test run with side effects) after the user
+ * believed they'd cancelled. Reuses the exact same run-name convention
+ * `gate-r<round>` already established elsewhere in this codebase
+ * (`gate-r${round}.result.json`/`.log`, and `routes/task-control.ts`'s
+ * own retry-run route already treats `gate-rN` as a real run name) and
+ * the identical locked-read-modify-write shape `runner.ts`'s own
+ * (private, unexported) `updateStatus()` uses -- not imported from
+ * there since gate.ts has no dependency on runner.ts today and adding
+ * one just to share four lines isn't worth the coupling. */
+async function updateGateStatus(runsDir: string, run: string, fields: Record<string, unknown>): Promise<void> {
+  const statusPath = join(runsDir, "status.json");
+  const lockPath = join(runsDir, ".status.lock");
+  await lockedReadModifyWrite(lockPath, async () => {
+    const status = await readJsonOrDefault<Record<string, Record<string, unknown>>>(statusPath, {});
+    status[run] = { ...(status[run] ?? {}), ...fields };
+    await atomicWriteJson(statusPath, status);
+  });
+}
 
 interface ProjectCommands {
   format_check?: string | null;
@@ -42,7 +69,14 @@ export function stepsToRun(commands: ProjectCommands): [string, string][] {
   return steps;
 }
 
-async function runStep(name: string, command: string, cwd: string, timeoutS: number): Promise<{ step: GateStepResult; output: string }> {
+async function runStep(
+  name: string,
+  command: string,
+  cwd: string,
+  timeoutS: number,
+  runsDir: string,
+  run: string,
+): Promise<{ step: GateStepResult; output: string }> {
   const start = Date.now();
   const argv = shellSplit(command);
   const child = spawn(argv[0] as string, argv.slice(1), {
@@ -50,6 +84,16 @@ async function runStep(name: string, command: string, cwd: string, timeoutS: num
     detached: process.platform !== "win32",
     windowsHide: true,
   });
+
+  // Real, disclosed fix (Copilot review #10, this file's own top-of-file
+  // docstring has the full story): record the real pid the instant it's
+  // known, exactly like runner.ts's dispatchRole() already does via its
+  // own onSpawn callback -- `cancelRun()` (routes/task-control.ts's
+  // cancel route) can only kill what status.json actually tells it is
+  // running.
+  if (child.pid !== undefined) {
+    await updateGateStatus(runsDir, run, { state: "running", pid: child.pid, started_at: nowIso() });
+  }
 
   let output = "";
   child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString("utf-8")));
@@ -79,6 +123,17 @@ async function runStep(name: string, command: string, cwd: string, timeoutS: num
 
   const durationS = Math.round((Date.now() - start) / 100) / 10;
   const tail = output.split("\n").slice(-MAX_TAIL_LINES).join("\n");
+  // Same finalization runner.ts's own dispatchRole() does after its
+  // child exits -- and the same real, pre-existing race that already
+  // exists there too, disclosed rather than silently assumed away: if
+  // `cancelRun()` fires concurrently, whichever write lands last wins.
+  // Not a new gap this fix introduces; matching this codebase's own
+  // established behavior for the identical situation elsewhere, not a
+  // regression to solve here.
+  await updateGateStatus(runsDir, run, {
+    state: timedOut ? "failed" : exitCode === 0 ? "done" : "failed",
+    finished_at: nowIso(),
+  });
   return {
     step: { name, command, exit_code: timedOut ? null : exitCode, duration_s: durationS, timed_out: timedOut, output_tail: tail },
     output,
@@ -108,12 +163,13 @@ export async function runGate(
   const logPath = join(runsDir, `gate-r${round}.log`);
   await writeFile(logPath, "", "utf-8");
 
+  const run = `gate-r${round}`;
   if (steps.length === 0) {
     await appendFile(logPath, "no gate commands configured in project.json — nothing to run\n", "utf-8");
   }
   for (const [name, command] of steps) {
     await appendFile(logPath, `$ ${command}\n`, "utf-8");
-    const { step, output } = await runStep(name, command, cwd, timeoutS);
+    const { step, output } = await runStep(name, command, cwd, timeoutS, runsDir, run);
     await appendFile(logPath, output, "utf-8");
     if (output && !output.endsWith("\n")) await appendFile(logPath, "\n", "utf-8");
     const status = step.timed_out ? "timed out" : `exit ${step.exit_code}`;

@@ -3,6 +3,7 @@ import { tmpdir, platform } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runGate, stepsToRun } from "../src/gate.js";
+import { cancelRun } from "../src/runner.js";
 
 const NODE = process.execPath;
 
@@ -78,6 +79,61 @@ describe("runGate", () => {
     expect(step?.exit_code).toBeNull();
     expect(step?.duration_s).toBeLessThan(10);
   }, 15_000);
+
+  it.skipIf(platform() === "win32")(
+    "writes a real, killable status.json entry -- cancelRun() genuinely kills an in-flight gate step (Copilot #10)",
+    async () => {
+      // Real, disclosed bug this test proves fixed: before this fix,
+      // runGate() never wrote anything to runs/status.json at all, so
+      // routes/task-control.ts's cancel route (which only iterates
+      // status.json's own "running" entries and calls cancelRun() for
+      // each) had nothing to find -- cancelling a task mid-gate left the
+      // gate subprocess running to completion regardless. This drives a
+      // real, genuinely long-running step and calls the real, exported
+      // cancelRun() against it exactly the way the daemon's own cancel
+      // route does, not a mock.
+      const cwd = await newCwd();
+      const taskDir = join(cwd, "task");
+      await writeProjectJson(cwd, { lint: `${NODE} -e "setTimeout(() => {}, 30000)"` });
+
+      const gatePromise = runGate(cwd, taskDir, 1);
+      const statusPath = join(taskDir, "runs", "status.json");
+
+      // Wait for the real "running" status entry with a real pid -- the
+      // actual claim this fix makes, not assumed to appear instantly.
+      let pid: number | undefined;
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        try {
+          const status = JSON.parse(await readFile(statusPath, "utf-8")) as Record<string, { state?: string; pid?: number }>;
+          if (status["gate-r1"]?.state === "running" && typeof status["gate-r1"]?.pid === "number") {
+            pid = status["gate-r1"].pid;
+            break;
+          }
+        } catch {
+          // status.json not written yet
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(pid).toBeTypeOf("number");
+
+      const start = Date.now();
+      const { cancelled } = await cancelRun(taskDir, "gate-r1");
+      expect(cancelled).toBe(true);
+
+      // The real unblock claim: runGate() itself resolves well under the
+      // step's own 30s sleep, because the process was actually killed,
+      // not because it happened to finish on its own.
+      const { result } = await gatePromise;
+      const elapsedS = (Date.now() - start) / 1000;
+      expect(elapsedS).toBeLessThan(10);
+      expect(result.ok).toBe(false);
+
+      const finalStatus = JSON.parse(await readFile(statusPath, "utf-8")) as Record<string, { state?: string }>;
+      expect(finalStatus["gate-r1"]?.state).toBe("failed");
+    },
+    15_000,
+  );
 
   it("honors a project-json path override", async () => {
     const cwd = await newCwd();
