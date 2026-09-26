@@ -1,0 +1,198 @@
+name: CI (app)
+
+on:
+  push:
+    branches: [main]
+    # Phase 4 milestone 5 (Design decision 8): a `v*` tag push is what
+    # gates the new `publish` job below.
+    #
+    # Real, disclosed constraint found reading GitHub's own docs before
+    # writing this, not assumed: `on.push.paths` and `on.push.tags` in
+    # the *same* push filter block are ANDed together, not ORed -- a
+    # release tag pushed against an already-merged commit often carries
+    # no file diff of its own for GitHub to match against `paths` at
+    # all, which would silently skip the exact run this job exists for.
+    # There's no way in this syntax to say "apply `paths` to branch
+    # pushes only, not tag pushes," within one `on.push:` block -- so
+    # `paths` is dropped entirely here rather than risk a release
+    # silently not building. The real, accepted trade-off: every push to
+    # `main` now runs this workflow, even ones that don't touch
+    # `app/**`/`schemas/**` (previously skipped) -- extra CI minutes,
+    # never an extra risk, and `pull_request` below still keeps its own
+    # `paths` filter unchanged (a tag is never a pull request, so this
+    # trade-off doesn't apply there).
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "app/**"
+      - "schemas/**"
+      - ".github/workflows/ci-node.yml"
+
+# Separate workflow file from ci.yml (the Python plugin suite) -- a
+# different language's job interleaved into that matrix risks an unrelated
+# edit breaking both (see docs/app/phase-1-plan.md's open question 4).
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm typecheck
+
+  package-smoke:
+    # Phase 4 milestone 1: proves the actual published-package claim, not
+    # just that the bundle builds. `npm publish --dry-run` never touches
+    # the real registry (no --dry-run omitted, ever, in this job); `npm
+    # pack` + a real `npm install` of that tarball into a clean directory
+    # outside the workspace + running the installed binary for real is
+    # what actually proves a fresh `npm i -g crewbench` would work, on
+    # each of the 3 OSes this repo already tests against (finding 11 in
+    # docs/app/phase-4-plan.md -- extending the existing matrix, not a
+    # second parallel workflow).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # packages/cli's own package.json name is the unscoped "crewbench"
+      # (it's the published npm package name, not an internal @crewbench/*
+      # workspace name like every other package here) -- a real bug this
+      # job's own name had, caught live: `--filter @crewbench/cli` matches
+      # zero workspace projects and pnpm exits 0 silently ("Scope: 0 of 7
+      # workspace projects"), so this step looked green while doing
+      # nothing at all, and the next step then failed on a publish/
+      # directory that was never created.
+      - run: pnpm --filter crewbench build:publish
+      - name: npm publish --dry-run (never a real publish)
+        working-directory: app/packages/cli/publish
+        run: npm publish --dry-run
+      - name: npm pack
+        working-directory: app/packages/cli/publish
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: install the packed tarball into a clean directory
+        shell: bash
+        run: |
+          set -eu
+          install_dir="$RUNNER_TEMP/crewbench-install-smoke"
+          mkdir -p "$install_dir"
+          cd "$install_dir"
+          npm init -y >/dev/null
+          tarball=$(ls "$RUNNER_TEMP"/crewbench-*.tgz)
+          npm install "$tarball"
+      - name: run the installed binary for real
+        shell: bash
+        run: |
+          set -eu
+          install_dir="$RUNNER_TEMP/crewbench-install-smoke"
+          cd "$install_dir"
+          bin="./node_modules/.bin/crewbench"
+          "$bin" --help
+          # `doctor` legitimately exits non-zero here -- none of the 4
+          # real CLIs are installed on this runner, so `allOk` is false
+          # by design (doctorCommand.ts). That's not what this step is
+          # proving: the real claim is that the *installed, standalone*
+          # binary resolves its own bundled schemas/agents/config
+          # (findRoot()) and produces a real per-CLI report for all four
+          # names, not that this runner happens to have them logged in.
+          # A crash, a missing-root error, or a truncated report would
+          # still fail this step via the grep checks below.
+          output=$("$bin" doctor || true)
+          echo "$output"
+          for cli in claude codex agy copilot; do
+            echo "$output" | grep -q "^$cli: " || { echo "missing $cli's own doctor report line"; exit 1; }
+          done
+
+  check-schemas:
+    # Fails if the checked-in root schemas/*.json drifted from what the zod
+    # schemas in app/packages/contract would generate -- the zod schema is
+    # the source of truth (see app/package.json's check:schemas script).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @crewbench/contract build
+      - run: pnpm check:schemas
+
+  publish:
+    # Phase 4 milestone 5 (Design decision 8, finding 11) -- extends this
+    # existing 3-OS-tested workflow with a real release step, rather than
+    # a second, parallel workflow file. Gated on a `v*` tag push
+    # specifically (`github.ref` for a tag push is `refs/tags/v1.2.3`,
+    # never true for a branch push or a pull_request event) and on every
+    # one of the three existing jobs above actually succeeding first --
+    # `needs:` only enforces job *ordering* within this one workflow run;
+    # since a tag push triggers the whole workflow (not just this job),
+    # `test`/`package-smoke`/`check-schemas` genuinely re-run against the
+    # tagged commit itself, on all 3 OSes, before this job is even
+    # allowed to start. This job's own real `npm publish` step is
+    # intentionally NOT run in this milestone's own verification --
+    # writing and reading this YAML carefully against `package-smoke`'s
+    # own already-proven `build:publish`/`npm pack` sequence is how it
+    # was checked, not a real tag push (see the milestone log for the
+    # full, disclosed reasoning: a real publish is Open question 5's own
+    # still-open step, deliberately not taken here).
+    needs: [test, package-smoke, check-schemas]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    permissions:
+      contents: read
+      id-token: write # npm provenance (npm publish --provenance) needs this
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @crewbench/ui build
+      - run: pnpm --filter crewbench build:publish
+      - name: publish to npm
+        working-directory: app/packages/cli/publish
+        # NPM_TOKEN is a real, separate repo secret this job needs to be
+        # granted before a real tag push can ever reach this step -- not
+        # added or configured by this milestone (no credential exists in
+        # this session to add one with, and doing so isn't this
+        # milestone's own scope per Open question 5 staying open). A tag
+        # push before that secret exists fails this one step loudly,
+        # after every real build/test/smoke check above has already
+        # passed -- a safe, visible failure mode, not a silent no-op.
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

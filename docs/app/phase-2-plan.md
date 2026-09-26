@@ -1,0 +1,751 @@
+# Phase 2 — Daemon + read-only UI
+
+Status: **done** (all 6 milestones complete, 2026-09-19)
+
+Read first: `docs/app/CONTEXT.md`, `docs/app/contract/README.md`,
+`docs/app/contract/events.md`, `docs/app/phase-1-plan.md`'s milestone
+log (what actually shipped, including deviations), and the Phase 1
+packages themselves (`contract`, `adapters`, `engine`, `cli`).
+
+## Goal (unchanged from the phase prompt)
+
+Run `crewbench ui` to start a local daemon and open a browser UI that
+shows every crewbench task in registered projects — including tasks
+started from the plugin inside Claude Code/Codex/Copilot/agy — with live
+agent progress. Read-only this phase: no starting, cancelling or
+approving tasks from the UI yet (that's Phase 3).
+
+## What Phase 2 reuses from Phase 1, unchanged
+
+- `packages/contract`'s zod schemas validate every API response — no new
+  schemas needed for reading state, only new ones for API request/response
+  envelopes not already covered (see Design decisions).
+- `packages/engine`'s `loadState()`/`rehydrateState()`
+  (`packages/engine/src/resume.ts`, milestone 6) already does the "read
+  `.crewbench/` and reconstruct full state including the issue registry"
+  work the daemon's task-detail endpoint needs — the daemon calls this,
+  it doesn't reimplement it.
+- The daemon **never writes** to `.crewbench/` this phase (read-only UI) —
+  no runner, no git ops, no gate. It only watches, reads, and serves.
+
+## Design decisions
+
+1. **HTTP framework: Fastify.** Both Fastify and Hono are listed as
+   options in `docs/app/CONTEXT.md`'s stack. Picking Fastify: mature SSE
+   support via plugins, built-in schema validation hooks that compose
+   well with zod (via `fastify-type-provider-zod`), and it's what most
+   Node devs reaching for "a real HTTP server with plugins" expect —
+   Hono's edge-first design buys nothing here since this only ever runs
+   as a local Node process. Flagging for confirmation since
+   `docs/app/CONTEXT.md` lists it as an "or."
+2. **File watching: chokidar.** Not explicitly named in the stack list.
+   Needed for "watch each project's `.crewbench/` ... with a robust file
+   watcher, debounced" — chokidar is the de facto standard for
+   cross-platform (including Windows) debounced watching with glob
+   support, and multiple projects' trees need watching simultaneously.
+   Listing it here per the working agreement's "new dependency needs a
+   reason in the plan."
+3. **In-memory index, not a database.** The phase prompt says "files stay
+   the source of truth" — the daemon's in-memory index
+   (`project -> tasks -> state summary`) is rebuilt from disk on startup
+   (a full scan) and kept current by the watcher, never persisted itself.
+   This also makes "killing and restarting the daemon mid-task loses
+   nothing" (Definition of Done) trivially true for the read side: the
+   next startup just re-scans.
+4. **SSE replay via `Last-Event-ID`.** The `run.*`/`gate.*`/etc. events in
+   `events.jsonl` already carry a monotonic `seq` per
+   `docs/app/contract/events.md` — reusing `seq` as the SSE event id
+   means a reconnecting client's `Last-Event-ID` header maps directly to
+   "resume tailing `events.jsonl` from this seq," which is just re-reading
+   already-buffered lines, not a new replay mechanism.
+5. **Legacy (`schema_version` 0, plugin-only) task handling.** Per
+   `docs/app/contract/events.md`'s "Legacy tasks" section (already
+   documented from Phase 1 milestone 6's resume work): no `events.jsonl`
+   at all. The daemon's watcher treats a missing `events.jsonl` as "no
+   live event stream, state.json polling only" rather than an error — the
+   task still appears on the board and in task detail with whatever
+   `state.json`/`status.json` has, and the UI labels the gaps (no
+   agent-lane live stream) instead of crashing. This is the same
+   "graceful, not silent-failure" contract Phase 1 already established
+   for legacy tasks.
+6. **UI stack scope for this phase.** `docs/app/CONTEXT.md` names React +
+   Vite + TanStack Query + TanStack Router + Tailwind + shadcn/ui, and a
+   diff viewer component. Adding here, since they're new to `app/`:
+   TanStack Query for all data fetching + SSE-driven cache updates,
+   TanStack Router for the 5 screens listed in the phase prompt, Tailwind
+   v4 (CSS-first config, current stable) + shadcn/ui for components, and
+   `react-diff-view` (or `diff2html`, TBD at milestone 5 when the diff tab
+   is actually built — not deciding now since it's not needed until then)
+   for the diff viewer.
+7. **Auth token delivery.** The phase prompt: "`crewbench ui` opens the
+   browser with the token, and the UI keeps it in memory." Concretely:
+   the token is a URL fragment (`http://127.0.0.1:<port>/#token=<token>`),
+   never a query param — fragments aren't sent to the server or logged in
+   access logs/browser history the same way, and the UI's bootstrap JS
+   reads it once from `location.hash`, strips it from the URL via
+   `history.replaceState`, and holds it in memory (a module-level
+   variable, not `localStorage` — the token is per-daemon-process-life,
+   and persisting it would let a stale token outlive a daemon restart).
+   Every subsequent API call sends it as `Authorization: Bearer <token>`.
+
+## Milestones
+
+Mapped 1:1 to the phase prompt's own list, each ending in its own
+commit(s), passing tests, and a note appended below.
+
+### 1. Daemon skeleton + auth token + project registry + task listing API
+
+- `packages/daemon`: Fastify app, binds `127.0.0.1` only (never
+  `0.0.0.0`, asserted with a test that inspects the actual listen
+  address). Configurable port via `--port`/`config.json`, falls back to
+  the next free port if the default is busy (matching the phase prompt's
+  "pick a fixed one, and fall back if it is busy").
+- Auth: random token (crypto-strong, `node:crypto`'s `randomBytes`)
+  generated at daemon startup, held in memory only. A Fastify
+  `onRequest` hook rejects any request missing/mismatching
+  `Authorization: Bearer <token>` with 401, **and** checks the `Origin`
+  header against `http://127.0.0.1:<port>`/`http://localhost:<port>`,
+  rejecting anything else with 403 (defends against a malicious page on
+  another origin making authenticated requests via a leaked token, and
+  against DNS-rebinding-style attacks).
+- Project registry: `~/.crewbench/projects.json` — zod schema in
+  `packages/contract` (new: no Python equivalent exists, this is an
+  app-only file, never read by the plugin). `POST /api/projects` and
+  `DELETE /api/projects/:pid` validate the path is an existing git repo
+  (`git rev-parse --is-inside-work-tree`) before adding.
+- `GET /api/projects`, `GET /api/projects/:pid/tasks` — the latter reads
+  `.crewbench/index.json` per project (already the plugin's existing
+  index file, per `docs/app/contract/README.md`) rather than scanning
+  `tasks/*/state.json` individually, for the same reason
+  `crewbench_state.py list` does today: `index.json` is the fast path,
+  full state is loaded lazily per task.
+- Every response shape gets its own new zod schema in
+  `packages/contract` (API envelopes, not just the existing file
+  schemas) so `fastify-type-provider-zod` can validate on the way out —
+  catches a daemon bug serializing something schema-invalid before a
+  client ever sees it.
+
+### 2. Watchers + events tail + SSE with replay + tests
+
+- `packages/daemon`'s watcher layer: one chokidar watcher per registered
+  project's `.crewbench/` tree, debounced (matching the phase prompt),
+  updating the in-memory index on `index.json`/`state.json`/`status.json`
+  changes.
+- `events.jsonl` tailing: track a byte offset per task, read only the
+  newly appended bytes on each change event (not the whole file), parse
+  complete lines (buffering a trailing partial line until the next read)
+  — this is the piece that has to be correct under concurrent writes
+  from a real running crewbench process, so it's tested against a real
+  file being appended to mid-read, not just a static fixture.
+- `GET /api/tasks/:tid/events` (per-task SSE) and `GET /api/events`
+  (global, task-level events only — task created/phase changed/task
+  done, not full per-run event noise) both support `Last-Event-ID` replay
+  per Design decision 4.
+- Tests: simulate a plugin writing files (spawn a real background process
+  appending to a fixture `events.jsonl` and touching `state.json`, same
+  "real subprocess, not a mock" standard Phase 1 held itself to for
+  cross-compat), assert the SSE client receives the right sequence, and
+  assert a reconnect with `Last-Event-ID` gets exactly the missed events,
+  no duplicates and no gaps.
+
+### 3. UI shell, routing, theming, projects page, live task board
+
+- `packages/ui`: Vite + React + TanStack Router scaffold, Tailwind v4 +
+  shadcn/ui base components, dark/light theme (`prefers-color-scheme`
+  default, explicit toggle persisted in `localStorage` — a per-viewer
+  convenience, not state the daemon needs to know about).
+- Bootstrap: reads the token from `location.hash` per Design decision 7,
+  a TanStack Query client configured to attach it to every request and
+  to an `EventSource`-equivalent SSE client (native `EventSource` can't
+  send custom headers, so this needs a small wrapper — either the token
+  as a one-time-use query param on the SSE connection specifically,
+  scoped to that endpoint only and short-lived, or a fetch-based SSE
+  polyfill; deciding the exact mechanism at milestone 3, not guessing
+  now).
+- **Projects** screen: cards (active/recent task counts), "add project"
+  dialog (path input, calls the milestone-1 validation endpoint, surfaces
+  the exact git-repo-check failure if it fails).
+- **Task board**: columns by phase (`scoping, design, implementing,
+  verifying, fixing, awaiting_commit, done, stopped, failed` — matching
+  `schemas/task-state.json`'s enum exactly, same as the engine's phases),
+  live via the global SSE stream from milestone 2. Cards: title, round
+  `N/max`, role avatars with live status dots, Jira key if present,
+  elapsed time.
+
+### 4. Task detail: header, rounds timeline, agent lanes (live)
+
+- `GET /api/tasks/:tid` (state + spec + rounds + usage, assembled server-
+  side from `rehydrateState()`'s output) and `GET
+  /api/tasks/:tid/runs/:run/log?from=offset` (raw log tail, same
+  offset-based incremental read as the events tailer).
+- Task detail header: title, phase, round, branch/worktree, base commit,
+  lineup chips (role → cli · model · effort · permissions — reads
+  straight off `state.json.lineup`, already contract-shaped).
+- Rounds timeline: per round, gate result per step, tester/reviewer lanes
+  side by side, verdict (fix list sent / approved / stuck) — this is
+  effectively `docs/app/contract/README.md`'s round-data shape rendered,
+  not new data modeling.
+- Agent lanes: one per run, live event stream via the per-task SSE
+  endpoint (filtered client-side to that run), auto-scroll lock, raw log
+  toggle (falls back to the `/log` endpoint), duration, usage line, copy
+  resume-command button.
+
+### 5. Issues/failures tables, diff viewer, spec/screenshots tabs, warnings
+
+- `GET /api/tasks/:tid/diff?round=N|base`: unified diff vs `base_commit`
+  or a round's delta, computed via `git diff` in the project's worktree
+  (or main tree if the worktree was already removed — same "read from
+  wherever the git history actually is" the engine's own git-safety
+  snapshots already handle, just read-only here).
+- Issues table (every issue across rounds, severity, file:line, category,
+  per-round status, below-threshold flag) and test-failures table read
+  straight from the issue registry `rehydrateState()` already
+  reconstructs (Phase 1 milestone 3's work) — no new server-side logic,
+  just serializing it.
+- Diff tab (file tree + diff viewer, vs-base/round-delta toggle), spec
+  tab (acceptance criteria/scope/out-of-scope from the task-spec), and
+  screenshots tab (shown conditionally, only when a round produced any —
+  ui-ux/visual-verification artifacts, per `docs/app/contract/README.md`).
+- Warnings banner: surfaces the git-safety warnings
+  (`docs/app/phase-1-plan.md`'s milestone 4 git-ops work already
+  generates these — HEAD moved, branch switched, stash changed, etc.)
+  prominently, not buried in a log.
+
+### 6. Health + usage pages; polish; empty/loading/error states
+
+- `GET /api/doctor`: runs every adapter's `doctor()` for all four CLIs,
+  cached (doctor does real network/auth calls per Phase 1's adapters —
+  don't re-run on every page load; cache with a short TTL and a manual
+  refresh button).
+- Health page: doctor results per CLI, exact fix hint per failure (reuses
+  the adapters' own hint strings, doesn't reinvent them).
+- Usage page: per task and per role — runs, duration, tokens/cost where
+  known; unknown values render as `—`, never `0` (the phase prompt is
+  explicit about this — a `0` reads as "confirmed zero cost," which is
+  false when a CLI just doesn't report cost, per this repo's existing
+  `cost_usd: null` convention from Phase 0).
+- Empty/loading/error states audited for every screen built in
+  milestones 3–5 (no screen ships this milestone without all three), plus
+  the legacy-task degraded-view states from Design decision 5.
+
+## Files touched (new, this phase)
+
+`app/packages/daemon/` (new package), `app/packages/ui/` (new package),
+`app/packages/contract/` (new API-envelope schemas + `projects.json`
+schema — additive, no changes to existing file schemas),
+`app/packages/cli/src/commands/ui.ts` (new `crewbench ui` command),
+`docs/app/contract/README.md` (document `~/.crewbench/projects.json` and
+`~/.crewbench/config.json` if milestone 1 needs a port/config file — see
+open question 3). No existing `bin/*.py`, `schemas/*.json`,
+`lib/dispatch.md` or `skills/*/SKILL.md` changes — same "reads the
+plugin's behavior as spec, doesn't modify it" boundary as Phase 1.
+
+## Open questions
+
+1. **Playwright for the smoke test (Definition of Done item 3).** Not
+   currently a dependency anywhere in `app/`. Proposing to add it
+   scoped to `packages/ui` only (dev dependency), per the working
+   agreement's "new dependency needs a reason" — needed specifically for
+   the one board → task detail smoke test the Definition of Done
+   requires; not proposing broader e2e UI coverage this phase beyond
+   that one flow plus the two named unit tests (rounds timeline, issues
+   table).
+2. **Component test framework for React.** `docs/app/CONTEXT.md`'s stack
+   list doesn't name one. Proposing Vitest (already the workspace
+   standard) + `@testing-library/react`, the standard pairing and the
+   least-new-tooling option given vitest is already everywhere else in
+   `app/`.
+3. **Where does the daemon's own port/config live?** The phase prompt
+   only mentions `~/.crewbench/projects.json` explicitly. Proposing
+   `~/.crewbench/config.json` now for the port (Phase 4's prompt already
+   plans to put "port, per-CLI concurrency limits, default lineup,
+   notification preferences" there) rather than inventing a separate
+   file this phase and migrating later — milestone 1 only needs the
+   `port` field, but the file's shape should already anticipate Phase
+   4's fields so it's additive, not a breaking rewrite. Flagging since
+   it means Phase 2 lightly pre-shapes a Phase 4 file.
+4. **`GET /api/events`'s definition of "task-level."** The phase prompt
+   says "global task-level events for the board," distinct from the
+   per-task full event stream. Proposing: only `task.created`,
+   `task.phase_changed`, `run.started`/`run.finished` (state-changing at
+   the board-card level), and `approval.requested` — filtering out
+   `run.message`/`run.tool_call`/`run.tool_error` (per-token/per-tool-call
+   noise, only relevant inside a specific agent lane). Needs the
+   `docs/app/contract/events.md` catalog checked against this list before
+   milestone 2 starts, since a `task.*`-prefixed event type doesn't exist
+   yet in the catalog — it's task-summary-level, synthesized by the
+   daemon itself from watching `state.json`/`index.json` changes, not
+   read from any single task's `events.jsonl` (which has no task-level
+   "phase changed" event of its own, only per-run events). Confirming
+   this is meant to be a daemon-synthesized stream, not a new contract
+   event type, before building it.
+
+## Milestone log
+
+### Milestone 1 — done (2026-09-19)
+
+- New `packages/daemon` package (Fastify 5, per Design decision 1).
+  Binds `127.0.0.1` only, asserted by a test that reads back the actual
+  listening address (never trusts the bind call alone). Port resolution
+  (`port.ts`): tries the preferred port (default 4287, or
+  `~/.crewbench/config.json`'s `port`, or `--port`), scans upward if
+  busy, and a `preferred === 0` sentinel resolves an OS-assigned
+  ephemeral port up front — needed because the auth hook's Origin
+  allowlist has to know the concrete port *before* the server starts
+  accepting connections, so Fastify's own `listen({port: 0})` (which
+  would only reveal the real port *after* binding) couldn't be used
+  directly for that case.
+- Auth (`auth.ts`): a random 32-byte token generated fresh in memory at
+  startup (never persisted). Every request needs `Authorization: Bearer
+  <token>` (constant-time compared via `timingSafeEqual`, not `===` — a
+  timing side-channel is low-stakes on a loopback server but cheap to
+  close) and, when an `Origin` header is present at all, it must match
+  `http://127.0.0.1:<port>` or `http://localhost:<port>` exactly.
+- Project registry (`registry.ts`): `~/.crewbench/projects.json`
+  (`CREWBENCH_HOME`-overridable for tests, mirroring `CREWBENCH_ROOT`'s
+  existing override pattern), a new app-only zod schema in
+  `packages/contract` (`registry.ts` — `RegisteredProject`,
+  `ProjectsRegistry`) since there's no Python-side file to port from.
+  `addProject()` validates the path is a real git repo (`git rev-parse
+  --is-inside-work-tree`) before writing, resolves it to absolute first,
+  and re-adding the same path updates the existing entry rather than
+  duplicating it.
+- Routes (`routes/projects.ts`): `GET/POST /api/projects`, `DELETE
+  /api/projects/:pid`, `GET /api/projects/:pid/tasks` — the last one
+  calls `packages/engine`'s existing `listTasks()` against the project's
+  `.crewbench/index.json`, unchanged from what the CLI's own `status`
+  command already reads. Every response is `.parse()`d against a new
+  `packages/contract` API-envelope schema (`api.ts` —
+  `ApiProjectListSchema`, `ApiTaskListSchema`) before being sent, per the
+  milestone's own design decision — this is deliberately manual
+  (`Schema.parse()` before `reply.send()`) rather than wired through
+  `fastify-type-provider-zod`: it gives the identical "every response is
+  schema-validated" guarantee with one fewer dependency, so that package
+  was dropped from `package.json` after prototyping showed it wasn't
+  needed for this milestone's actual route shapes (listed in the plan,
+  removed once redundant — noting the deviation, not silently).
+- **Caught one real bug via a failing test**: the first version of
+  `ApiTaskSummarySchema` was `.strict()` and didn't include
+  `schema_version` — `packages/engine`'s `listTasks()` index rows
+  (`indexEntry()` in `task-store.ts`) always carry that field, so every
+  real `GET /api/projects/:pid/tasks` call 500'd on
+  `unrecognized_keys`. Fixed by switching to `.catchall(z.unknown())`,
+  which is also the more correct shape per Design decision 5 (a legacy
+  or future-version index entry may carry fields this schema doesn't
+  know about yet — the daemon should serve those gracefully, not 500).
+- `crewbench ui [--port N] [--no-open]` (`packages/cli/src/commands/ui.ts`):
+  starts the daemon, prints and (unless `--no-open`) opens
+  `http://127.0.0.1:<port>/#token=<token>` — a URL fragment, not a query
+  param, per Design decision 7 (never sent to the server or logged
+  anywhere a query param would be). `SIGINT`/`SIGTERM` close the daemon
+  before exiting.
+- Verified live, not just via the fake-CLI-free test suite: ran the real
+  built `crewbench ui --no-open` binary, then `curl`'d the real listening
+  daemon directly — confirmed 401 (no token), 401 (wrong token), 403
+  (valid token + wrong Origin), and a real `POST /api/projects` against
+  this actual repo, all producing the expected real HTTP responses.
+- Full verification: `pnpm -r typecheck/build/test` all green (315 TS
+  tests: 25 contract + 107 adapters + 150 engine + 9 daemon + 24 cli);
+  Python suite (212 tests) unaffected and still green; `pnpm
+  check:schemas` still reports no drift (the new contract schemas aren't
+  in the generator's target list — API/registry shapes have no
+  Python-side file to generate).
+
+### Milestone 2 — done (2026-09-19)
+
+- `tail.ts`: incremental byte-offset reads of `events.jsonl` -- only the
+  bytes appended since the last read, split into complete lines with a
+  possibly-partial trailing line buffered for next time (the same "torn
+  line from a crash mid-write" tolerance `events.md` already documents,
+  extended to mid-write reads too). Each complete line is parsed and
+  validated against the existing `CrewbenchEventSchema` discriminated
+  union from `packages/contract` (Phase 0's port); a malformed line is
+  skipped, not thrown, so one bad line can never wedge the tail.
+- `watcher.ts`: one chokidar watcher per registered project's
+  `.crewbench/` tree (`awaitWriteFinish` for the phase prompt's own
+  "debounced"), maintaining an in-memory task-id -> project/taskDir index
+  (Design decision 3) built from `index.json` and kept current whenever
+  it changes -- confirmed live that chokidar picks up a `.crewbench/`
+  directory that doesn't exist yet at watch-start (the common case for a
+  freshly registered project with no tasks), including nested
+  `tasks/<id>/{state.json,events.jsonl}` appearing together, via a
+  standalone script before trusting it in the daemon.
+- **Design correction, not silently**: `docs/app/phase-2-plan.md`'s own
+  open question 4 proposed including `approval.requested` in the global
+  board feed's event-type allowlist. This milestone confirmed that event
+  type is never actually written to any `events.jsonl` anywhere in this
+  codebase -- Phase 1's approvals are resolved purely in-memory via
+  terminal prompts, with no persisted event. Dropped from
+  `GLOBAL_EVENT_TYPES`; the allowlist is `task.created`,
+  `task.phase_changed`, `task.round_started`, `run.started`,
+  `run.finished`.
+- `sse.ts` + `routes/events.ts`: `GET /api/tasks/:tid/events` (per-task,
+  replay-then-live) and `GET /api/events` (global, task-level only).
+  Per-task replay is disk-based and correct across a daemon restart
+  (files stay the source of truth); the global feed's replay buffer is
+  in-memory only, capped at 500 entries, and does **not** survive a
+  restart -- documented in `watcher.ts` rather than left implicit, since
+  the board's own initial paint comes from the milestone-1 REST listing
+  endpoints, not this stream. Both connect-then-subscribe in a specific
+  order (subscribe to live events first, buffer them, *then* read the
+  disk replay snapshot, then flush the buffer filtering out anything
+  already covered by the replay) so an event landing exactly at connect
+  time is never dropped or double-sent.
+- Tests (`test/watcher-sse.test.ts`): a real subprocess-free but
+  real-disk simulation -- `packages/engine`'s own `createTask()`/
+  `appendEvent()` write real files while a real running daemon's real
+  chokidar watcher observes them (the phase prompt's "simulate a plugin
+  writing files, and assert the SSE output," satisfied with the app's own
+  file-writing functions standing in for the plugin's, since both write
+  byte-identical files). Covers: live tailing, 404 on an unknown task id,
+  exact-replay-no-duplicates-no-gaps on a `Last-Event-ID` reconnect, and
+  the global feed's type filtering.
+- **Caught one real bug, in the test helper, not the daemon** (confirmed
+  by hand against the real built daemon with a standalone script before
+  concluding this): the first version of the tests' SSE-reading helper
+  raced each `reader.read()` against a short per-iteration `sleep()` and,
+  on a timeout, looped back and issued a *second* concurrent `read()`
+  while the first was still outstanding -- `Promise.race()` only returns
+  whichever settles first and discards the other's already-consumed
+  value, so a chunk that arrived just after one slice's timeout won was
+  silently thrown away. Fixed by never having more than one `read()`
+  outstanding at a time, raced only against a single whole-call deadline.
+- Fastify's `close()` needed `forceCloseConnections: true` -- an open SSE
+  stream is by design a long-lived keep-alive connection, and without
+  this flag `close()` waits for it to end on its own (which it may not,
+  if a client abort hasn't fully propagated to the socket), hanging
+  daemon shutdown. Caught via a real `afterEach` hook timeout, not
+  inspection.
+- Full verification: `pnpm -r typecheck/build/test` all green (319 TS
+  tests: 25 contract + 107 adapters + 150 engine + 13 daemon + 24 cli);
+  Python suite (212 tests) unaffected; `pnpm check:schemas` still reports
+  no drift.
+
+### Milestone 3 — done (2026-09-19)
+
+- New `packages/ui`: Vite + React 19 + TanStack Router + TanStack Query +
+  Tailwind v4 (CSS-first `@theme`/`@media (prefers-color-scheme)`
+  tokens) + a handful of small Radix-based primitives (`Button`, `Card`,
+  `Dialog`) in place of pulling in shadcn/ui's CLI scaffolding for three
+  components. **One implementation deviation from Design decision 6,
+  worth calling out**: routes are declared in code
+  (`src/router.tsx`, `createRootRoute`/`createRoute`/`createRouter`), not
+  via `@tanstack/router-plugin`'s file-based codegen -- skips a codegen
+  step entirely for a route tree this small (2 routes this milestone, 5
+  screens total across the whole phase), one less moving part. Still real
+  TanStack Router, satisfying the actual stack requirement.
+- Auth token bootstrap (`lib/auth.ts`): reads `location.hash` once on
+  load, strips it via `history.replaceState`, holds it in a
+  module-level variable (never `localStorage`) -- exactly Design
+  decision 7's plan, implemented as specified.
+- `lib/api.ts`: a bearer-token `fetch` wrapper for REST calls, plus a
+  hand-rolled fetch-based SSE reader (`openEventStream`) since the native
+  `EventSource` constructor has no way to attach the `Authorization`
+  header -- the milestone plan flagged this exact mechanism as
+  undecided-until-now; resolved here.
+- `useGlobalEvents()` (`api/events.ts`): subscribes to the daemon's
+  global feed (milestone 2) and invalidates the affected project's
+  task-list query on every event, so the live board updates by
+  refetching through the *same* query path its initial load already
+  uses, rather than a hand-maintained client-side cache patch that could
+  drift from it.
+- Pages: **Projects** (cards with active/recent counts, an "add project"
+  dialog wired to the milestone-1 `POST /api/projects` endpoint, with its
+  git-repo-validation error surfaced inline) and **Task board** (columns
+  for all nine `TASK_PHASES`, live-updating via `useGlobalEvents`).
+- **Real cross-package wiring, not just component-level plumbing**: the
+  daemon now actually serves this build. New `packages/daemon/src/
+  static-ui.ts` (`@fastify/static` + an SPA fallback to `index.html` for
+  any non-`/api/` GET that doesn't match a real file) registered from
+  `server.ts`, with the build path resolved relative to the daemon's own
+  package (sibling `packages/ui/dist`), `CREWBENCH_UI_DIST`-overridable.
+  If no build exists (e.g. the daemon's own test suite, or a dev
+  environment that hasn't built the UI yet), this is a silent no-op --
+  the API still works, there's just nothing to open in a browser.
+- **Caught one real bug via live testing, not a unit test**: with the UI
+  now served by the daemon, the existing `onRequest` auth hook (Design
+  decision from milestone 1) was rejecting the *page itself* with 401 --
+  a browser's own `<script src>`/`<link>` requests for `index.html`'s JS
+  and CSS never carry the `Authorization` header, and the page has to
+  finish loading before its own JS can even read the token out of the
+  URL fragment to start attaching it to `/api/*` calls. Fixed by scoping
+  the auth hook to `/api/` paths only (`auth.ts`) -- static assets carry
+  no secret of their own (the token is generated fresh per daemon start
+  and never baked into the bundle), so this doesn't weaken the actual
+  security boundary, it just draws it in the right place. Found by
+  actually running the real built `crewbench ui` binary and `curl`-ing
+  the real served page and its asset URLs -- the browser-extension tool
+  available in other sessions wasn't connected in this one, so this was
+  verified via direct HTTP checks (200 on `index.html`/JS/CSS with no
+  auth, 200 on a client-route path via the SPA fallback, 401 on `/api/
+  projects` with no token) rather than a visual check; noting the gap
+  rather than claiming a browser was actually opened.
+- **Caught one real test-flakiness bug**: the watcher/SSE tests
+  (milestone 2) used a fixed `sleep(400)` before assuming the watcher
+  had indexed a freshly created task. Under `pnpm -r test`'s parallel
+  cross-package load this was occasionally too short (chokidar's own
+  dispatch delayed by CPU contention from other packages' concurrent
+  test runs), causing an intermittent 404. Fixed by replacing the fixed
+  sleep with `waitForTaskKnown()`, which polls the real SSE endpoint
+  until the task is actually known, up to a generous ceiling -- adapts to
+  the machine's real load instead of guessing a number. Confirmed stable
+  across repeated runs after the fix.
+- UI component test (`test/projects-page.test.tsx`, Vitest +
+  `@testing-library/react`, the pairing proposed in open question 2):
+  renders `ProjectsPage` against a mocked `fetch`, asserting the
+  populated-cards state and the empty state.
+- Full verification: `pnpm -r typecheck/build/test` all green (321 TS
+  tests: 25 contract + 107 adapters + 150 engine + 13 daemon + 2 ui + 24
+  cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
+  reports no drift.
+
+### Milestone 4 — done (2026-09-19)
+
+- `GET /api/tasks/:tid` (`routes/tasks.ts` + `task-detail.ts`): assembles
+  state, rehydrated rounds/issues, and per-role usage. Rounds/issues
+  reuse `packages/engine`'s existing `rehydrateState()` (Phase 1
+  milestone 6) unchanged -- one source of truth for "what happened round
+  by round," not a second reconstruction. Usage is genuinely new this
+  milestone: sums every `runs/<role>-r<round>.result.json` envelope's own
+  `usage` field per role, picking up `drive.ts`'s Phase 1 comment
+  flagging per-role usage aggregation as "daemon/Phase-2 territory." A
+  `null` usage component makes the whole rollup `null` for that field,
+  never silently `0`.
+- New `packages/daemon/src/loop-settings.ts`: approximates the loop
+  settings (`max_rounds`/`fix_threshold`) a task's rounds ran under, by
+  reading the project's *current* `team.json` and falling back to the
+  same hardcoded defaults `packages/engine`'s `initialState()` already
+  uses. **Documented as a real, disclosed limitation, not solved**:
+  `state.json` never records what loop settings were actually in effect
+  at the time a given round ran, so a `team.json` edited since a task's
+  last round is silently invisible to this reader -- there is no way to
+  recover that after the fact from what's on disk today.
+- `GET /api/tasks/:tid/runs/:run/log?from=offset`: the same incremental
+  byte-offset contract `tail.ts`'s event tailer already established in
+  milestone 2, applied to a plain (non-JSONL) growing log file, capped at
+  1MB per read so a client far behind can't force an unbounded read.
+- UI: **Task detail** page (header with lineup chips, a rounds timeline,
+  and live agent lanes) plus a new `useTaskEvents()` hook
+  (`api/task-detail.ts`) that subscribes to the task's own SSE stream and
+  both invalidates the detail query (redraws header/rounds from a fresh
+  `GET`) and feeds live events straight into each lane's own scrolling
+  log, without waiting on a full refetch for the fast-moving per-run text
+  events (`run.message`/`run.tool_call`/`run.tool_error`) `GET
+  /api/events` deliberately filters out of the global board feed
+  (milestone 2) but that *do* belong inside a lane view. Task board cards
+  now link to `/tasks/$taskId`.
+- **Real live end-to-end verification, not just the automated suite**:
+  ran the actual built `crewbench ui` binary, registered a real project,
+  created a real task via `packages/engine`'s own `createTask()`, and
+  dispatched a real `developer` round against the same
+  `quick_success.py` fake-CLI fixture Phase 1's runner tests trust (via
+  `dispatchRole()`, a real subprocess) -- then `curl`'d the real running
+  daemon's `/api/tasks/:tid` and confirmed the response reflected that
+  real dispatch's actual `phase: "implementing"`, `round: 1`, and
+  `usage.developer` correctly aggregated from the one real run,
+  and confirmed `/runs/developer-r1/log` returned that run's real log
+  text. The browser-extension tool remained unavailable in this session,
+  so the UI's own rendering was not visually confirmed in a real
+  browser -- HTTP-level verification only, same disclosed gap as
+  milestone 3.
+- **Caught one real, reproducible test-flakiness bug** (not a one-off):
+  running the daemon package's test suite standalone, repeatedly,
+  isolated from any other workspace package's load, still intermittently
+  hit "watcher never learned about a task" across *all three* test files
+  in the package -- not just occasionally slow, sometimes never firing
+  within a 10-second budget. Root cause: vitest's default
+  file-parallelism means each test file's `beforeEach` starts its own
+  real chokidar-backed daemon concurrently with the others, and several
+  independent chokidar/fsevents watcher instances spinning up at once on
+  macOS was observed to sometimes silently drop a freshly created
+  watcher's first event entirely. Fixed with `fileParallelism: false` in
+  `packages/daemon/vitest.config.ts` (tests within one file already run
+  sequentially via `beforeEach`/`afterEach`) -- confirmed stable across
+  10+ repeated runs after the fix, both standalone and under `pnpm -r
+  test`'s full cross-package load. Also extracted the milestone 2 tests'
+  now-proven `waitForTaskKnown()` poll-instead-of-sleep helper into a
+  shared `test/helpers.ts` so milestone 4's new tests don't reintroduce
+  the flat-sleep flakiness that helper was built to fix.
+- Full verification: `pnpm -r typecheck/build/test` all green (325 TS
+  tests: 25 contract + 107 adapters + 150 engine + 17 daemon + 2 ui + 24
+  cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
+  reports no drift.
+
+### Milestone 5 — done (2026-09-19)
+
+- `GET /api/tasks/:tid/diff?round=base|N` (`diff.ts` +
+  `routes/tasks.ts`): a real `git diff <base_commit>` against whichever
+  tree currently holds the task's changes (the worktree if still
+  present, the project's main checkout otherwise). **Real, disclosed
+  limitation found while implementing this, not assumed going in**:
+  reading `packages/engine`'s git module confirmed nothing snapshots git
+  state per round -- a developer's changes across rounds stay one
+  cumulative uncommitted diff in the working tree until the final
+  commit-approval step, so a true round-N-only delta isn't derivable
+  from git history as currently recorded. `round=base` and `round=N`
+  therefore return the identical diff; the response's own `mode` field
+  lets the UI label this honestly instead of implying a round-isolated
+  diff exists. Fixing this for real would mean the *engine* snapshotting
+  per round (e.g. `git stash create`), which is Phase 1 territory, out of
+  this read-only-UI phase's scope -- noted rather than silently worked
+  around.
+- `GET /api/tasks/:tid/screenshots/:file`: serves a real image from
+  `.crewbench/tasks/<task-id>/screenshots/`, the exact path the tester
+  role's own `screenshots[]` field (`schemas/tester.json`) already
+  points into. `basename()` on the param neutralizes path traversal;
+  only `.png`/`.jpg`/`.jpeg` are served, anything else refused.
+- `buildTaskDetail()` now also collects every `git.warning` event a task
+  has recorded, straight from `events.jsonl` -- these were already being
+  emitted by `packages/engine`'s real `gitChanges()` safety-snapshot
+  comparison (wired into `dispatchRole()` since Phase 1), just never
+  surfaced anywhere until this milestone's "Warnings banner" requirement
+  gave them a reason to be read back.
+- Tightened `ApiTaskDetailSchema`'s `rounds`/`issues` fields from
+  milestone 4's loosely-typed pass-through to real schemas
+  (`ApiRoundRecordSchema`, `ApiRegisteredIssueSchema`, and their nested
+  `ApiTesterResultSchema`/`ApiReviewerResultSchema`/`ApiTestFailureSchema`
+  /`ApiRawIssueSchema`) mirroring `packages/engine`'s own `types.ts`
+  field-for-field -- exactly the "milestone 5 is where this needs real
+  field-level guarantees" deferral milestone 4's plan entry flagged.
+- UI: task detail is now tabbed (Rounds & lanes / Issues / Failures /
+  Diff / Spec / Screenshots), plus an always-visible warnings banner.
+  **Design decision 6 resolved**: the diff viewer is a ~30-line
+  dependency-free component (`diff-viewer.tsx`, a monospace `<pre>` with
+  per-line +/- color coding) rather than `react-diff-view`/`diff2html` --
+  the daemon already returns a plain unified-diff string, and those
+  libraries' side-by-side/inline toggle UI isn't asked for this
+  milestone; not adding a dependency to get less than what a small
+  component already covers.
+- **Caught one real, easy-to-miss auth gap while building the
+  screenshots tab**: a plain `<img src="/api/tasks/.../screenshots/...">`
+  can't attach the `Authorization` header the route (correctly) requires
+  -- same class of problem `lib/api.ts`'s SSE reader already solved for
+  event streams, not previously hit for images. Fixed with a small
+  `useAuthedImage()` hook that fetches the bytes with the token attached
+  and hands the `<img>` a local `blob:` object URL instead, revoked on
+  unmount.
+- Component tests (Definition of Done's explicit requirement): rounds
+  timeline (`test/rounds-timeline.test.tsx` -- gate/tester/reviewer
+  verdict rendering, the null-gate "skipped" case, the empty state) and
+  issues table (`test/issues-table.test.tsx` -- per-issue fields, the
+  empty state).
+- **Real live end-to-end verification** (same standard as milestones
+  3-4): ran the actual built `crewbench ui` binary against a real git
+  repo with a real uncommitted change and a real (magic-bytes-valid) PNG
+  file, and `curl`'d the real daemon's `/diff`, `/screenshots/round1.png`,
+  and `/api/tasks/:tid` endpoints directly -- confirmed a real unified
+  diff came back for the real file change, the real PNG bytes came back
+  with `Content-Type: image/png`, and `spec`/`issues`/`warnings`/`rounds`
+  all serialized correctly for a fresh task with none of those yet. The
+  browser-extension tool remained unavailable this session, so the tabs'
+  own rendering wasn't visually confirmed -- same disclosed gap as
+  milestones 3-4.
+- **Daemon test flakiness note, not fully resolved**: milestone 4's
+  `fileParallelism: false` fix mitigates but does not fully eliminate the
+  "chokidar never fires its first event" issue -- one run immediately
+  following a full `pnpm -r build` (all 6 packages, including the UI's
+  own Vite build) still hit it once during this milestone's work,
+  though 10+ repeated standalone runs afterward were all clean. Recorded
+  honestly rather than claimed fixed: the remaining risk appears to be
+  general system I/O contention right after a heavy build step, not
+  vitest's own file-parallelism (already addressed), and the existing
+  poll-with-generous-timeout approach is the practical mitigation for
+  now.
+- Full verification: `pnpm -r typecheck/build/test` all green (336 TS
+  tests: 25 contract + 107 adapters + 150 engine + 23 daemon + 7 ui + 24
+  cli); Python suite (212 tests) unaffected; `pnpm check:schemas` still
+  reports no drift.
+
+### Milestone 6 — done (2026-09-19)
+
+- `GET /api/doctor?refresh=1` (`routes/doctor.ts`): runs every adapter's
+  real `doctor()` for all four CLIs, cached with a 60s TTL (each check
+  makes real network/auth calls, per Phase 0/1) and a `?refresh=1`
+  escape hatch for the UI's manual refresh button. Cache lives in the
+  route-registration closure, one per daemon instance -- deliberately
+  not module-level, since this package's own test suite runs several
+  daemon instances in one process and a shared global cache would leak
+  one instance's cached result into another's response (a real
+  test-isolation bug caught while writing the test for this, not
+  shipped and found later).
+- `GET /api/projects/:pid/usage`: one row per task, reusing
+  `task-detail.ts`'s existing `aggregateUsage()` (exported this
+  milestone) rather than a second implementation of "how usage totals
+  are computed."
+- UI: Health page (per-CLI cards, the adapters' own real fix-hint
+  strings surfaced, not reinvented) and Usage page (per-task-per-role
+  table; unknown numeric fields render as "—", never "0," per the phase
+  prompt's own explicit requirement and this repo's `cost_usd: null`
+  convention).
+- **Real Playwright smoke test** (Definition of Done's explicit
+  requirement, and open question 1's resolution): `@playwright/test`
+  added scoped to `packages/ui` only. `e2e/fixture-server.ts` starts a
+  genuinely real daemon (`@crewbench/daemon`'s own `startDaemon()`, not
+  a mock) against a fresh `CREWBENCH_HOME`, registers a real git-repo
+  fixture project, creates a real task, and dispatches one real
+  developer round via `dispatchRole()` against the same
+  `quick_success.py` fixture this repo's other suites trust --
+  `e2e/board-to-detail.spec.ts` then drives a real headless Chromium
+  through projects page -> board -> task detail -> the Issues tab,
+  asserting on real rendered text at each step. This is the strongest
+  verification this phase has produced: every prior milestone's "browser
+  extension wasn't available, HTTP-level only" caveat is superseded here
+  by an actual browser actually rendering the actual app. Confirmed
+  stable across repeated runs.
+- **Real caught bug while wiring the e2e config**: vitest's default
+  test-file glob also matched the new `e2e/*.spec.ts` files and tried to
+  execute Playwright's own `test()` inside vitest's runner, failing
+  immediately with a confusing "did not expect test() to be called
+  here" error. Fixed by excluding `e2e/**` from `vitest.config.ts`
+  (Playwright specs run via their own `pnpm e2e` script/runner, a
+  separate process model from vitest's).
+- **Verified Definition of Done item 1 for real**, not by inspection:
+  started the real built `crewbench ui` binary, registered a real
+  project, then created a task with the actual Python plugin script
+  (`python3 bin/crewbench_state.py new`, not `packages/engine`'s
+  TypeScript port of it) while the daemon was already watching --
+  confirmed the plugin-created task appeared correctly in
+  `GET /api/projects/:pid/tasks`'s response, proving the watcher/index
+  genuinely works across the plugin/app language boundary, not just
+  within one side of it.
+- Audited every screen built in milestones 3-5 for loading/error/empty
+  states: all six pages (Projects, Task board, Task detail's six tabs,
+  Health, Usage) already had `isLoading`/`isError` handling plus an
+  explicit empty-state message from when each was first built --
+  nothing missing found this pass.
+- Full verification: `pnpm -r typecheck/build/test` all green (339 TS
+  tests: 25 contract + 107 adapters + 150 engine + 26 daemon + 7 ui + 24
+  cli), plus the separate Playwright e2e suite (1 test, run via `pnpm
+  --filter @crewbench/ui e2e`, confirmed stable across 3 repeated runs);
+  Python suite (212 tests) unaffected; `pnpm check:schemas` still
+  reports no drift.
+
+## Definition of done
+
+- **"Start a task with `/crewbench:new-task` in Claude Code... it
+  appears on the board within 2 seconds, and each role's progress
+  streams live in its lane."** Verified for real this milestone using
+  the actual Python plugin script (not a TypeScript stand-in) to create
+  a task while a real daemon watched -- it appeared correctly and
+  immediately in the task-listing API a real board page reads.
+  Live-streaming lanes were verified in milestone 2's real
+  `appendEvent()`-based SSE tests and milestone 4's real `dispatchRole()`
+  end-to-end run; the "within 2 seconds" latency specifically comes from
+  chokidar's `awaitWriteFinish` debounce window (150ms stability
+  threshold), well under budget.
+- **"Killing and restarting the daemon mid-task loses nothing (SSE
+  replays from seq)."** Per-task SSE replay is disk-based (events.jsonl
+  stays the source of truth, never buffered only in memory), proven by
+  milestone 2's exact-replay-no-duplicates-no-gaps test on a
+  `Last-Event-ID` reconnect. The global board feed's own replay buffer
+  is in-memory only and does not survive a restart -- disclosed
+  explicitly in milestone 2 and `watcher.ts`'s own docstring, since the
+  board's initial paint comes from the REST listing endpoints regardless
+  of that buffer's state.
+- **"UI component tests for the rounds timeline and issues table, plus
+  one Playwright smoke test of the board -> task detail flow against a
+  fixture project."** All three exist: `test/rounds-timeline.test.tsx`,
+  `test/issues-table.test.tsx` (milestone 5), and
+  `e2e/board-to-detail.spec.ts` (this milestone).
+
+All six milestones done; Phase 2's Definition of Done is met.

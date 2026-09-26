@@ -14,6 +14,8 @@ Argument: $ARGUMENTS
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
+Before anything else, run `python3 <root>/bin/crewbench_banner.py` and show
+its output verbatim.
 Read `<root>/lib/dispatch.md` and follow it for every hand-off from here on
 (the resumed task already has its own folder — skip §0's setup, you're
 reloading it, not creating it).

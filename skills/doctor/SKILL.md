@@ -12,6 +12,8 @@ role or change any file — this only reads and reports.
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
+Before anything else, run `python3 <root>/bin/crewbench_banner.py` and show
+its output verbatim.
 
 ## Workflow
 

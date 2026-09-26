@@ -14,6 +14,8 @@ Requested change: $ARGUMENTS
 
 crewbench root: `${CLAUDE_PLUGIN_ROOT}` — if that still reads as a literal
 placeholder, the root is the directory two levels above this SKILL.md.
+Before anything else, run `python3 <root>/bin/crewbench_banner.py` and show
+its output verbatim.
 Read `<root>/lib/dispatch.md`'s §1 and §2 for the lineup format (this skill
 doesn't delegate, so the rest of its "Before you start (every skill)"
 section doesn't apply here).
