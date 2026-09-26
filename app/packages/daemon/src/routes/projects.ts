@@ -60,6 +60,29 @@ export async function registerProjectRoutes(app: FastifyInstance, watcher: Daemo
   });
 
   app.delete<{ Params: { pid: string } }>("/api/projects/:pid", async (request, reply) => {
+    const project = await getProject(request.params.pid);
+    if (!project) {
+      await reply.code(404).send({ error: `no such project: ${request.params.pid}` });
+      return;
+    }
+    // Real bug caught by review: removing a project used to just
+    // unregister it and stop the watcher, even while one of its
+    // app-owned tasks was still actively being driven by this daemon's
+    // own TaskRunner -- the loop kept running, mutating files under a
+    // project directory the daemon no longer had any addressable
+    // state/SSE route for. Cross-referencing every task id this project
+    // actually has on disk against `taskRunner.isActive()` (the same
+    // check the lineup/resume/cleanup routes already use) closes that:
+    // a project with any genuinely active task is refused, not silently
+    // orphaned.
+    const rows = await listTasks(join(project.path, ".crewbench"));
+    const activeTaskIds = rows.filter((row) => taskRunner.isActive(row.id)).map((row) => row.id);
+    if (activeTaskIds.length > 0) {
+      await reply.code(409).send({
+        error: `project ${project.id} has ${activeTaskIds.length} task(s) still being driven by this daemon -- cancel or wait for them to finish before removing this project`,
+      });
+      return;
+    }
     const removed = await removeProject(request.params.pid);
     if (!removed) {
       await reply.code(404).send({ error: `no such project: ${request.params.pid}` });

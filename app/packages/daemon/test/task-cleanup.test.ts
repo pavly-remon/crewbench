@@ -1,10 +1,42 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startDaemon, type DaemonHandle } from "../src/server.js";
-import { gitRepo } from "./helpers.js";
+import { gitRepo, sleep } from "./helpers.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..");
+const QUICK_SUCCESS = join(REPO_ROOT, "tests", "fixtures", "fake_clis", "quick_success.py");
+
+const VALID_SPEC = {
+  title: "Add a reverse function",
+  description: "Add a function reverse(str) in src/reverse.js.",
+  acceptance_criteria: ["reverse('abc') returns 'cba'"],
+  affected_areas: [],
+  out_of_scope: [],
+  needs_design: false,
+  constraints: [],
+};
+
+const LINEUP_BODY = {
+  roles: {
+    developer: { cli: "claude", model: "m", effort: "none", permissions: "safe" },
+    tester: { cli: "claude", model: "m", effort: "none", permissions: "safe" },
+    "code-reviewer": { cli: "claude", model: "m", effort: "none", permissions: "safe" },
+    "ui-ux": { cli: "claude", model: "m", effort: "none", permissions: "safe" },
+  },
+};
+
+async function waitFor(check: () => Promise<boolean>, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for condition");
+    await sleep(100);
+  }
+}
 
 describe("task-directory cleanup: GET .../cleanup-candidates, POST /api/tasks/:tid/delete", () => {
   let daemon: DaemonHandle;
@@ -123,4 +155,67 @@ describe("task-directory cleanup: GET .../cleanup-candidates, POST /api/tasks/:t
     const res = await fetch(url("/api/projects/no-such-project/tasks/cleanup-candidates"), { headers });
     expect(res.status).toBe(404);
   });
+
+  /** The real gap review caught: `deleteTask()` alone only reads the
+   * on-disk `phase` -- it has no way to know a `driveTask()` loop is
+   * still genuinely running. The narrow race is specifically a task
+   * whose on-disk `phase` already reads terminal (the loop's own
+   * `reduce()` already wrote it) while that same loop is still
+   * genuinely mid-flight per `TaskRunner` (writing `events.jsonl`,
+   * about to exit) -- an on-disk-phase-only check can't see that at
+   * all, by construction, no matter how the test times a real
+   * subprocess's own exit. So this test doesn't chase that timing
+   * directly: it makes a task genuinely active (a real, still-running
+   * developer dispatch, `FAKE_CLI_SLEEP`, same fixture
+   * `task-control.test.ts`'s cancel test uses), then writes `state.json`
+   * to a terminal phase by hand -- exactly what the *end* of that race
+   * window looks like on disk -- and proves the route's own
+   * `taskRunner.isActive()` guard still refuses it, deterministically,
+   * rather than relying on winning a real timing race. */
+  it("refuses to delete a task that's genuinely active per TaskRunner, even when its on-disk phase already reads terminal", async () => {
+    process.env.CREWBENCH_CLI_OVERRIDE_CLAUDE = QUICK_SUCCESS;
+    process.env.FAKE_CLI_SLEEP = "6";
+    daemon = await startDaemon({ port: 0 });
+    const headers = { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" };
+    const repo = await gitRepo("crewbench-cleanup-active-");
+
+    const addRes = await fetch(url("/api/projects"), { method: "POST", headers, body: JSON.stringify({ path: repo }) });
+    const project = (await addRes.json()) as { id: string };
+    const createRes = await fetch(url(`/api/projects/${project.id}/tasks`), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ task_text: "Add a reverse function" }),
+    });
+    const detail = (await createRes.json()) as { id: string };
+    await fetch(url(`/api/tasks/${detail.id}/scoping/finalize`), { method: "POST", headers, body: JSON.stringify(VALID_SPEC) });
+    const lineupRes = await fetch(url(`/api/tasks/${detail.id}/lineup`), { method: "POST", headers, body: JSON.stringify(LINEUP_BODY) });
+    expect(lineupRes.status).toBe(200);
+    const taskDir = join(repo, ".crewbench", "tasks", detail.id);
+
+    await waitFor(async () => {
+      const status = JSON.parse(await readFile(join(taskDir, "runs", "status.json"), "utf-8").catch(() => "{}")) as Record<
+        string,
+        { state?: string; pid?: number }
+      >;
+      return status["developer-r1"]?.state === "running" && typeof status["developer-r1"]?.pid === "number";
+    });
+
+    // Simulate the exact end-of-race snapshot: still active per
+    // TaskRunner (the dispatch above is still genuinely sleeping), but
+    // the on-disk phase already says "done" -- what an on-disk-phase-only
+    // check would see as "safe to delete."
+    const statePath = join(taskDir, "state.json");
+    const state = JSON.parse(await readFile(statePath, "utf-8")) as Record<string, unknown>;
+    state.phase = "done";
+    await writeFile(statePath, JSON.stringify(state), "utf-8");
+
+    const noBodyHeaders = { Authorization: `Bearer ${daemon.token}` };
+    const res = await fetch(url(`/api/tasks/${detail.id}/delete`), { method: "POST", headers: noBodyHeaders });
+    expect(res.status).toBe(409);
+    expect(existsSync(taskDir)).toBe(true);
+
+    // Clean up: cancel the still-running dispatch so the daemon can
+    // close without a lingering subprocess.
+    await fetch(url(`/api/tasks/${detail.id}/cancel`), { method: "POST", headers, body: JSON.stringify({}) });
+  }, 15_000);
 });

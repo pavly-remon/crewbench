@@ -137,7 +137,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   registerModelRoutes(app);
   registerFsBrowseRoutes(app);
   registerPluginInstallRoutes(app);
-  registerTaskCleanupRoutes(app, watcher);
+  registerTaskCleanupRoutes(app, watcher, taskRunner);
   registerCapabilityRoutes(app);
   registerConfigRoutes(app);
   registerUpdateCheckRoutes(app);
