@@ -86,7 +86,10 @@ describe("TaskRunner: reattach on restart", () => {
     // "restarting" -- not just assumed from timing.
     const deadline = Date.now() + 5000;
     let status = await readStatus(taskDir);
-    while (status["developer-r1"]?.state !== "running" && Date.now() < deadline) {
+    while (
+      (status["developer-r1"]?.state !== "running" || typeof status["developer-r1"]?.pid !== "number") &&
+      Date.now() < deadline
+    ) {
       await sleep(50);
       status = await readStatus(taskDir);
     }
