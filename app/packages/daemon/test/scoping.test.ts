@@ -1,5 +1,5 @@
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ApiScopingStreamEvent } from "@crewbench/contract";
@@ -145,7 +145,12 @@ describe("POST /api/tasks/:tid/scoping/* (Phase 3 milestone 3)", () => {
     expect(secondDone.spec).toEqual(VALID_SPEC);
   });
 
-  it("reports a done:false frame instead of a bare stream close when the turn throws", async () => {
+  // Skipped on win32: this forces the write failure via `chmod(taskDir,
+  // 0o555)`, a POSIX permission-bits mechanism -- Windows doesn't honor
+  // it the same way (a "read-only" directory there still generally
+  // allows writing files inside it), so the forced throw this test
+  // exists to exercise never actually happens there.
+  it.skipIf(platform() === "win32")("reports a done:false frame instead of a bare stream close when the turn throws", async () => {
     // Forces a genuine throw out of setField()'s atomicWriteJson() (not a
     // mock), from inside the route's try block specifically: the first
     // turn's cli/model/effort persistence happens *before* the SSE
