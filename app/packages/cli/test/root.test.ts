@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { agentsDir, defaultsPath, findRoot, schemaPath } from "../src/root.js";
 
@@ -34,8 +34,9 @@ describe("findRoot", () => {
 
 describe("path helpers", () => {
   it("build the expected paths under a root", () => {
-    expect(schemaPath("/root", "developer")).toBe(join("/root", "schemas", "developer.json"));
-    expect(agentsDir("/root")).toBe(join("/root", "agents"));
-    expect(defaultsPath("/root")).toBe(join("/root", "config", "defaults.json"));
+    const root = resolve("root");
+    expect(schemaPath(root, "developer")).toBe(join(root, "schemas", "developer.json"));
+    expect(agentsDir(root)).toBe(join(root, "agents"));
+    expect(defaultsPath(root)).toBe(join(root, "config", "defaults.json"));
   });
 });
