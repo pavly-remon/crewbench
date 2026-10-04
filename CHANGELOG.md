@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.2.3
+
+No functional changes from v3.2.2 (same reason as the last two: its own
+tag was already cut before this fix). Fixes `acquireLock()` treating a
+real Windows `EPERM` the same as the `EEXIST` it already retries on for
+a transiently-contested lockfile -- see that commit for the full story.
+
 ## v3.2.2
 
 No functional changes from v3.2.1 (same reason that version skipped
