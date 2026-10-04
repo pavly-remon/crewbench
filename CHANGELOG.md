@@ -1,17 +1,18 @@
 # Changelog
 
-## v2.0.0
+## v3.2.4
 
-The npm package's own version number, deliberately set below this
-file's own v3.2.x entries at the user's explicit request -- this
-replaces the previously-published 0.1.0/1.0.0/3.1.0 as the sole version
-on the registry (those three removed via `npm unpublish`), not a
-continuation of the v3.x series documented below. Functionally
-identical to the v3.2.3 commit it's tagged from: everything in v3.2.0
-through v3.2.3 below, plus the Windows CLI-path-helper and PID-reattach
-fixes from PR #3 (`copilot/fix-test-windows-latest-job`) -- the first
-commit where all 3 OS legs of `ci-node.yml` are actually green,
-end to end, letting its `publish` job run for real for the first time.
+No functional changes from v3.2.3 beyond what PR #3
+(`copilot/fix-test-windows-latest-job`) already merged to `main`
+(Windows CLI-path-helper and PID-reattach test fixes). Real, disclosed
+reversal: a v2.0.0 was briefly tagged here with the intent of
+unpublishing 0.1.0/1.0.0/3.1.0 from npm and replacing them with it --
+abandoned before any unpublish happened (npm also refuses to apply the
+`latest` tag to a version numerically below an already-published one,
+which would have blocked it regardless). Back to the v3.x series.
+This is the version this pipeline expects to actually make it through
+`ci-node.yml`'s `publish` job end-to-end, all 3 OSes green, for the
+first time.
 
 ## v3.2.3
 
