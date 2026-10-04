@@ -65,7 +65,15 @@ async function acquireLock(lockPath: string): Promise<void> {
       await handle.close();
       return;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      const code = (err as NodeJS.ErrnoException).code;
+      // Windows genuinely throws EPERM, not EEXIST, for the same "another
+      // handle is transiently holding this path" case POSIX reports as
+      // EEXIST -- a real difference caught live under heavy parallel
+      // contention (packages/engine's own 80-parallel-dispatch race test,
+      // windows-latest CI only), not a new failure mode this retry
+      // introduces: it's still bounded by the same staleness/deadline
+      // logic below either way.
+      if (code !== "EEXIST" && !(code === "EPERM" && process.platform === "win32")) throw err;
       await clearIfStale(lockPath);
       if (Date.now() > deadline) {
         throw new Error(`timed out waiting for lock: ${lockPath}`);
