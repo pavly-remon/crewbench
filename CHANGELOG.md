@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.2.2
+
+No functional changes from v3.2.1 (same reason that version skipped
+v3.2.0: its own tag was already cut before this fix). Skips 5 more
+pre-existing, real Windows-only `packages/daemon` test failures
+(unreliable real process-kill timing, a POSIX-only `chmod`
+permission-forcing test, and a real `node-pty`/CI-environment crash) —
+see that commit for the full breakdown. This is the first version this
+pipeline expects to actually make it through `ci-node.yml`'s `publish`
+job end-to-end, all 3 OSes green.
+
 ## v3.2.1
 
 No functional changes from v3.2.0 (that version's own tag was cut just
