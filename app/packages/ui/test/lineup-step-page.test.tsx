@@ -132,7 +132,7 @@ describe("LineupStepPage", () => {
     expect(screen.queryByTitle(/use the cheap tier for agy/i)).not.toBeInTheDocument();
   });
 
-  it("shows a curated, clearly-non-live model quick-pick list for claude (not a real dropdown, distinct from agy's)", async () => {
+  it("shows a curated, clearly-non-live model dropdown for claude, distinct from agy's real one, with a manual fallback", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/tasks/t1")) return jsonResponse(TASK_DETAIL);
@@ -148,19 +148,25 @@ describe("LineupStepPage", () => {
     renderLineupPage();
     await screen.findByText(/Lineup: Fix login redirect/i);
 
-    // Still the free-text input (a real <input>, not a <select>) --
-    // curated quick-picks feed it, they don't replace it.
-    const modelInput = screen.getAllByDisplayValue("sonnet")[0] as HTMLInputElement;
+    // A real <select>, backed by the curated (not live) list -- and the
+    // caption says so.
+    const modelSelect = screen.getAllByDisplayValue("sonnet")[0] as HTMLSelectElement;
+    expect(modelSelect.tagName).toBe("SELECT");
+    expect(screen.getAllByText(/common models, not verified live/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("option", { name: "haiku" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("option", { name: "opus" }).length).toBeGreaterThan(0);
+
+    // Picking "Type manually…" swaps it for a free-text input seeded
+    // with the previous value, so an unlisted model name stays reachable.
+    fireEvent.change(modelSelect, { target: { value: "__custom__" } });
+    const modelInput = await waitFor(() => {
+      const input = screen.getAllByDisplayValue("sonnet").find((el) => el.tagName === "INPUT");
+      if (!input) throw new Error("no model input found yet");
+      return input;
+    });
     expect(modelInput.tagName).toBe("INPUT");
 
-    // A curated quick-pick is present and clearly labeled as not a live
-    // list -- clicking it fills the same free-text input.
-    const curatedButtons = screen.getAllByTitle(/not verified live against claude/i);
-    expect(curatedButtons.length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/common models, not verified live/i).length).toBeGreaterThan(0);
-
-    fireEvent.click(curatedButtons[0] as HTMLElement);
-    expect((curatedButtons[0] as HTMLButtonElement).textContent).not.toBe("");
-    await waitFor(() => expect(screen.getAllByDisplayValue((curatedButtons[0] as HTMLButtonElement).textContent ?? "").length).toBeGreaterThan(0));
+    fireEvent.change(modelInput, { target: { value: "sonnet-custom" } });
+    await waitFor(() => expect(screen.getAllByDisplayValue("sonnet-custom").length).toBeGreaterThan(0));
   });
 });

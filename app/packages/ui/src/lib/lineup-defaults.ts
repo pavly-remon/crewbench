@@ -1,5 +1,6 @@
 import type { ApiCli, ApiEffort, Team } from "@crewbench/contract";
 import { ROLE_KEYS, type RoleKey } from "@crewbench/contract";
+import { DEFAULT_MODEL } from "./curated-models.js";
 
 export interface LineupRoleValue {
   cli: ApiCli;
@@ -40,10 +41,11 @@ export function suggestLineup(team: Team | undefined): Record<RoleKey, LineupRol
   const roles = {} as Record<RoleKey, LineupRoleValue>;
   for (const role of ROLE_KEYS) {
     const r = team?.roles?.[role];
-    const cli = (r?.cli && r.cli !== "host" ? r.cli : "claude") as ApiCli;
-    const tierOrModel = r?.model ?? "cheap";
+    const rawCli = r?.cli && r.cli !== "host" ? r.cli : "claude";
+    const cli = (REAL_CLIS.includes(rawCli as ApiCli) ? rawCli : "claude") as ApiCli;
+    const tierOrModel = r?.model ?? DEFAULT_MODEL[cli];
     roles[role] = {
-      cli: REAL_CLIS.includes(cli) ? cli : "claude",
+      cli,
       model: resolveModelTier(tierOrModel, cli, team),
       effort: (r?.effort ?? "medium") as ApiEffort,
       permissions: (r?.permissions ?? "safe") as "safe" | "skip",

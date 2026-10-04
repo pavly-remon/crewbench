@@ -1,12 +1,14 @@
+import { useState } from "react";
 import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import type { ApiCli, ApiDoctorReport, ApiEffort, RoleKey, Team } from "@crewbench/contract";
 import { ROLE_KEYS } from "@crewbench/contract";
 import { useAvailableModels } from "../api/models.js";
 import { CURATED_MODELS } from "../lib/curated-models.js";
-import { resolveModelTier, type LineupRoleValue } from "../lib/lineup-defaults.js";
+import type { LineupRoleValue } from "../lib/lineup-defaults.js";
 
 const CLI_OPTIONS: ApiCli[] = ["claude", "codex", "agy", "copilot"];
 const EFFORT_OPTIONS: ApiEffort[] = ["none", "low", "medium", "high", "xhigh", "max"];
+const CUSTOM_MODEL = "__custom__";
 const ROLE_LABELS: Record<RoleKey, string> = {
   developer: "Developer",
   tester: "Tester",
@@ -27,44 +29,52 @@ function DoctorBadge({ report }: { report: ApiDoctorReport | undefined }) {
   );
 }
 
-/** The model field: a real dropdown of this CLI's actual available
- * models when the daemon can genuinely enumerate them (`checked: true`,
- * today only ever `agy` -- see `@crewbench/adapters`'
- * `listAvailableModels()`'s own docstring, re-verified against the real
- * installed binaries), otherwise today's free-text input plus the
- * cheap/strong tier quick-picks *and* (a real, disclosed, user-requested
- * addition) a hand-curated list of common model names for
- * claude/codex/copilot specifically, per `lib/curated-models.ts`'s own
- * docstring for exactly what's real about it and what isn't -- these are
- * quick-picks into the same free-text input, not a second dropdown, and
- * are never labeled as live or verified anywhere in this UI (the caption
- * below says so explicitly), so a user can't mistake them for agy's real
- * live list. */
-function ModelField({ value, team, onChange }: { value: LineupRoleValue; team: Team | undefined; onChange: (next: LineupRoleValue) => void }) {
+/** The model field: a dropdown for every CLI. When the daemon can
+ * genuinely enumerate a CLI's models (`checked: true`, today only ever
+ * `agy` -- see `@crewbench/adapters`' `listAvailableModels()`'s own
+ * docstring, re-verified against the real installed binaries), the
+ * dropdown's options are that live list. Otherwise they're the
+ * hand-curated per-CLI list from `lib/curated-models.ts` (claude, codex,
+ * copilot) -- real model names already referenced elsewhere in this
+ * codebase, but NOT a live/verified list, which the caption below makes
+ * explicit. Either way there's always a "type manually…" option that
+ * swaps the dropdown for a free-text input, so an unlisted or
+ * not-yet-released model name is never unreachable. */
+function ModelField({ value, onChange }: { value: LineupRoleValue; onChange: (next: LineupRoleValue) => void }) {
   const { data, isLoading } = useAvailableModels(value.cli, true);
   const hasRealList = Boolean(data?.checked && data.available.length > 0);
+  const baseOptions = hasRealList ? data!.available : CURATED_MODELS[value.cli] ?? [];
+  // The role's current value may not be one of the listed ids (e.g. a
+  // value carried over from team defaults that predates this list) --
+  // kept as a real, selectable option rather than silently dropped, so
+  // this dropdown never discards an already-valid choice out from under
+  // the user.
+  const options = baseOptions.includes(value.model) ? baseOptions : [value.model, ...baseOptions];
+  const [manualOverride, setManualOverride] = useState(false);
+  const manualMode = manualOverride || options.length === 0;
 
-  if (hasRealList) {
-    // The role's current value may not be one of the listed ids (e.g.
-    // switched CLI mid-edit, or a value carried over from team defaults
-    // that predates this list) -- kept as a real, selectable option
-    // rather than silently dropped, so switching to this dropdown never
-    // discards an already-valid choice out from under the user.
-    const options = data!.available.includes(value.model) ? data!.available : [value.model, ...data!.available];
+  if (manualMode) {
     return (
       <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
         Model
-        <select
-          value={value.model}
-          onChange={(e) => onChange({ ...value, model: e.target.value })}
-          className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
-        >
-          {options.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
+        <div className="flex gap-1">
+          <input
+            value={value.model}
+            onChange={(e) => onChange({ ...value, model: e.target.value })}
+            placeholder={isLoading ? "loading model list…" : undefined}
+            className="w-full min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
+          />
+          {options.length > 0 && (
+            <button
+              type="button"
+              title="back to the model dropdown"
+              onClick={() => setManualOverride(false)}
+              className="rounded-md border border-[var(--color-border)] px-2 text-xs text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+            >
+              list
+            </button>
+          )}
+        </div>
       </label>
     );
   }
@@ -72,41 +82,25 @@ function ModelField({ value, team, onChange }: { value: LineupRoleValue; team: T
   return (
     <label className="col-span-2 flex flex-col gap-1 text-xs sm:col-span-1">
       Model
-      <div className="flex gap-1">
-        <input
-          value={value.model}
-          onChange={(e) => onChange({ ...value, model: e.target.value })}
-          placeholder={isLoading ? "loading model list…" : undefined}
-          className="w-full min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
-        />
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {(["cheap", "strong"] as const).map((tier) => (
-          <button
-            key={tier}
-            type="button"
-            title={`use the ${tier} tier for ${value.cli}`}
-            onClick={() => onChange({ ...value, model: resolveModelTier(tier, value.cli, team) })}
-            className="rounded border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-          >
-            {tier}
-          </button>
+      <select
+        value={value.model}
+        onChange={(e) => {
+          if (e.target.value === CUSTOM_MODEL) {
+            setManualOverride(true);
+            return;
+          }
+          onChange({ ...value, model: e.target.value });
+        }}
+        className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
+      >
+        {options.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
         ))}
-        {(CURATED_MODELS[value.cli] ?? []).map((model) => (
-          <button
-            key={model}
-            type="button"
-            title={`use "${model}" -- a common model name, not verified live against ${value.cli}`}
-            onClick={() => onChange({ ...value, model })}
-            className="rounded border border-dashed border-[var(--color-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-          >
-            {model}
-          </button>
-        ))}
-      </div>
-      {(CURATED_MODELS[value.cli]?.length ?? 0) > 0 && (
-        <p className="text-[10px] text-[var(--color-fg-muted)]">common models, not verified live</p>
-      )}
+        <option value={CUSTOM_MODEL}>Type manually…</option>
+      </select>
+      {!hasRealList && <p className="text-[10px] text-[var(--color-fg-muted)]">common models, not verified live</p>}
     </label>
   );
 }
@@ -114,13 +108,11 @@ function ModelField({ value, team, onChange }: { value: LineupRoleValue; team: T
 function RoleRow({
   role,
   value,
-  team,
   doctorReports,
   onChange,
 }: {
   role: RoleKey;
   value: LineupRoleValue;
-  team: Team | undefined;
   doctorReports: ApiDoctorReport[] | undefined;
   onChange: (next: LineupRoleValue) => void;
 }) {
@@ -146,7 +138,7 @@ function RoleRow({
             ))}
           </select>
         </label>
-        <ModelField value={value} team={team} onChange={onChange} />
+        <ModelField key={value.cli} value={value} onChange={onChange} />
         <label className="flex flex-col gap-1 text-xs">
           Effort
           <select
@@ -201,7 +193,7 @@ export function RoleLineupEditor({
   return (
     <div className="flex flex-col gap-2">
       {ROLE_KEYS.map((role) => (
-        <RoleRow key={role} role={role} value={roles[role]} team={team} doctorReports={doctorReports} onChange={(next) => onChange(role, next)} />
+        <RoleRow key={role} role={role} value={roles[role]} doctorReports={doctorReports} onChange={(next) => onChange(role, next)} />
       ))}
     </div>
   );

@@ -17,7 +17,19 @@ import type { ApiCli } from "@crewbench/contract";
  * (that's the entire reason this list exists instead of a real
  * dropdown), so periodic manual review is expected, not optional. */
 export const CURATED_MODELS: Partial<Record<ApiCli, string[]>> = {
-  claude: ["fable", "opus", "sonnet"],
+  claude: ["fable", "opus", "sonnet", "haiku"],
   codex: ["gpt-5.6-terra", "gpt-5.6-sol", "o3"],
   copilot: ["claude-sonnet-5", "claude-opus-5", "gpt-5.4"],
+};
+
+/** A real, already-selectable model per CLI to seed a role with when
+ * `team.json` names none -- the same values `config/defaults.json`'s own
+ * `tiers[cli].cheap` uses, so the lineup step's pre-filled suggestion
+ * (`lib/lineup-defaults.ts`'s `suggestLineup`) never shows the bare tier
+ * string "cheap" itself as a model. */
+export const DEFAULT_MODEL: Record<ApiCli, string> = {
+  claude: "sonnet",
+  codex: "gpt-5.6-terra",
+  agy: "gemini-3.8-flash",
+  copilot: "claude-sonnet-5",
 };
