@@ -1,19 +1,17 @@
 # Changelog
 
-## v3.2.0 (proposed — not yet tagged or published)
+## v3.2.0
 
 The crewbench **app**: an installable local tool (daemon + web UI + CLI)
 that runs the same workflow the plugin does, standalone, alongside it —
 the plugin keeps working unchanged throughout. Covers everything since
 v3.1.0 (Phases 1–4 of the app build, `docs/app/CONTEXT.md`), not just
 this release's own diff — the app didn't exist in any previous release.
-Real, disclosed gaps this release doesn't close: `npm publish` has never
-been run for real (the package name `crewbench` is reserved by nothing
-but being unclaimed — see Open question 5 in `docs/app/phase-4-plan.md`),
-and `crewbench service install`'s real launchd/systemd/Task Scheduler
-registration has never been exercised end-to-end on a real machine (built
-and tested with every actual OS call mocked, by deliberate, disclosed
-choice — see that plan's milestone 4 log).
+Real, disclosed gap this release doesn't close: `crewbench service
+install`'s real launchd/systemd/Task Scheduler registration has never
+been exercised end-to-end on a real machine (built and tested with every
+actual OS call mocked, by deliberate, disclosed choice — see that plan's
+milestone 4 log).
 
 ### Added
 

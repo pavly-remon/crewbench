@@ -1,8 +1,18 @@
 {
   "name": "crewbench",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "private": true,
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pavly-remon/crewbench.git",
+    "directory": "app/packages/cli"
+  },
+  "homepage": "https://github.com/pavly-remon/crewbench#readme",
+  "bugs": {
+    "url": "https://github.com/pavly-remon/crewbench/issues"
+  },
   "bin": {
     "crewbench": "./dist/bin.js"
   },
