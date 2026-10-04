@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.2.1
+
+No functional changes from v3.2.0 (that version's own tag was cut just
+before this fix, so it's skipped here rather than reused). Fixes a
+pre-existing, longstanding bug that had failed every single CI run on
+`windows-latest` for weeks: `cliArgvPrefix()` only knew how to launch a
+`.py` fake-CLI test fixture through an interpreter on Windows
+(`child_process.spawn()` can't execute a script directly there, no
+shebang support), not the `.cjs` ones two `packages/engine` tests write
+and `chmod`, which only makes them executable on POSIX — real `spawn
+EFTYPE` failures, not flakiness. This also blocked
+`ci-node.yml`'s `publish` job, gated on all 3 OS test legs passing, so
+`npm publish --provenance` run from GitHub Actions had never actually
+gone through end-to-end.
+
 ## v3.2.0
 
 The crewbench **app**: an installable local tool (daemon + web UI + CLI)
