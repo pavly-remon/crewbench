@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -104,9 +105,13 @@ function sleep(ms: number): Promise<void> {
  * from crewbench_fs.py's atomic_write_json(). */
 export async function atomicWriteJson(path: string, data: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const tmp = path.replace(/(\.[^./\\]+)?$/, ".tmp");
-  await writeFile(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
-  await rename(tmp, path);
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", flag: "wx" });
+    await rename(tmp, path);
+  } finally {
+    await rm(tmp, { force: true });
+  }
 }
 
 export async function readJsonOrDefault<T>(path: string, fallback: T): Promise<T> {
