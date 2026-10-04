@@ -84,6 +84,19 @@ async function acquireLock(lockPath: string): Promise<void> {
   }
 }
 
+async function renameWithRetry(source: string, destination: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(source, destination);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" || process.platform !== "win32" || attempt >= 20) throw err;
+      await sleep(Math.min(LOCK_POLL_MS * (attempt + 1), 100));
+    }
+  }
+}
+
 async function clearIfStale(lockPath: string): Promise<void> {
   try {
     const info = await stat(lockPath);
@@ -108,7 +121,7 @@ export async function atomicWriteJson(path: string, data: unknown): Promise<void
   const tmp = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", flag: "wx" });
-    await rename(tmp, path);
+    await renameWithRetry(tmp, path);
   } finally {
     await rm(tmp, { force: true });
   }
