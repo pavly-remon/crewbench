@@ -59,24 +59,32 @@ function findOnPath(name: string): string | null {
 
 /** The argv prefix that actually launches `cliPath`. A single-element
  * passthrough for every real, installed CLI in production. Only matters
- * for CREWBENCH_CLI_OVERRIDE_<CLI> (tests): on Windows, a bare `.py` path
- * isn't directly executable via child_process.spawn (no shell, no file-
- * association lookup), so it's launched through the current Python
- * interpreter instead. Ported from crewbench_dispatch.py /
- * crewbench_env.py's cli_argv_prefix(). Uses `python3` (POSIX's usual
- * name) as the interpreter, since Node has no equivalent of Python's own
- * sys.executable to reuse here. */
+ * for CREWBENCH_CLI_OVERRIDE_<CLI> (tests): on Windows, a bare `.py` or
+ * `.js`/`.cjs`/`.mjs` path isn't directly executable via
+ * child_process.spawn (no shell, no file-association lookup, and no
+ * shebang support at all) -- EFTYPE otherwise, a real failure caught live
+ * in CI (packages/engine's own test/runner.test.ts and test/scoping.test.ts
+ * write throwaway `.cjs` fake-CLI fixtures and `chmod` them, which only
+ * makes them executable on POSIX). Launched through the current Python
+ * or Node interpreter instead. Ported from crewbench_dispatch.py /
+ * crewbench_env.py's cli_argv_prefix() for the `.py` case; the JS case
+ * has no Python-side equivalent to port, since those fixtures are
+ * TypeScript-test-only. On POSIX the fixture scripts are executable with
+ * a shebang, so no interpreter prefix is needed there either way (matches
+ * crewbench_dispatch.py's own POSIX behavior exactly). */
 export function cliArgvPrefix(cliPath: string): string[] {
-  if (process.platform === "win32" && cliPath.toLowerCase().endsWith(".py")) {
-    // Node has no equivalent of Python's own sys.executable to reuse here
-    // (this only matters for CREWBENCH_CLI_OVERRIDE_<CLI> pointing at one
-    // of tests/fixtures/fake_clis/*.py); fall back to whatever `python`
-    // this platform's PATH resolves -- Windows commonly registers
-    // `python`, not `python3`. On POSIX the fixture scripts are executable
-    // with a shebang, so no interpreter prefix is needed there (matches
-    // crewbench_dispatch.py's own POSIX behavior exactly).
+  if (process.platform !== "win32") return [cliPath];
+  const lower = cliPath.toLowerCase();
+  if (lower.endsWith(".py")) {
+    // Windows commonly registers `python`, not `python3`; no equivalent
+    // of Python's own sys.executable to reuse here since this is Node.
     const interpreter = process.env.CREWBENCH_PYTHON || "python";
     return [interpreter, cliPath];
+  }
+  if (lower.endsWith(".js") || lower.endsWith(".cjs") || lower.endsWith(".mjs")) {
+    // process.execPath is the actual Node binary running this process --
+    // always correct, unlike guessing a `node` name off PATH.
+    return [process.execPath, cliPath];
   }
   return [cliPath];
 }

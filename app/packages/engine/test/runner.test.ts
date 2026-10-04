@@ -164,7 +164,13 @@ describe("dispatchRole", () => {
     const envelopes = await Promise.all(Array.from({ length: 80 }, (_, i) => dispatchRole({ ...base, round: i + 1 })));
     expect(envelopes).toHaveLength(80);
     expect(envelopes.every((e) => e.ok)).toBe(true);
-  }, 15_000);
+    // Windows CI runners take noticeably longer per process spawn than
+    // the ~2-3s this reliably takes on POSIX (caught live: 80 parallel
+    // `python quick_success.py` spawns routinely blew past 15s on
+    // windows-latest) -- a real platform cost, not the race this test
+    // exists to catch, so it gets a longer ceiling there instead of a
+    // skip.
+  }, process.platform === "win32" ? 45_000 : 15_000);
 });
 
 describe("dispatchVerification", () => {
