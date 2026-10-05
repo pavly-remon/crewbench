@@ -1,0 +1,122 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "changes_requested"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable id for tracking this issue across rounds, e.g. \"R1-3\" (round 1, 3rd issue)."
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "correctness",
+              "security",
+              "consistency",
+              "maintainability"
+            ]
+          },
+          "change": {
+            "type": "string",
+            "description": "The specific, actionable change to make."
+          }
+        },
+        "required": [
+          "id",
+          "file",
+          "line",
+          "severity",
+          "category",
+          "change"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "previous_issues": {
+      "description": "Only present from round 2 on: the status of each issue from the previous round's `issues`.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The id from the previous round's issue, e.g. \"R1-3\"."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "still_present"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "blocked": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Actions you needed but could not perform because they were denied or sandboxed (e.g. installing a package, network access). Empty if none."
+    }
+  },
+  "required": [
+    "verdict",
+    "summary",
+    "issues",
+    "blocked"
+  ],
+  "additionalProperties": false
+}

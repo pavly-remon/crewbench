@@ -1,0 +1,309 @@
+{
+  "type": "object",
+  "description": "One .crewbench/tasks/<task-id>/state.json. Written and read by bin/crewbench_state.py; see lib/dispatch.md's state.json section for the field-by-field protocol (when the Team Lead updates each one).",
+  "properties": {
+    "schema_version": {
+      "type": "integer"
+    },
+    "id": {
+      "type": "string"
+    },
+    "command": {
+      "type": "string",
+      "enum": [
+        "new-task",
+        "test",
+        "review",
+        "design"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    },
+    "phase": {
+      "type": "string",
+      "enum": [
+        "scoping",
+        "design",
+        "implementing",
+        "verifying",
+        "fixing",
+        "awaiting_commit",
+        "done",
+        "stopped",
+        "failed"
+      ]
+    },
+    "round": {
+      "type": "integer"
+    },
+    "lineup": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": true
+    },
+    "base_commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "worktree": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "jira_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "host_override": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "doctor": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": true
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "design_spec_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "spec_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "owner": {
+      "type": "string",
+      "enum": [
+        "plugin",
+        "app"
+      ]
+    },
+    "scoping_session_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scoping_cli": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scoping_model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scoping_effort": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stuck_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rounds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "round": {
+            "type": "integer"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "gate": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "command": {
+                          "type": "string"
+                        },
+                        "exit_code": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "duration_s": {
+                          "type": "number"
+                        },
+                        "timed_out": {
+                          "type": "boolean"
+                        },
+                        "output_tail": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "command",
+                        "exit_code",
+                        "duration_s",
+                        "timed_out",
+                        "output_tail"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "ok",
+                  "steps"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verdicts": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": true
+          },
+          "open_issue_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "snapshot_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "round",
+          "runs"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "usage": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "integer"
+          },
+          "duration_s": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "tokens": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cli": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "id",
+    "command",
+    "title",
+    "created_at",
+    "updated_at",
+    "phase",
+    "round",
+    "lineup",
+    "base_commit",
+    "branch",
+    "worktree",
+    "acceptance_criteria",
+    "design_spec_file",
+    "rounds",
+    "usage",
+    "notes"
+  ],
+  "additionalProperties": true
+}
