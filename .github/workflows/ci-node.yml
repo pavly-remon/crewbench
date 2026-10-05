@@ -171,7 +171,7 @@ jobs:
         working-directory: app
     permissions:
       contents: read
-      id-token: write # npm provenance (npm publish --provenance) needs this
+      id-token: write # only needed for npm provenance (requires a public source repo)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -193,6 +193,6 @@ jobs:
         # push before that secret exists fails this one step loudly,
         # after every real build/test/smoke check above has already
         # passed -- a safe, visible failure mode, not a silent no-op.
-        run: npm publish --provenance --access public
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
